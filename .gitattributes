@@ -1,0 +1,16 @@
+*.eagle linguist-language=Tcl
+*.eeagle linguist-language=Tcl
+*.th8 linguist-language=Tcl
+* -text
+
+# ---------------------------------------------------------------------
+# Linguist hints for GitHub language stats.  TH8 is C + Tcl;
+# clobber the noise from vendored amalgamations so the language
+# bar reflects what we actually wrote.
+# ---------------------------------------------------------------------
+
+externals/**            linguist-vendored
+*.amalg.c               linguist-generated
+src/th8StubInit.c       linguist-generated
+src/th8InternalStubInit.c linguist-generated
+bin/Spilornis*          linguist-generated

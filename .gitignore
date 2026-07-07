@@ -1,0 +1,142 @@
+# =====================================================================
+# TH8 .gitignore
+#
+# Anything that does not belong in the public source release.
+# Patterns are grouped by origin: build artifacts, vendor blobs,
+# internal documentation, secrets, and editor noise.
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# Build outputs
+# ---------------------------------------------------------------------
+bin/
+bin-cosmo/
+bin-static/
+build/
+logs/
+
+# Object files, libraries, profiling data
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.lib
+*.exp
+*.pdb
+*.exe
+*.exe.manifest
+*.profraw
+*.profdata
+*.gcno
+*.gcda
+*.gcov
+
+# ---------------------------------------------------------------------
+# Internal / private documentation (NEVER ship)
+# ---------------------------------------------------------------------
+docs/internal/
+docs/pending/
+docs/private/
+docs/scratch/
+docs/archive/
+
+# ---------------------------------------------------------------------
+# Per-developer secrets and per-machine state
+#
+# Note: keys/*.snk in this repository are PUBLIC key blobs (CAPI
+# PUBLICKEYBLOB format, magic "RSA1"), not private signing keys --
+# they ship with the source release so downstream verifiers can
+# check signatures against the same trust anchors the reference
+# build uses.  Only genuinely private material (PEM private keys,
+# any explicitly-marked-private files) is excluded here.
+# ---------------------------------------------------------------------
+keys/*.pem
+keys/*.key
+keys/*Private*
+keys/*private*
+
+# Per-developer Claude Code session state.  Never publish:
+# the project memory under .claude/projects/ contains
+# user-specific transcripts and references to local paths.
+.claude/projects/
+.claude/sessions/
+.claude/cache/
+
+# ---------------------------------------------------------------------
+# Fuzz corpora (shipped as separate release artifacts)
+# ---------------------------------------------------------------------
+# Corpora can grow to tens of MB; we publish a tarball under
+# GitHub Releases rather than bloat every clone.  CONTRIBUTING.md
+# documents the regen + download flow.
+fuzz/corpus_*/
+fuzz/findings_*/
+fuzz/.afl-*
+
+# ---------------------------------------------------------------------
+# Externals: keep build scripts + READMEs; exclude vendor sources
+# and built outputs that the bootstrap / build scripts regenerate.
+# ---------------------------------------------------------------------
+
+# Win32 third-party libraries -- built by the per-external
+# build_win{32,64}.bat scripts (see each external's README.md
+# for the upstream tarball / clone source).  Output trees and
+# fetched vendor source are excluded; the build scripts and
+# READMEs themselves DO ship.
+externals/curl/lib/
+externals/curl/src/
+externals/curl/include/
+externals/openssl/lib/
+externals/openssl/include/
+externals/openssl/src/
+externals/zlib/lib/
+externals/zlib/include/
+externals/zlib/src/
+externals/tcl/lib/
+externals/tcl/include/
+externals/tcl/src/
+
+# Vendored regex / tommath / bestline BUILD output dirs
+# (regenerated from patches/ by tools/regex_vendor.tcl +
+# tools/vendor_tcl.tcl + tools/bestline_vendor.tcl).
+externals/regex/build/
+externals/tommath/build/
+externals/bestline/build/
+
+# Spilornis vendor pull cache (regenerated).
+externals/spilornis/vendor/
+
+# development team key
+tests/helpers/testkey2048.snk
+tests/helpers/testkey2048.snk.b64sig
+
+# ---------------------------------------------------------------------
+# Editor / OS noise
+# ---------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*.swn
+*.bak
+*.orig
+*.rej
+*~
+.vscode/
+.idea/
+.cache/
+compile_commands.json
+.ccls-cache/
+.clangd/
+
+# ---------------------------------------------------------------------
+# Tcl/8.6 build sundries that some configure-style installs drop
+# ---------------------------------------------------------------------
+*.tar.gz
+*.tar.xz
+*.zip
+core
+core.*

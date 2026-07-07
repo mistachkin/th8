@@ -1,0 +1,26 @@
+# =====================================================================
+# TH8 git submodules
+#
+# The submodules below pull in upstream source for libraries that
+# TH8 depends on.  The other externals/* directories are either
+# vendored amalgamations checked in directly (regex, spilornis,
+# utf, sqlite3, mmm, bestline), bootstrap-fetched at build time
+# (cosmopolitan via tools/bootstrap_cosmo.sh; curl/openssl/zlib/tcl
+# Win32 via the build scripts in each directory's README), or
+# generated locally from the submodule sources plus per-external
+# patches in externals/<name>/patches/ (tommath's amalgamation
+# under externals/tommath/build/, for example).
+#
+# =====================================================================
+
+[submodule "externals/mimalloc"]
+	path = externals/mimalloc
+	url = https://github.com/microsoft/mimalloc.git
+	branch = main
+	shallow = true
+
+[submodule "externals/tommath/vendor"]
+	path = externals/tommath/vendor
+	url = https://github.com/libtom/libtommath.git
+	branch = develop
+	shallow = true

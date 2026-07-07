@@ -1,0 +1,162 @@
+###############################################################################
+#
+# init.th8 --
+#
+# TH8 Interpreter Initialization File
+#
+# Copyright (c) 2026 by Joe Mistachkin.  All rights reserved.
+#
+# See the file "license.terms" for information on usage and redistribution of
+# this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+###############################################################################
+
+namespace eval ::th8 {
+  #
+  # isEagle --
+  #
+  #   Return non-zero when running inside Eagle, zero otherwise.
+  #   Must function correctly in Tcl, Eagle, AND TH8.  Defined
+  #   in this file (init.th8) because it is needed during the
+  #   init script's own evaluation.  Checks the ::tcl_platform
+  #   (engine) array element for "eagle" (case-insensitive).
+  #
+  proc isEagle {} {
+    return [expr {[info exists ::tcl_platform(engine)] && \
+        [string compare -nocase eagle $::tcl_platform(engine)] == 0}]
+  }
+
+  #
+  # isTcl --
+  #
+  #   Return non-zero when running inside native Tcl 8.x / 9.x,
+  #   zero otherwise.  Returns false in Eagle and TH8.  Checks
+  #   ::tcl_platform(engine): absent or "tcl" means native Tcl.
+  #
+  proc isTcl {} {
+    if {[isEagle]} then {return false}
+
+    return [expr {![info exists ::tcl_platform(engine)] || \
+        [string compare -nocase tcl $::tcl_platform(engine)] == 0}]
+  }
+
+  #
+  # isTh8 --
+  #
+  #   Return non-zero when running inside TH8, zero otherwise.
+  #   Checks ::tcl_platform(engine) for "th8" (case-insensitive).
+  #
+  proc isTh8 {} {
+    return [expr {[info exists ::tcl_platform(engine)] && \
+        [string compare -nocase th8 $::tcl_platform(engine)] == 0}]
+  }
+
+  #
+  # isWindows --
+  #
+  #   Return non-zero when the host platform is Windows, zero
+  #   otherwise.  Checks ::tcl_platform(platform) for "windows"
+  #   (case-insensitive).  Works in Tcl, Eagle, and TH8.
+  #
+  proc isWindows {} {
+    return [expr {[info exists ::tcl_platform(platform)] && \
+        [string compare -nocase windows $::tcl_platform(platform)] == 0}]
+  }
+
+  #
+  # appendArgs --
+  #
+  #   Concatenate all arguments into a single string without any
+  #   separator.  Unlike [concat], no whitespace normalization is
+  #   performed.  Typically used to build strings that would
+  #   otherwise trigger unwanted variable/command substitution
+  #   if assembled with double quotes.
+  #
+  proc appendArgs { args } {
+    eval append result $args
+  }
+
+  #
+  # parray --
+  #
+  #   Print an array's contents to stdout in "name = value" format,
+  #   one element per line, sorted by name.  Emulates the native
+  #   Tcl [parray] procedure.  An optional glob pattern filters
+  #   which element names are displayed.  Values longer than 70
+  #   characters are truncated with "...".  Non-printable characters
+  #   (\b, \t, \r, \n) are mapped to visible substitutes.
+  #
+  proc parray { a {pattern ""} } {
+    upvar 1 $a array
+
+    if {![array exists array]} {
+      error [appendArgs \" $a "\" isn't an array"]
+    }
+
+    set names [lsort [array names array]]
+    set maxLength 0
+
+    foreach name $names {
+      if {[string length $pattern] == 0 || \
+          [string match $pattern $name]} then {
+        set length [string length $name]
+
+        if {$length > $maxLength} {
+          set maxLength $length
+        }
+      }
+    }
+
+    set stringMap [list \b " " \t " " \r \xB6 \n \xB6]
+    set maxLength [expr {$maxLength + [string length $a] + 2}]
+
+    foreach name $names {
+      set nameString [string map $stringMap [appendArgs $a ( $name )]]
+      set valueString [string map $stringMap $array($name)]
+
+      if {[string length $valueString] > 70} then {
+        set valueString [appendArgs [string range $valueString 0 65] " ..."]
+      }
+
+      set line [format \
+          [appendArgs "%-" $maxLength "s = %s"] $nameString $valueString]
+
+      puts stdout $line
+    }
+  }
+
+  #
+  # tlog --
+  #
+  #   Emit the specified string to the test log file, if applicable.
+  #   This procedure must not raise any script errors.
+  #
+  proc tlog { string } {
+    catch {::th8testlib::log $string}; # [package require th8testlib]
+  }
+
+  #
+  # tputs --
+  #
+  #   Emit the specified string as test output.  In general, this will
+  #   send it to the "stdout" channel as well as the test log file, if
+  #   applicable.  This procedure should not raise any script errors.
+  #
+  proc tputs { channel string } {
+    if {[string length $channel] > 0} then {
+      puts -nonewline $channel $string
+    }
+
+    return [tlog $string]
+  }
+
+  namespace export isEagle isTcl isTh8
+  namespace export appendArgs parray tlog tputs
+  namespace export isWindows
+  namespace eval :: {namespace import -force ::th8::*}
+
+  set path [file normalize [file dirname [info script]]]
+
+  package provide th8 1.0
+}
+

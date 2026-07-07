@@ -1,0 +1,416 @@
+'\" t
+.\" th8_re_syntax.1 -- TH8 Regular Expression Syntax Reference
+.\"
+.\" Copyright (c) 2026 by Joe Mistachkin.  All rights reserved.
+.\"
+.\" See the file "license.terms" for information on usage and redistribution of
+.\" this file, and for a DISCLAIMER OF ALL WARRANTIES.
+.\"
+.TH TH8_RE_SYNTAX 1 "June 22, 2026" "TH8" "TH8 Regular Expression Syntax"
+.SH NAME
+th8_re_syntax \- regular expression syntax used by TH8
+.SH DESCRIPTION
+TH8 uses the PostgreSQL/Spencer Advanced Regular Expression (ARE)
+engine, adapted for safe embedding.  This engine provides a superset
+of POSIX Extended Regular Expressions (ERE) with additional features
+including non-greedy quantifiers, look-ahead, look-behind,
+back-references, and character classes.
+.PP
+The
+.B regexp
+and
+.B regsub
+commands, and the
+.B "switch \-regexp"
+option, all use this syntax.
+.PP
+The engine operates in
+.B REG_ADVANCED
+mode by default.
+.SH "BASIC SYNTAX"
+.SS "Atoms"
+.TP
+.I c
+A single ordinary character matches itself.
+.TP
+.B .
+Matches any single character (except newline in certain modes).
+.TP
+.BI [ chars ]
+A bracket expression matches any one of the enclosed characters.
+.TP
+.BI [^ chars ]
+A negated bracket expression matches any character NOT in the set.
+.TP
+.B ^
+Matches the beginning of the string (or line in
+.B \-lineanchor
+mode).
+.TP
+.B $
+Matches the end of the string (or line in
+.B \-lineanchor
+mode).
+.TP
+.BI ( re )
+Capturing group.  Matches
+.I re
+and stores the matched text for back-reference and extraction.
+.TP
+.BI (?: re )
+Non-capturing group.  Groups
+.I re
+for quantification but does not capture.
+.SS "Quantifiers"
+.TP
+.B *
+Matches the preceding atom zero or more times (greedy).
+.TP
+.B +
+Matches the preceding atom one or more times (greedy).
+.TP
+.B ?
+Matches the preceding atom zero or one time (greedy).
+.TP
+.BI { n }
+Matches the preceding atom exactly
+.I n
+times.
+.TP
+.BI { n ,}
+Matches the preceding atom
+.I n
+or more times.
+.TP
+.BI { n , m }
+Matches the preceding atom at least
+.I n
+and at most
+.I m
+times.
+.SS "Non-Greedy Quantifiers"
+Appending
+.B ?
+to any quantifier makes it non-greedy (matches as few
+characters as possible):
+.BR *? ", " +? ", " ?? ", " { n , m }? .
+.SS "Alternation"
+.TP
+.IB re1 | re2
+Matches either
+.I re1
+or
+.IR re2 .
+.SH "CHARACTER CLASSES"
+Within bracket expressions
+.RB ( [ ] ),
+the following special forms are recognized:
+.SS "POSIX Classes"
+.TP
+.B [:alnum:]
+Alphanumeric characters.
+.TP
+.B [:alpha:]
+Alphabetic characters.
+.TP
+.B [:digit:]
+Decimal digits.
+.TP
+.B [:upper:]
+Uppercase letters.
+.TP
+.B [:lower:]
+Lowercase letters.
+.TP
+.B [:space:]
+Whitespace characters (space, tab, newline, etc.).
+.TP
+.B [:punct:]
+Punctuation characters.
+.TP
+.B [:graph:]
+Visible characters (non-space printable).
+.TP
+.B [:print:]
+Printable characters (visible + space).
+.TP
+.B [:cntrl:]
+Control characters.
+.TP
+.B [:xdigit:]
+Hexadecimal digits.
+.TP
+.B [:blank:]
+Horizontal whitespace (space and tab only).
+.SS "Ranges"
+.TP
+.IB a \- z
+Matches any character in the range from
+.I a
+to
+.IR z .
+.SS "Special Characters in Brackets"
+.TP
+.B ]
+As the first character after
+.B [
+or
+.BR [^ ,
+matches a literal
+.BR ] .
+.TP
+.B \-
+As the first or last character, matches a literal
+.BR \- .
+.SH "ESCAPE SEQUENCES"
+Within an ARE, the following backslash escapes are recognized:
+.SS "Character Escapes"
+.TP
+.B \ea
+Alert (bell, 0x07).
+.TP
+.B \eb
+Backspace (0x08).  Only inside bracket expressions.
+.TP
+.B \ef
+Form feed (0x0C).
+.TP
+.B \en
+Newline (0x0A).
+.TP
+.B \er
+Carriage return (0x0D).
+.TP
+.B \et
+Horizontal tab (0x09).
+.TP
+.B \ev
+Vertical tab (0x0B).
+.TP
+.BI \e x hh
+Hexadecimal character (1\(en2 hex digits).
+.TP
+.BI \e u hhhh
+Unicode character (4 hex digits).
+.TP
+.BI \e U hhhhhhhh
+Unicode character (8 hex digits).
+.SS "Character Class Escapes"
+.TP
+.B \ed
+Digit (equivalent to
+.BR [[:digit:]] ).
+.TP
+.B \eD
+Non-digit.
+.TP
+.B \es
+Whitespace (equivalent to
+.BR [[:space:]] ).
+.TP
+.B \eS
+Non-whitespace.
+.TP
+.B \ew
+Word character (equivalent to
+.BR [[:alnum:]_] ).
+.TP
+.B \eW
+Non-word character.
+.SS "Constraint Escapes"
+.TP
+.B \eA
+Matches only at the start of the string
+(unlike
+.BR ^ ,
+not affected by
+.BR \-lineanchor ).
+.TP
+.B \eZ
+Matches only at the end of the string.
+.TP
+.B \em
+Matches at the beginning of a word.
+.TP
+.B \eM
+Matches at the end of a word.
+.TP
+.B \ey
+Matches at a word boundary.
+.TP
+.B \eY
+Matches at a non-word-boundary.
+.SS "Back-References"
+.TP
+.BI \e n
+Matches the same text that was matched by the
+.IR n th
+capturing group (1 through 9).
+.SH "ADVANCED FEATURES"
+.SS "Look-Ahead"
+.TP
+.BI (?= re )
+Positive look-ahead: asserts that
+.I re
+matches at the current position without consuming characters.
+.TP
+.BI (?! re )
+Negative look-ahead: asserts that
+.I re
+does NOT match at the current position.
+.SS "Look-Behind"
+.TP
+.BI (?<= re )
+Positive look-behind: asserts that
+.I re
+matches immediately before the current position without
+consuming characters.
+.TP
+.BI (?<! re )
+Negative look-behind: asserts that
+.I re
+does NOT match immediately before the current position.
+.SS "Embedded Options"
+.TP
+.BI (? flags )
+Enables or disables options inline.  Supported flags:
+.BR i " (case-insensitive),"
+.BR c " (case-sensitive, overrides "
+.BR i "),"
+.BR n " (newline-sensitive matching),"
+.BR m " (same as " n "),"
+.BR p " (partial newline-sensitive),"
+.BR q " (literal/quoted mode),"
+.BR s " (non-newline-sensitive),"
+.BR t " (tight/non-expanded mode),"
+.BR w " (inverse partial newline-sensitive),"
+.BR x " (expanded mode)."
+.SH "MATCHING MODES"
+The following
+.B regexp
+and
+.B regsub
+switches control matching behavior:
+.TP
+.B \-nocase
+Case-insensitive matching.
+.TP
+.B \-expanded
+Enable expanded syntax: unescaped whitespace and
+.B #
+comments are ignored in the pattern.  Equivalent to the
+.B (?x)
+embedded option.
+.TP
+.B \-line
+Shorthand for
+.B \-linestop
+and
+.BR \-lineanchor .
+.TP
+.B \-linestop
+The
+.B .
+and
+.B [^...]
+constructs do not match newline.
+.TP
+.B \-lineanchor
+The
+.B ^
+and
+.B $
+anchors match after and before embedded newlines,
+not just at the start and end of the string.
+.TP
+.BI \-start " n"
+Begin matching at byte offset
+.I n
+in the string.
+.TP
+.B \-all
+.RB ( regexp )
+Count all non-overlapping matches.
+.RB ( regsub )
+Replace all matches.
+.TP
+.B \-inline
+.RB ( regexp " only)"
+Return matches as a list instead of storing in variables.
+.TP
+.B \-indices
+.RB ( regexp " only)"
+Store match start/end byte offsets instead of matched text.
+.TP
+.B \-\-
+End of switches.  Required if the pattern starts with
+.BR \- .
+.SH "REPLACEMENT SYNTAX (regsub)"
+In the
+.I replacement
+string of
+.BR regsub :
+.TP
+.B &
+The entire text matched by the pattern.
+.TP
+.BI \e n
+The text matched by the
+.IR n th
+capturing group (0\(en9).
+.B \e0
+is the same as
+.BR & .
+.TP
+.B \e\e
+A literal backslash.
+.SH "ENGINE DETAILS"
+TH8 uses the Henry Spencer regular expression library
+(PostgreSQL variant) compiled for 32-bit character (chr) width.
+All strings are converted from UTF-8 to 32-bit code points before
+matching and converted back after.
+.PP
+The engine supports:
+.IP \(bu 2
+POSIX Extended Regular Expressions (ERE)
+.IP \(bu 2
+Advanced Regular Expressions (ARE) with non-greedy quantifiers,
+back-references, look-ahead, constraint escapes, and embedded options
+.IP \(bu 2
+Unicode character classes via POSIX bracket notation
+.PP
+The regex module is optional and enabled at compile time with
+.BR TH8_ENABLE_REGEXP .
+Memory allocation is routed through
+.BR Th8_Malloc / Th8_Free
+via the platform abstraction, and long-running matches can be
+cancelled via
+.B Th8_CancelEval
+(checked via the
+.B REG_CANCEL
+mechanism).
+.SH "EXAMPLES"
+.TP
+.B regexp {^[0-9]+$} "12345"
+Matches a string of all digits.  Returns 1.
+.TP
+.B "regexp \-nocase {^hello} \(dqHELLO WORLD\(dq"
+Case-insensitive match.  Returns 1.
+.TP
+.B "regexp {([a\-z]+)([0\-9]+)} \(dqabc123\(dq all letters digits"
+Captures: \fIall\fR=\fBabc123\fR, \fIletters\fR=\fBabc\fR,
+\fIdigits\fR=\fB123\fR.
+.TP
+.B "regsub \-all {[0\-9]+} \(dqa1b2c3\(dq N result"
+Replaces all digit runs with N.  \fIresult\fR=\fBaNbNcN\fR.
+.TP
+.B "switch \-regexp $str { {^[0\-9]+$} {puts digit} default {puts other} }"
+Branch on regex match.
+.SH "SEE ALSO"
+.BR th8 (1),
+.BR regexp (1tcl),
+.BR re_syntax (1tcl)
+.SH AUTHOR
+The regular expression engine is by Henry Spencer, adapted from
+the PostgreSQL variant.  TH8 integration and UTF-8 bridge by
+Joe Mistachkin.

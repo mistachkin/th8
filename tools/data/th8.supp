@@ -1,0 +1,45 @@
+#
+# th8.supp --
+#
+#     Valgrind suppression file for TH8.
+#
+#     These suppressions silence false positives from third-party
+#     libraries.  No TH8 code is suppressed.
+#
+# Copyright (c) 2026 by Joe Mistachkin.  All rights reserved.
+#
+# See the file "license.terms" for information on usage and redistribution of
+# this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+# =====================================================================
+# OpenSSL 3.x AES-GCM false positive
+# =====================================================================
+#
+# OpenSSL 3.0.5+ emits "Conditional jump or move depends on
+# uninitialised value(s)" warnings from the AES-GCM assembly
+# implementation on x86_64 (release builds with assembly enabled).
+#
+# The hand-written assembly reads padding/alignment bytes that
+# valgrind considers uninitialized, but the values are never used
+# in a way that affects correctness.  This is a well-known valgrind
+# limitation with optimized crypto assembly, NOT a bug in OpenSSL
+# or TH8.
+#
+# TH8 encounters this in the secure variable subsystem
+# (th8_secure.c), which uses AES-256-GCM for encrypted-at-rest
+# variable storage.  The decryption path triggers the warning
+# when EVP_DecryptFinal_ex validates the GCM authentication tag.
+#
+# References:
+#   https://github.com/openssl/openssl/issues/19719
+#   https://github.com/openssl/openssl/issues/8460
+#
+
+{
+   openssl3_aes_gcm_cond
+   Memcheck:Cond
+   obj:*/libcrypto.so*
+   ...
+   obj:*/libcrypto.so*
+}

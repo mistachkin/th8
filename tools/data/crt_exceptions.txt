@@ -1,0 +1,149 @@
+# tools/data/crt_exceptions.txt --
+#
+# Allow-list and per-file exception data for the CRT object-level
+# scanner.  Read by tools/audit_patterns.tcl (subcommand
+# `crt-objects`); previously inlined in tools/check_crt.sh and
+# tools/check_crt_msvc.bat.
+#
+# Comments start with `#` at column 0; blank lines are ignored.
+# Three directives are recognised:
+#
+#   prefix       <basename-prefix>
+#       Whole-file exemption.  Any object file whose basename
+#       (.o or .obj suffix removed, optional .pic suffix removed)
+#       starts with the given prefix is skipped entirely.
+#
+#   compiler-ok  <symbol>
+#       The named symbol is allowed in ANY object file because
+#       the compiler may emit it for built-in operations
+#       (memcpy / memset / memmove / memcmp for struct copies,
+#       zero-fill, etc.).
+#
+#   allow        <basename> <symbol>...
+#       The named symbols are allowed in the specific object
+#       file (basename without suffix).  Multiple symbols on a
+#       single `allow` line; multiple `allow` lines per file are
+#       additive.
+#
+# Copyright (c) 2026 by Joe Mistachkin.  All rights reserved.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+
+# -----------------------------------------------------------------
+# Whole-file allow-list.
+#
+#   th8_libc          The C runtime platform layer -- its entire
+#                     purpose is to wrap CRT functions.
+#   th8_cosmopolitan  Cosmopolitan Libc platform layer.
+#   bestline          External line-editing library (jart).
+#   mimalloc_static   External memory allocator (Microsoft).
+#   th8sh             The interactive shell binary -- uses CRT
+#                     for startup, argument parsing, and I/O.
+#   th8_shell         Shell-support translation unit (paired with
+#                     th8sh) -- prompt, signal, fgets/fprintf I/O.
+#   sqlite3           SQLite amalgamation (external).
+#   th8_amal          TH8 single-file amalgamation
+#                     (bin/th8.c) -- inlines th8_libc.c so
+#                     the same CRT calls legitimately appear
+#                     at the object level.  Mirrors the
+#                     th8_libc exemption for the amalgamated
+#                     build path.
+# -----------------------------------------------------------------
+
+prefix th8_libc
+prefix th8_cosmopolitan
+prefix bestline
+prefix mimalloc_static
+prefix th8sh
+prefix th8_shell
+prefix sqlite3
+prefix th8_amal
+
+# -----------------------------------------------------------------
+# Compiler-generated CRT calls.
+#
+# The C compiler may emit calls to memcpy, memset, memmove, and
+# memcmp for struct assignments, zero-initializations, and buffer
+# copies even when the source code uses Th8_Memset etc.  These
+# cannot be avoided at the source level and are allowed in all
+# files.
+# -----------------------------------------------------------------
+
+compiler-ok memcpy
+compiler-ok memset
+compiler-ok memmove
+compiler-ok memcmp
+
+# -----------------------------------------------------------------
+# Per-file symbol allow-list.
+#
+#   th8_posix:abort           POSIX panic handler calls abort()
+#                             after writing the diagnostic to
+#                             stderr.
+#   th8_posix:raise           POSIX panic handler calls
+#                             raise(SIGTRAP) before abort() to
+#                             trigger the debugger.
+#   th8_posix:getenv          POSIX standard function for reading
+#                             environment variables.  No
+#                             alternative API on POSIX systems.
+#   th8_posix:unlink          POSIX standard function for
+#                             deleting files.  Used by
+#                             xDeleteTemporaryData.  No
+#                             alternative API on POSIX systems.
+#
+#   th8_testlib_th8:malloc,realloc,free
+#                             Test library manages subprocess
+#                             argv arrays and symlinks using
+#                             process-global state that outlives
+#                             any interpreter.  No interp available.
+#
+#   th8_tcl_stubs:calloc,free,getenv,snprintf,strcat,strdup,strlen
+#                             Tcl bridge stubs loader uses Tcl's
+#                             allocator conventions and CRT for
+#                             dlopen/dlsym interop.
+#
+#   th8_tcl_th8mode:free      Tcl bridge cleanup frees Tcl-bridge
+#                             allocated memory, e.g. createTclInterp
+#                             and evaluateTcl.
+#
+#   th8_posix:free,malloc     POSIX cross-thread event allocations
+#                             use raw malloc/free in the lock-free
+#                             event-queue path (no interp available;
+#                             event lifetime spans interp teardown).
+#
+#   th8_env:getenv,strchr,strlen
+#                             Environment plugin -- getenv is the
+#                             whole point; strchr/strlen used to
+#                             parse "NAME=value" pairs.
+#
+#   th8_hash:qsort            Hash table maintenance uses qsort to
+#                             sort buckets; no interp-aware variant
+#                             needed at the leaf level.
+#
+#   th8_sqlite3:calloc,free,malloc,strcmp,strlen
+#                             SQLite bridge plugin uses libc
+#                             allocator for SQLite-owned context
+#                             structures and C-string comparison.
+#
+#   th8_testlib_th8:qsort,snprintf
+#                             Test library uses qsort for ordering
+#                             search results and snprintf for
+#                             diagnostic message formatting.
+#
+#   th8_testlib_th8:fopen,fclose,fputs,rewind,tmpfile
+#                             Test library uses real stdio FILE *
+#                             handles to drive xFgets MC/DC arms
+#                             (premature EOF on /dev/null and the
+#                             non-EOF read path on a tmpfile);
+#                             stdio is the simplest portable way
+#                             to manufacture both arms.
+# -----------------------------------------------------------------
+
+allow th8_posix         abort raise getenv unlink free malloc
+allow th8_testlib_th8   malloc realloc free qsort snprintf fopen fclose fputs rewind tmpfile
+allow th8_tcl_stubs     calloc free getenv snprintf strcat strdup strlen
+allow th8_tcl_th8mode   free
+allow th8_env           getenv strchr strlen
+allow th8_hash          qsort
+allow th8_sqlite3       calloc free malloc strcmp strlen

@@ -1,0 +1,2162 @@
+'\" t
+.\" th8.1 -- TH8 Language Reference Manual
+.\"
+.\" Copyright (c) 2026 by Joe Mistachkin.  All rights reserved.
+.\"
+.\" See the file "license.terms" for information on usage and redistribution of
+.\" this file, and for a DISCLAIMER OF ALL WARRANTIES.
+.\"
+.\" Dedicated to the memory of Miguel Sofer (d. 2016).
+.\"
+.TH TH8 1 "June 22, 2026" "TH8" "TH8 Language Reference"
+.SH NAME
+th8 \- TH8 scripting language reference
+.SH SYNOPSIS
+TH8 is a minimal, embeddable Tcl-compatible scripting language
+implementing the Tcl Language Standard (Version 1.0).
+It provides the Tcl 8.4 surface syntax with strict UTF-8 strings,
+a non-recursive evaluation engine, first-class value/token
+unification, and a platform abstraction layer that eliminates all
+direct C runtime dependencies.
+.PP
+The engine identifier is
+.BR TH8 ,
+reported by
+.BR "::tcl_platform(engine)" .
+.SH "SHELL OPTIONS"
+The
+.B th8sh
+executable accepts the following command-line options.  All option
+parsing is performed before any TH8 initialisation, so the options
+work even on a half-broken installation.
+.TP
+.BR \-\-version ", " \-version ", " \-V
+Print the build's version, source-control identity (commit hash,
+timestamp, tags, VCS), and Tcl-compatibility level to standard
+output and exit with status zero.  No interpreter is created; no
+script is sourced.  Output is one
+.IR "label: value"
+pair per line.
+.TP
+.BR \-eval " \fIscript\fR"
+Evaluate the literal string
+.I script
+as a TH8 program and exit with the script's return code.  Remaining
+arguments are placed in the global
+.B argv
+list.
+.TP
+.IR script-path " ?" arg " ...?"
+Execute the named file as a TH8 script.  Remaining arguments are
+placed in the global
+.BR argv .
+With no arguments, the shell enters an interactive REPL.
+.SH "LEXICAL RULES"
+TH8 scripts follow the eleven rules of the Tcl(n) manual page
+from Tcl 8.4.  In summary:
+.IP \(bu 3
+A script is a sequence of commands separated by newlines or
+semicolons.
+.IP \(bu 3
+Each command consists of words separated by whitespace (not
+newlines).
+.IP \(bu 3
+Words may be grouped with double quotes (substitutions performed)
+or braces (no substitutions except backslash-newline).
+.IP \(bu 3
+Three forms of substitution:
+.BR "$" variable ,
+.BR "[" command "]" ,
+and backslash sequences.
+.IP \(bu 3
+Substitutions are performed left to right, exactly once per
+character.  Results do not affect word boundaries.
+.IP \(bu 3
+.B #
+at command position begins a comment through end of line.
+.SH "BACKSLASH SUBSTITUTION"
+.TS
+l l.
+\fB\\a\fR	Audible alert (U+0007)
+\fB\\b\fR	Backspace (U+0008)
+\fB\\f\fR	Form feed (U+000C)
+\fB\\n\fR	Newline (U+000A)
+\fB\\r\fR	Carriage return (U+000D)
+\fB\\t\fR	Horizontal tab (U+0009)
+\fB\\v\fR	Vertical tab (U+000B)
+\fB\\\\\fR	Backslash (U+005C)
+\fB\\\fInewline ws\fR	Single space (continuation)
+\fB\\x\fIhh\fR	8-bit hex (last 2 digits used)
+\fB\\u\fIhhhh\fR	16-bit Unicode (1\-4 hex digits)
+\fB\\U\fIhhhhhhhh\fR	21-bit Unicode (1\-8 hex digits)
+\fB\\\fIooo\fR	8-bit octal (1\-3 digits)
+\fB\\\fIc\fR	Literal character \fIc\fR
+.TE
+.SH "RETURN CODES"
+Every command returns an integer code:
+.TP
+.B TH8_OK (0)
+Normal completion.
+.TP
+.B TH8_ERROR (1)
+Error.  The interpreter result is the error message.
+.TP
+.B TH8_RETURN (2)
+Return from the current procedure.
+.TP
+.B TH8_BREAK (3)
+Break from the innermost loop.
+.TP
+.B TH8_CONTINUE (4)
+Skip to the next iteration of the innermost loop.
+.SH "VARIABLE SUBSTITUTION FORMS"
+Three forms of variable substitution are recognized:
+.TP
+.BI $ name
+\fIname\fR is composed of letters, digits, underscores, or
+namespace separators
+.RB ( :: ).
+.TP
+.BI $ name ( index )
+Array element.
+\fIindex\fR is subject to command, variable, and backslash
+substitution.
+.TP
+.BI ${ name }
+\fIname\fR may contain any character except close brace.
+.PP
+If the variable does not exist, the substitution is an error.
+.SH "LIST REPRESENTATION"
+A TH8 list is a string encoding an ordered sequence of elements.
+Elements are separated by whitespace.
+Elements containing whitespace or special characters are enclosed
+in braces or escaped with backslashes.
+The empty string is a valid list with zero elements.
+.PP
+Special characters requiring quoting:
+space, tab, newline, carriage return, form feed, vertical tab,
+.BR { ", " } ", " \e ", " \(dq ", " [ ", " ] ", " ; ", " $ .
+.PP
+If the first element starts with
+.BR # ,
+it is brace-quoted to prevent comment interpretation.
+.SH "BUILT-IN COMMANDS"
+.SS "CONTROL FLOW"
+.TP
+\fBbreak\fR
+Terminates the innermost enclosing
+.BR for ,
+.BR foreach ,
+or
+.B while
+loop.
+Returns TH8_BREAK.
+.TP
+\fBcatch\fR \fIscript\fR ?\fIvarname\fR?
+Evaluates \fIscript\fR.
+If \fIvarname\fR is given, the result of the script (whether
+error or success) is stored in the named variable.
+Returns the return code of \fIscript\fR as an integer string.
+Always returns TH8_OK itself.
+.TP
+\fBcontinue\fR
+Skips to the next iteration of the innermost enclosing loop.
+Returns TH8_CONTINUE.
+.TP
+\fBconcat\fR ?\fIarg ...\fR?
+Trims leading and trailing whitespace from each argument, then
+joins the trimmed arguments with single spaces.
+Interior whitespace within each argument is preserved.
+Arguments that are empty after trimming are silently omitted.
+With no arguments, returns the empty string.
+.TP
+\fBerror\fR \fImessage\fR ?\fIinfo\fR? ?\fIcode\fR?
+Raises an error.
+If \fIinfo\fR is given, it is stored in
+.BR ::errorInfo .
+If \fIcode\fR is given, it is stored in
+.BR ::errorCode .
+Returns TH8_ERROR.
+.TP
+\fBeval\fR \fIarg\fR ?\fIarg ...\fR?
+Concatenates all arguments with single spaces and evaluates the
+result as a script in the current scope.
+Returns the result and return code of the evaluated script.
+.TP
+\fBexit\fR ?\fIcode\fR?
+Set the interpreter exit flag.  All subsequent command evaluations
+fail immediately, unwinding the call stack to the host.  If
+.I code
+is given, it must be an integer; it is emitted to standard error
+but does not affect the process exit code.  The flag can only be
+cleared by the C API function
+.BR Th8_ResetExit .
+.TP
+\fBfor\fR \fIinit\fR \fItest\fR \fInext\fR \fIbody\fR
+Evaluates \fIinit\fR once, then repeatedly:
+evaluates \fItest\fR as an expression; if false (zero), stops;
+evaluates \fIbody\fR; evaluates \fInext\fR.
+.B break
+in \fIbody\fR terminates the loop.
+.B continue
+in \fIbody\fR skips to \fInext\fR.
+.TP
+\fBforeach\fR \fIvarlist\fR \fIlist\fR \fIbody\fR
+\fIvarlist\fR is a list of variable names.
+For each group of \fIn\fR values from \fIlist\fR (where \fIn\fR
+is the length of \fIvarlist\fR), assigns each value to the
+corresponding variable and evaluates \fIbody\fR.
+Supports \fBbreak\fR and \fBcontinue\fR.
+.TP
+\fBif\fR \fIexpr\fR ?\fBthen\fR? \fIbody\fR ?\fBelseif\fR \fIexpr\fR ?\fBthen\fR? \fIbody\fR? ... ?\fBelse\fR \fIbody\fR?
+Evaluates each \fIexpr\fR in order as an expression.
+The first true (non-zero) condition causes evaluation of its
+corresponding \fIbody\fR.
+The \fBthen\fR keyword is optional.
+If no condition is true and an \fBelse\fR clause exists, its
+\fIbody\fR is evaluated.
+.TP
+\fBreturn\fR ?\fIoptions\fR? ?\fIvalue\fR?
+Returns from the current procedure.
+Options:
+.BR \-code " \fIcode\fR \(em"
+set the return code (integer or symbolic:
+.BR ok / error / return / break / continue ).
+.BR \-errorinfo " \fIinfo\fR \(em"
+set the initial
+.B ::errorInfo
+stack trace.
+.BR \-errorcode " \fIcode\fR \(em"
+set
+.BR ::errorCode .
+If \fIvalue\fR is given, it becomes the interpreter result;
+otherwise the result is the empty string.
+.TP
+\fBswitch\fR ?\fIoptions\fR? \fIstring\fR \fIpattern\fR \fIbody\fR ?\fIpattern\fR \fIbody\fR ...?
+Compares \fIstring\fR against each \fIpattern\fR in order.
+Options:
+.BR \-exact " (default),"
+.BR \-glob ", " \-regexp ", " \-\- .
+With
+.BR \-regexp ,
+patterns are treated as regular expressions (requires the
+regexp module).
+The special pattern
+.B default
+matches any string (must be last).
+If a \fIbody\fR is the literal string
+.BR \- ,
+evaluation falls through to the next body.
+.TP
+\fBwhile\fR \fItest\fR \fIbody\fR
+Repeatedly evaluates \fItest\fR as an expression; if true
+(non-zero), evaluates \fIbody\fR.
+Supports \fBbreak\fR and \fBcontinue\fR.
+.TP
+\fBcoroutine\fR \fIname\fR \fIcommand\fR ?\fIarg ...\fR?
+Creates a new coroutine named \fIname\fR.  The \fIcommand\fR is
+evaluated with the given arguments.  When the command calls
+.BR yield ,
+execution suspends and the yield value is returned to the caller.
+The coroutine name becomes a command; invoking it resumes the
+coroutine.  When the body completes, the coroutine command is
+automatically deleted and the body's result is returned.
+.TP
+\fByield\fR ?\fIvalue\fR?
+Suspends the current coroutine and returns \fIvalue\fR (default:
+empty string) to the code that resumed the coroutine.  When the
+coroutine is next resumed, \fByield\fR returns the value passed
+by the resume call.  It is an error to call \fByield\fR outside
+a coroutine body.
+.TP
+\fBtry\fR \fIscript\fR ?\fBfinally\fR \fIscript\fR?
+Evaluates \fIscript\fR and preserves its result and return code.
+If a
+.B finally
+clause is present, evaluates the finally script after the body
+completes, regardless of success or failure.
+If the finally script succeeds, the body's result is returned.
+If the finally script fails, its error overrides the body's result.
+.RS
+.PP
+The finally script is temporarily exempt from a pending script
+cancellation: the cancel state is saved before the finally block
+and restored after it completes.  The finally script is NOT
+evaluated if the interpreter's exit flag is set.  The finally
+block receives a fresh memory allocation budget equal to the
+interpreter's limit (maximum total memory during finally is 2x
+the configured limit).
+.PP
+Unlike Tcl 8.6's
+.BR try ,
+there are no
+.BR catch ", " on ", or " trap
+clauses.  Use
+.B catch
+separately for error handling.  This is the purest form of
+.BR try / finally ,
+adapted from Eagle.
+.RE
+.SS "VARIABLES"
+.TP
+\fBappend\fR \fIvarname\fR ?\fIvalue ...\fR?
+Appends each \fIvalue\fR to the variable \fIvarname\fR.
+Creates the variable if it does not exist.
+Returns the new value.
+.TP
+\fBarray exists\fR \fIvarname\fR
+Returns
+.B 1
+if \fIvarname\fR is an array variable,
+.B 0
+otherwise.
+.TP
+\fBarray get\fR \fIvarname\fR ?\fIpattern\fR?
+Returns a list of name-value pairs for all elements of the
+array.  If \fIpattern\fR is given, only elements whose names
+match the glob pattern are included.  Returns an empty list if
+the variable does not exist or is not an array.
+.TP
+\fBarray names\fR \fIvarname\fR
+Returns a list of all element names in the array \fIvarname\fR.
+Returns an empty list if the variable does not exist or is not
+an array.
+.TP
+\fBarray set\fR \fIvarname\fR \fIlist\fR
+Sets array elements from a name-value pair \fIlist\fR.  It is
+an error if \fIlist\fR has an odd number of elements.  An empty
+list creates an empty array variable if it does not already exist.
+.TP
+\fBarray size\fR \fIvarname\fR
+Returns the number of elements in the array.  Returns 0 if
+the variable does not exist or is not an array.
+.TP
+\fBglobal\fR \fIvarname\fR ?\fIvarname ...\fR?
+Within a procedure, creates local variables linked to the
+corresponding variables in the global namespace.
+Equivalent to
+.BI "upvar #0 " "varname varname"
+for each argument.
+Outside a procedure, has no effect.
+.TP
+\fBincr\fR \fIvarname\fR ?\fIincrement\fR?
+Adds \fIincrement\fR (default 1) to the integer value of
+\fIvarname\fR.
+Creates the variable with value \fIincrement\fR if it does not
+exist.
+Returns the new value.
+.TP
+\fBset\fR \fIvarname\fR ?\fIvalue\fR?
+If \fIvalue\fR is given, sets \fIvarname\fR to \fIvalue\fR.
+Returns the value of \fIvarname\fR.
+If reading and the variable does not exist, returns an error.
+.TP
+\fBunset\fR ?\fB\-nocomplain\fR? ?\fB\-\-\fR? ?\fIvarname\fR ...?
+Removes each named variable from the current scope.
+Returns an error if a variable does not exist (unless
+\fB\-nocomplain\fR is specified).  The \fB\-\-\fR option marks
+the end of options, allowing variable names that begin with
+a dash.  With no variable names, the command is a no-op.
+.TP
+\fBuplevel\fR ?\fIlevel\fR? \fIscript\fR
+Evaluates \fIscript\fR in the stack frame identified by
+\fIlevel\fR.
+If \fIlevel\fR is omitted, defaults to 1 (the caller's frame).
+\fIlevel\fR may be a positive integer (relative) or
+.BI # n
+(absolute from bottom).
+.TP
+\fBdownlevel\fR \fIscript\fR
+Evaluates \fIscript\fR in the call frame that was active just
+prior to the most recent
+.BR uplevel .
+This undoes the scope change of
+.BR uplevel ,
+running the script back in the frame the uplevel departed from.
+Both the variable scope and the namespace context of the target
+frame are restored for the duration of the evaluation.
+It is an error to call
+.B downlevel
+when no
+.B uplevel
+is currently active.
+.TP
+\fBupvar\fR ?\fIlevel\fR? \fIothervar\fR \fImyvar\fR ?\fIothervar\fR \fImyvar\fR ...?
+Creates local variables (\fImyvar\fR) linked to variables
+(\fIothervar\fR) in the frame identified by \fIlevel\fR
+(default 1).
+.SS "EXPRESSIONS"
+.TP
+\fBexpr\fR \fIexpression\fR
+Evaluates \fIexpression\fR and returns the result.
+Operators (highest precedence first):
+.PP
+.RS
+.TS
+l l l.
+\fB\- + ~ !\fR	unary	right
+\fB**\fR	exponentiation	right
+\fB* / %\fR	multiplicative	left
+\fB+ \-\fR	additive	left
+\fB<< >>\fR	shift	left
+\fB< > <= >=\fR	comparison	left
+\fB== !=\fR	numeric equality	left
+\fBeq ne\fR	string equality	left
+\fB&\fR	bitwise AND	left
+\fB^\fR	bitwise XOR	left
+\fB|\fR	bitwise OR	left
+\fB&&\fR	logical AND (short-circuit)	left
+\fB||\fR	logical OR (short-circuit)	left
+\fB? :\fR	ternary (short-circuit)	right
+.TE
+.RE
+.PP
+.RS
+Integer literals: decimal, \fB0x\fR hex, \fB0o\fR octal,
+\fB0b\fR binary.
+A leading zero does \fBnot\fR imply octal.
+.PP
+Math functions (60 total):
+.PP
+Core:
+.BR abs ", " bool ", " double ", " entier ", " epsilon ", "
+.BR int ", " max ", " min ", " rand ", " round ", "
+.BR srand ", " typeof ", " wide .
+.PP
+Transcendental:
+.BR acos ", " asin ", " atan ", " atan2 ", " ceil ", "
+.BR cos ", " cosh ", " exp ", " floor ", " fmod ", "
+.BR hypot ", " log ", " log10 ", " pow ", " sin ", "
+.BR sinh ", " sqrt ", " tan ", " tanh .
+.PP
+C99:
+.BR acosh ", " asinh ", " atanh ", " cbrt ", " copysign ", "
+.BR dim ", " erf ", " erfc ", " exp2 ", " expm1 ", "
+.BR gamma ", " ldexp ", " lgamma ", " log1p ", " log2 ", "
+.BR logb ", " nextafter ", " remainder ", " signbit ", "
+.BR trunc .
+.PP
+Classification (TIP #521):
+.BR fpclassify ", " isfinite ", " isinf ", " isnan ", "
+.BR isnormal ", " issubnormal ", " isunordered .
+.RE
+.SS "LISTS"
+.TP
+\fBjoin\fR \fIlist\fR ?\fIseparator\fR?
+Returns a string formed by joining the elements of \fIlist\fR
+with \fIseparator\fR (default: single space).
+.TP
+\fBlappend\fR \fIvarname\fR \fIvalue\fR ?\fIvalue ...\fR?
+Appends each \fIvalue\fR as a new element to the list stored
+in \fIvarname\fR.
+Creates the variable if it does not exist.
+Returns the new list value.
+.TP
+\fBlindex\fR \fIlist\fR ?\fIindex\fR ...?
+Returns an element from \fIlist\fR.  With no \fIindex\fR, returns
+the list unchanged (identity).  With one index, returns the element
+at that position.  With multiple indices, performs nested indexing
+into sublists.  A single argument that is itself a list of indices
+(e.g., \fB{1 0}\fR) is equivalent to multiple index arguments.
+Indices are zero-based.
+.B end
+refers to the last element;
+.BI end\- n
+refers to the element \fIn\fR positions before the end.
+Returns the empty string if out of range.
+.TP
+\fBlinsert\fR \fIlist\fR \fIindex\fR ?\fIelement ...\fR?
+Returns a new list with the given elements inserted before
+position \fIindex\fR in \fIlist\fR.  Supports
+.B end
+and
+.BI end\- n
+indices.
+.TP
+\fBlist\fR ?\fIarg ...\fR?
+Returns a properly formed list whose elements are the given
+arguments.
+.TP
+\fBllength\fR \fIlist\fR
+Returns the number of elements in \fIlist\fR.
+.TP
+\fBlrange\fR \fIlist\fR \fIfirst\fR \fIlast\fR
+Returns a new list containing elements from position \fIfirst\fR
+to \fIlast\fR (inclusive).  Supports
+.B end
+and
+.BI end\- n
+indices.
+.TP
+\fBlreplace\fR \fIlist\fR \fIfirst\fR \fIlast\fR ?\fIelement ...\fR?
+Returns a new list with elements from \fIfirst\fR to \fIlast\fR
+replaced by the given elements.  If no replacement elements are
+given, the range is simply deleted.
+.TP
+\fBlsearch\fR ?\fIoptions\fR? \fIlist\fR \fIpattern\fR
+Returns the index of the first matching element, or
+.B \-1
+if no match.
+Options:
+.BR \-exact " (exact string comparison),"
+.BR \-glob " (glob matching, default),"
+.BR \-regexp " (regular expression matching),"
+.BR \-all " (return all matching indices),"
+.BR \-inline " (return values instead of indices),"
+.BR \-not " (negate the match),"
+.BR \-start " \fIn\fR (begin at index \fIn\fR)."
+.TP
+\fBlsort\fR ?\fIoptions\fR? \fIlist\fR
+Returns a sorted copy of \fIlist\fR.
+The
+.B \-command
+option specifies a comparison script that receives two elements and returns
+an integer.  The
+.B \-index
+option sorts by the Nth sub-element of each list element.  The
+.B \-dictionary
+option uses case-insensitive comparison with embedded integers compared
+numerically.
+.TP
+\fBsplit\fR \fIstring\fR ?\fIsplitchars\fR?
+Returns a list formed by splitting \fIstring\fR at each
+occurrence of any character in \fIsplitchars\fR.
+If \fIsplitchars\fR is omitted, splits on whitespace.
+If \fIsplitchars\fR is the empty string, splits into
+individual characters (code points).
+Adjacent split characters produce empty-string elements.
+.TP
+\fBlreverse\fR \fIlist\fR
+Returns a new list with the elements of \fIlist\fR in reverse
+order.  An empty list returns an empty string.
+.TP
+\fBlremove\fR \fIlist\fR ?\fIindex ...\fR?
+Returns \fIlist\fR with the elements at the given indices
+removed.  Indices may be integers,
+.BR end ", or"
+.BI end\- n\fR.
+Out-of-range or duplicate indices are silently ignored.
+With no indices, returns the original list unchanged.
+.TP
+\fBlassign\fR \fIlist\fR ?\fIvarname ...\fR?
+Assigns successive elements of \fIlist\fR to the named variables.
+If there are more variables than list elements, excess variables
+are set to the empty string.  Returns a list of unassigned elements
+(those beyond the last variable).  With no variable names, returns
+the original list.
+.TP
+\fBdict create\fR ?\fIkey value ...\fR?
+Returns a new dictionary from the given key-value pairs.
+It is an error to provide an odd number of arguments.
+.TP
+\fBdict get\fR \fIdictionary\fR ?\fIkey ...\fR?
+Returns the value for the given key path.  With no keys, returns
+the entire dictionary.  With multiple keys, performs nested lookup.
+.TP
+\fBdict set\fR \fIdictVarName\fR \fIkey\fR ?\fIkey ...\fR? \fIvalue\fR
+Sets a value in the dictionary variable at the given key path.
+Creates the variable and intermediate dictionaries as needed.
+.TP
+\fBdict unset\fR \fIdictVarName\fR \fIkey\fR ?\fIkey ...\fR?
+Removes the entry at the given key path from the dictionary variable.
+.TP
+\fBdict exists\fR \fIdictionary\fR \fIkey\fR ?\fIkey ...\fR?
+Returns 1 if the key path exists in the dictionary, 0 otherwise.
+.TP
+\fBdict keys\fR \fIdictionary\fR ?\fIpattern\fR?
+Returns a list of all keys in the dictionary.  If \fIpattern\fR is
+given, only keys matching the glob pattern are returned.
+.TP
+\fBdict values\fR \fIdictionary\fR ?\fIpattern\fR?
+Returns a list of all values in the dictionary.  If \fIpattern\fR is
+given, only values whose keys match the pattern are returned.
+.TP
+\fBdict size\fR \fIdictionary\fR
+Returns the number of key-value pairs in the dictionary.
+.TP
+\fBdict for\fR \fB{\fR\fIkeyVar valueVar\fR\fB}\fR \fIdictionary\fR \fIbody\fR
+Iterates over each key-value pair, setting \fIkeyVar\fR and
+\fIvalueVar\fR before evaluating \fIbody\fR.
+Supports \fBbreak\fR and \fBcontinue\fR.
+.TP
+\fBdict filter\fR \fIdictionary\fR \fBkey\fR \fIpattern\fR
+Returns a new dictionary containing only entries whose key
+matches the glob \fIpattern\fR.
+.TP
+\fBdict filter\fR \fIdictionary\fR \fBvalue\fR \fIpattern\fR
+Returns a new dictionary containing only entries whose value
+matches the glob \fIpattern\fR.
+.TP
+\fBdict filter\fR \fIdictionary\fR \fBscript\fR \fB{\fR\fIkeyVar valueVar\fR\fB}\fR \fIscript\fR
+Returns a new dictionary containing only entries for which
+\fIscript\fR evaluates to true.
+.TP
+\fBdict merge\fR ?\fIdictionary ...\fR?
+Merges one or more dictionaries, with later dictionaries
+overriding earlier ones for duplicate keys.
+.TP
+\fBdict remove\fR \fIdictionary\fR ?\fIkey ...\fR?
+Returns a copy of \fIdictionary\fR with the named keys removed.
+.TP
+\fBdict replace\fR \fIdictionary\fR ?\fIkey value ...\fR?
+Returns a copy of \fIdictionary\fR with the given key-value pairs
+added or replaced.
+.TP
+\fBdict append\fR \fIdictVarName\fR \fIkey\fR ?\fIstring ...\fR?
+Appends \fIstring\fR(s) to the value for \fIkey\fR in the
+dictionary variable.
+.TP
+\fBdict lappend\fR \fIdictVarName\fR \fIkey\fR ?\fIvalue ...\fR?
+Appends \fIvalue\fR(s) as list elements to the value for \fIkey\fR.
+.TP
+\fBdict incr\fR \fIdictVarName\fR \fIkey\fR ?\fIincrement\fR?
+Increments the value for \fIkey\fR by \fIincrement\fR (default 1).
+.TP
+\fBdict map\fR \fB{\fR\fIkeyVar valueVar\fR\fB}\fR \fIdictionary\fR \fIbody\fR
+Like \fBdict for\fR, but collects the body results into a new
+dictionary keyed by \fIkeyVar\fR.
+.TP
+\fBdict update\fR \fIdictVarName\fR \fIkey\fR \fIvarName\fR ?\fIkey\fR \fIvarName\fR ...? \fIbody\fR
+Extracts keys from the dictionary variable into local variables,
+evaluates \fIbody\fR, then writes changes back.
+.TP
+\fBdict with\fR \fIdictVarName\fR ?\fIkey ...\fR? \fIbody\fR
+Like \fBdict update\fR, but exposes all keys as variables.
+.TP
+\fBdict info\fR \fIdictionary\fR
+Returns diagnostic information about the dictionary (number of
+entries).
+.SS "STRINGS"
+.TP
+\fBstring compare\fR ?\fB\-nocase\fR? ?\fB\-length\fR \fIn\fR? \fIstr1\fR \fIstr2\fR
+Returns
+.BR \-1 ", " 0 ", or " 1
+depending on whether \fIstr1\fR is less than, equal to, or
+greater than \fIstr2\fR in Unicode code point order.
+If \fB\-nocase\fR is given, comparison is case-insensitive.
+If \fB\-length\fR is given, at most \fIn\fR characters are compared.
+.TP
+\fBstring equal\fR ?\fB\-nocase\fR? ?\fB\-length\fR \fIn\fR? \fIstr1\fR \fIstr2\fR
+Returns
+.B 1
+if the strings are equal,
+.B 0
+otherwise.  Supports the same options as
+.BR "string compare" .
+.TP
+\fBstring first\fR \fIneedle\fR \fIhaystack\fR ?\fIstartIndex\fR?
+Returns the character index (zero-based) of the first occurrence
+of \fIneedle\fR in \fIhaystack\fR at or after \fIstartIndex\fR
+(default 0), or
+.B \-1
+if not found.
+.TP
+\fBstring index\fR \fIstring\fR \fIindex\fR
+Returns the character at position \fIindex\fR in \fIstring\fR.
+Supports
+.B end
+and
+.BI end\- n
+indices.
+Returns the empty string if out of range.
+.TP
+\fBstring is\fR \fIclass\fR \fIstring\fR
+Returns
+.B 1
+if every character in \fIstring\fR belongs to \fIclass\fR,
+.B 0
+otherwise.
+Empty strings return
+.BR 0 .
+Supports \fB\-strict\fR flag.
+Classes:
+.BR alnum ", " alpha ", " ascii ", " boolean ", "
+.BR digit ", " double ", " false ", " integer ", "
+.BR list ", " space ", " tainted ", " true ", " xdigit .
+.TP
+\fBstring last\fR \fIneedle\fR \fIhaystack\fR ?\fIstartIndex\fR?
+Returns the character index of the last occurrence of
+\fIneedle\fR in \fIhaystack\fR, or
+.BR \-1 .
+.TP
+\fBstring length\fR \fIstring\fR
+Returns the number of characters (Unicode code points) in
+\fIstring\fR.
+.TP
+\fBstring map\fR ?\fB\-nocase\fR? \fImapping\fR \fIstring\fR
+\fImapping\fR is a list of key-value pairs.
+For each key found in \fIstring\fR, substitutes the
+corresponding value.
+Substitution proceeds left to right; replacement text is not
+re-scanned.
+.TP
+\fBstring match\fR ?\fB\-nocase\fR? \fIpattern\fR \fIstring\fR
+Returns
+.B 1
+if \fIstring\fR matches the glob \fIpattern\fR,
+.B 0
+otherwise.
+Glob metacharacters:
+.B *
+(any sequence),
+.B ?
+(any character),
+.BI [ chars ]
+(character class),
+.BI \e x
+(literal).
+.TP
+\fBstring range\fR \fIstring\fR \fIfirst\fR \fIlast\fR
+Returns the substring from character \fIfirst\fR to character
+\fIlast\fR (inclusive).
+Supports
+.B end
+and
+.BI end\- n
+indices.
+.TP
+\fBstring replace\fR \fIstring\fR \fIfirst\fR \fIlast\fR ?\fInewString\fR?
+Returns a copy of \fIstring\fR with the characters from \fIfirst\fR to
+\fIlast\fR replaced by \fInewString\fR.  If \fInewString\fR is omitted,
+the characters in the range are deleted.
+.TP
+\fBstring repeat\fR \fIstring\fR \fIcount\fR
+Returns \fIstring\fR concatenated \fIcount\fR times.
+Subject to the result size limit.
+.TP
+\fBstring trim\fR \fIstring\fR ?\fIchars\fR?
+Returns \fIstring\fR with leading and trailing characters in
+\fIchars\fR removed.
+\fIchars\fR defaults to whitespace.
+.TP
+\fBstring trimleft\fR \fIstring\fR ?\fIchars\fR?
+Returns \fIstring\fR with leading characters in \fIchars\fR
+removed.
+.TP
+\fBstring trimright\fR \fIstring\fR ?\fIchars\fR?
+Returns \fIstring\fR with trailing characters in \fIchars\fR
+removed.
+.TP
+\fBstring totitle\fR \fIstring\fR ?\fIfirst\fR? ?\fIlast\fR?
+Returns a copy of \fIstring\fR with the first character converted to
+uppercase and the remaining characters to lowercase.  If \fIfirst\fR and
+\fIlast\fR are given, only the characters in that range are affected.
+.TP
+\fBsubst\fR ?\fB\-nobackslashes\fR? ?\fB\-nocommands\fR? ?\fB\-novariables\fR? \fIstring\fR
+Performs variable, command, and backslash substitution on
+.I string
+and returns the result.
+Flags selectively disable individual substitution types.
+Unlike the normal parser, braces have no special quoting
+effect inside
+.BR subst .
+If a command substitution raises an error, the error propagates.
+A
+.B break
+exception stops processing (result is everything so far).
+A
+.B continue
+exception replaces that command with the empty string.
+A
+.B return
+exception substitutes the returned value.
+TIP\ #712 positive flags
+.RB ( \-backslashes ", " \-commands ", " \-variables )
+are also accepted; when at least one positive flag is present,
+only the named substitution types are performed.
+.TP
+\fBformat\fR \fIformatString\fR ?\fIarg ...\fR?
+Format
+.IR arg s
+according to
+.IR formatString ,
+producing a result string.  Supports the
+.BR %d ", " %i ", " %u ", " %o ", " %x ", " %X ", "
+.BR %c ", " %s ", " %f ", " %e ", " %E ", " %g ", " %G ", and "
+.B %%
+conversions, plus the flag characters
+.BR \- ", " + ", " 0 ", " # ,
+and a space flag;
+a numeric or
+.B *
+width; a precision
+.B .N
+or
+.BR .* ;
+and the length modifiers
+.BR h " and " l .
+Carry-past-leading-digit overflow in the float conversions
+(e.g.
+.B \(dqformat \(dq%.1f\(dq 9.99\(dq
+=>
+.BR \(dq10.0\(dq )
+is handled correctly across both fixed and scientific
+mantissa renormalization.
+.TP
+\fBscan\fR \fIstring\fR \fIformatString\fR ?\fIvarName ...\fR?
+Parse
+.I string
+according to
+.IR formatString ,
+which uses
+.BR % \-conversion
+specifiers analogous to
+.BR format .
+Supports
+.BR %d ", " %i ", " %u ", " %o ", " %x ", " %X ", "
+.BR %c ", " %s ", " %f ", " %n ", and "
+.BR %% .
+When variable names are given, assigns each conversion in
+order and returns the number of successful conversions.
+With no variable names, returns the conversions as a list.
+The
+.B %f
+scanner accepts an optional
+.RB ( + / \- )
+sign after the
+.B e
+or
+.B E
+exponent
+.RB ( \(dq1e\-3\(dq ", " \(dq2.5E+10\(dq ).
+.SS "BINARY DATA"
+The
+.B binary
+ensemble packs scripted values into byte sequences and parses
+byte sequences back into scripted values.  Format strings are
+read left-to-right; each specifier is a letter followed by an
+optional non-negative decimal count or the literal
+.BR * .
+Whitespace inside a format string is ignored.
+.TP
+\fBbinary format\fR \fIformatString\fR ?\fIarg arg ...\fR?
+Returns a byte sequence built by packing each \fIarg\fR
+according to its specifier.
+Specifiers (\fIN\fR = decimal count, default 1):
+.RS
+.TP 4
+\fBa\fR\fIN\fR / \fBA\fR\fIN\fR
+ASCII byte field;
+.B a
+NUL-pads and
+.B A
+space-pads to length \fIN\fR.
+Input longer than \fIN\fR is truncated.
+With count
+.BR * ,
+the field length equals the input string length (no padding or
+truncation).
+.TP 4
+\fBb\fR\fIN\fR / \fBB\fR\fIN\fR
+Bit field of \fIN\fR bits.
+.B b
+encodes low-bit-first within each byte;
+.B B
+encodes high-bit-first.
+One input character produces one bit:
+.B 0
+means zero, any other character means one.
+With count
+.BR * ,
+the count equals the input string's character count.
+.TP 4
+\fBh\fR\fIN\fR / \fBH\fR\fIN\fR
+Hex field of \fIN\fR nibbles.
+.B h
+encodes low-nibble-first within each byte;
+.B H
+encodes high-nibble-first.
+With count
+.BR * ,
+the count equals the input string's character count.
+.TP 4
+\fBc\fR\fIN\fR / \fBs\fR\fIN\fR / \fBS\fR\fIN\fR / \fBt\fR\fIN\fR
+\fBi\fR\fIN\fR / \fBI\fR\fIN\fR / \fBn\fR\fIN\fR /
+\fBw\fR\fIN\fR / \fBW\fR\fIN\fR / \fBm\fR\fIN\fR
+Integer fields, 8 / 16 / 16 / 16 / 32 / 32 / 32 / 64 / 64 / 64
+bits respectively;
+lowercase forms are little-endian,
+uppercase forms are big-endian,
+.BR t / n / m
+are host-native byte order.
+\fIN\fR successive values are packed.
+Integer values larger than the field width are truncated modulo
+.BR "2^width" .
+When TH8_ENABLE_BIGINT is enabled at compile time and bigint is
+enabled at runtime, bigint inputs are accepted and truncated
+to the field width.
+With count
+.BR * ,
+the next argument is treated as a Tcl list and one field is
+emitted per list element.
+.TP 4
+\fBf\fR\fIN\fR / \fBr\fR\fIN\fR / \fBR\fR\fIN\fR
+IEEE 754 binary32 (single-precision) field;
+.B f
+is host-native,
+.B r
+is little-endian,
+.B R
+is big-endian.
+NaN inputs are normalised to the canonical pattern
+.BR 0x7FC00000 .
+With count
+.BR * ,
+the next argument is treated as a Tcl list and one field is
+emitted per element.
+.TP 4
+\fBd\fR\fIN\fR / \fBq\fR\fIN\fR / \fBQ\fR\fIN\fR
+IEEE 754 binary64 (double-precision) field;
+.B d
+is host-native,
+.B q
+is little-endian,
+.B Q
+is big-endian.
+NaN inputs are normalised to
+.BR 0x7FF8000000000000 .
+With count
+.BR * ,
+the next argument is treated as a Tcl list and one field is
+emitted per element.
+.TP 4
+\fBj\fR\fIN\fR / \fBJ\fR\fIN\fR
+Arbitrary-precision signed integer field, exactly \fIN\fR
+bytes wide, two's-complement encoded.
+.B j
+writes/reads the bytes in little-endian order;
+.B J
+writes/reads in big-endian order.
+Values outside the range
+.RB [ \-2^(N*8\-1) ", " 2^(N*8\-1)\-1 ]
+raise the error
+.BR \(dqinteger value too large for j/J field\(dq .
+With count
+.BR * ,
+.B binary format
+packs the value in the minimum number of bytes needed (one
+byte for zero; for non-zero values, just enough to include
+the sign bit) and
+.B binary scan
+consumes all remaining bytes as a single signed bigint
+(yielding zero on an empty input).
+.B binary scan
+always interprets the field as
+.B signed
+(MSB of the most-significant byte is the sign bit) and
+sign-extends.
+When
+.B TH8_ENABLE_BIGINT
+is off at compile time or
+.BR Th8_IsBigintEnabled (interp)
+is false at runtime, the field is limited to values
+representable in a 64-bit two's-complement integer; scans
+wider than eight bytes raise an error in that
+configuration.
+.TP 4
+\fBx\fR\fIN\fR
+Inserts \fIN\fR NUL bytes (consumes no value argument).
+Count
+.B *
+is not permitted on
+.BR x .
+.TP 4
+\fBX\fR\fIN\fR
+Moves the cursor back by \fIN\fR bytes (no value argument);
+movement past the start of the buffer is silently clamped to
+position zero.
+With count
+.BR * ,
+the cursor rewinds to position zero.
+.TP 4
+\fB@\fR\fIN\fR
+Moves the cursor to absolute byte position \fIN\fR (no value
+argument); any gap between the previous high-water mark and
+the seek position is zero-filled.
+Count
+.B *
+is not permitted on
+.BR @ .
+.RE
+.IP
+Errors:
+.B "\(dqnot enough arguments for all format specifiers\(dq"
+when the supplied value arguments are insufficient;
+.B "\(dqbad field specifier\(dq"
+when the format string contains an unknown letter;
+.B "\(dqcannot use \e\(dq*\e\(dq in binary format field\(dq"
+when
+.B *
+is used on
+.B x
+or
+.BR @ .
+.TP
+\fBbinary scan\fR \fIbinaryData formatString\fR ?\fIvarName varName ...\fR?
+Parses
+.I binaryData
+according to
+.I formatString
+and assigns the parsed values to the named variables.
+Returns the number of variables successfully assigned (the
+partial-scan count): if
+.I binaryData
+runs out before a specifier consumes its bytes, scanning stops,
+the corresponding variable and any subsequent variables are
+left untouched, and the count reflects only the variables
+that were assigned.
+The same specifier letters and counts apply as for
+.B binary format
+with these differences:
+.RS
+.TP 4
+\fBa\fR\fIN\fR
+Reads exactly \fIN\fR bytes verbatim (no NUL stripping).
+.TP 4
+\fBA\fR\fIN\fR
+Reads \fIN\fR bytes and strips trailing space and NUL bytes.
+.TP 4
+\fBa\fR\fB*\fR / \fBA\fR\fB*\fR / \fBb\fR\fB*\fR / \fBB\fR\fB*\fR / \fBh\fR\fB*\fR / \fBH\fR\fB*\fR
+Reads all remaining bytes (or their bit / nibble equivalent).
+.TP 4
+\fBc\fR\fB*\fR / \fBs\fR\fB*\fR / ... / \fBd\fR\fB*\fR / \fBq\fR\fB*\fR / \fBQ\fR\fB*\fR
+Reads as many fields as remain in the input and assigns the
+list of values to a single variable.
+.TP 4
+\fBx\fR\fIN\fR
+Skips \fIN\fR input bytes (no variable consumed).
+.RE
+.SS "PROCEDURES"
+.TP
+\fBproc\fR \fIname\fR \fIarglist\fR \fIbody\fR
+Creates a new command \fIname\fR.
+\fIarglist\fR is a list where each element is either a simple
+name (required parameter), a two-element list
+.BI { "name default" }
+(optional parameter with default value), or the literal
+.B args
+(must be last; collects all remaining arguments as a list).
+When \fIname\fR is invoked, a new frame is pushed, parameters
+are bound, and \fIbody\fR is evaluated.
+.TP
+\fBnproc\fR \fIname\fR \fIarglist\fR \fIbody\fR
+Like
+.BR proc ,
+but uses named/keyword argument binding.  Parameters whose
+names start with \fB\-\fR are matched by \fB\-name value\fR
+pairs in the call; remaining parameters are filled positionally.
+.TP
+\fBapply\fR \fIlambda\fR ?\fIarg ...\fR?
+Evaluates an anonymous procedure.
+.I lambda
+is a two\-element list
+.BI { "arglist body" } \fR.
+A new frame is pushed, arguments are bound per
+.BR proc
+rules, and
+.I body
+is evaluated.
+.TP
+\fBnapply\fR \fIlambda\fR ?\fIarg ...\fR?
+Like
+.BR apply ,
+but uses
+.BR nproc \-style
+named/keyword argument binding.
+.TP
+\fBrename\fR \fIoldname\fR \fInewname\fR
+Renames the command \fIoldname\fR to \fInewname\fR.
+If \fInewname\fR is the empty string, the command is deleted.
+.TP
+\fBtailcall\fR \fIcommand\fR ?\fIarg ...\fR?
+Replaces the current procedure invocation with a call to
+\fIcommand\fR.  The current procedure's frame is replaced,
+enabling tail\-call optimization for recursive algorithms.
+.SS "REGULAR EXPRESSIONS"
+.TP
+\fBregexp\fR ?\fIswitches\fR? \fIpattern\fR \fIstring\fR ?\fImatchvar\fR? ?\fIsubvar ...\fR?
+Matches \fIstring\fR against the regular expression \fIpattern\fR.
+Returns 1 if matched, 0 otherwise.  If match variables are given,
+the overall match is stored in \fImatchvar\fR and sub-match groups
+in subsequent \fIsubvar\fRs.
+.RS
+.PP
+Switches:
+.BR \-nocase ", " \-expanded ", " \-line ", " \-linestop ", "
+.BR \-lineanchor ", " \-indices ", " \-start " \fIn\fR, " \-\- .
+.PP
+.B \-all
+\(em returns the total number of non-overlapping matches.
+.PP
+.B \-inline
+\(em returns matches as a list instead of storing in variables.
+With
+.BR \-all ,
+collects all matches into a flat list.
+.PP
+See
+.BR th8_re_syntax (1)
+for the complete regular expression syntax reference.
+.RE
+.TP
+\fBregsub\fR ?\fIswitches\fR? \fIpattern\fR \fIstring\fR \fIreplacement\fR ?\fIvarname\fR?
+Substitutes the first (or all with
+.BR \-all )
+occurrences of \fIpattern\fR in \fIstring\fR with
+\fIreplacement\fR.
+In \fIreplacement\fR,
+.B &
+is the matched text and
+.BI \e n
+is the \fIn\fRth sub-match.
+If \fIvarname\fR is given, the result is stored there and the
+command returns a count; otherwise the result is the substituted
+string.
+.SS "ENCODING"
+.TP
+\fBbase64 encode\fR \fIstring\fR
+Returns the Base64 encoding of \fIstring\fR.
+.TP
+\fBbase64 decode\fR \fIstring\fR
+Returns the decoded data from a Base64-encoded \fIstring\fR.
+Invalid Base64 characters are silently ignored.
+.SS "I/O"
+.TP
+\fBgets\fR \fIchannel\fR ?\fIvarname\fR?
+Reads available data from \fIchannel\fR.
+TH8 supports one input channel:
+.BR stdin .
+If the returned data ends with a newline, the trailing line
+ending is stripped.
+.RS
+.PP
+With \fIvarname\fR: stores the data in the variable and returns
+the character count, or
+.B \-1
+on failure (not an error).
+.PP
+Without \fIvarname\fR: returns the data directly; failure is
+an error.
+.RE
+.TP
+\fBread\fR ?\fB\-nonewline\fR? \fIchannelId\fR
+.TQ
+\fBread\fR \fIchannelId\fR \fInumChars\fR
+Reads data from \fIchannelId\fR.  Two forms are supported
+(Tcl 8.6 conformance):
+.RS
+.PP
+\fBread\fR ?\fB\-nonewline\fR? \fIchannelId\fR: reads all data
+from the channel until EOF.  With \fB\-nonewline\fR, the trailing
+newline character is stripped from the result.
+.PP
+\fBread\fR \fIchannelId\fR \fInumChars\fR: reads exactly
+\fInumChars\fR characters, or fewer if EOF is reached first.
+.PP
+Supports \fBstdin\fR and temporary file channels.
+.RE
+.TP
+\fBputs\fR ?\fB\-nonewline\fR? ?\fIchannel\fR? \fIstring\fR
+Writes \fIstring\fR to the output channel, followed by a
+newline unless \fB\-nonewline\fR is specified.
+\fIchannel\fR defaults to
+.BR stdout .
+The only supported channel is
+.BR stdout .
+The
+.B stderr
+channel is reserved for system error reporting by the
+interpreter and host application; it is not available from
+scripts.  Attempting to use any channel other than
+.B stdout
+produces a \(lqchannel not available\(rq error.
+.TP
+\fBfile tempname\fR \fIsize\fR
+Creates a pre-allocated temporary file of at least \fIsize\fR bytes
+and returns the channel name.  The channel is sandboxed: writes may
+not exceed the declared size.  The file is deleted when the
+interpreter is destroyed.
+.TP
+\fBfile channels\fR ?\fIpattern\fR?
+Returns a list of all open channel names.  When the platform
+provides \fBxInput\fR and \fBxOutput\fR callbacks, the list
+includes \fBstdin\fR and \fBstdout\fR in addition to any
+temporary file channels.
+If \fIpattern\fR is given, only matching names are returned.
+.TP
+\fBseek\fR \fIchannel offset\fR ?\fIorigin\fR?
+Sets the read/write position for \fIchannel\fR.
+\fIorigin\fR is one of \fBstart\fR (default), \fBcurrent\fR, or
+\fBend\fR.  Only temporary file channels are supported.
+.TP
+\fBtell\fR \fIchannel\fR
+Returns the current byte position for \fIchannel\fR.
+.TP
+\fBflush\fR \fIchannel\fR
+Flushes any pending writes for \fIchannel\fR.
+.TP
+\fBclose\fR ?\fIchannelId\fR?
+Closes a temporary channel or detaches a standard channel.
+With \fIchannelId\fR: closes the specified temporary file channel,
+or detaches \fBstdin\fR, \fBstdout\fR, or \fBstderr\fR (matching
+Tcl 8.x behavior).  The platform may veto the close via the
+\fBxCloseTemporaryData\fR callback.
+Without arguments: closes all temporary file channels (fail-safe
+cleanup), skipping standard channels.
+.TP
+\fBsource\fR \fIname\fR
+Retrieves the contents identified by the opaque name \fIname\fR
+via the platform's
+.B xGetData
+callback, and evaluates the contents as a script.
+.PP
+The C functions
+.BR Th8_Input ,
+.BR Th8_Output ,
+and
+.B Th8_GetData
+each take an additional
+.I "int flags"
+parameter.  The following flag is defined:
+.TP
+.B TH8_TRANSLATE_EOL (1)
+When set on input (via
+.BR Th8_Input " or " Th8_GetData ),
+\\r\\n sequences are translated to \\n.
+When set on output (via
+.BR Th8_Output ),
+\\n is translated to \\r\\n.
+This is used when reading script files that may have DOS line
+endings.
+.SS "BINARY LOADING"
+.TP
+\fBload\fR \fIname\fR ?\fIinitProc\fR?
+Load the binary extension identified by \fIname\fR into the interpreter.
+The platform's
+.B xLoad
+callback is invoked.  On success, the init function (derived from
+\fIname\fR or specified as \fIinitProc\fR) is called, which registers
+commands.  The library is recorded for later [unload].
+Loading must be enabled by the host via
+.BR Th8_EnableLoad .
+.TP
+\fBunload\fR ?\fB\-nocomplain\fR? ?\fB\-keeplibrary\fR? ?\fB\-nokeeplibrary\fR? ?\fB\-\-\fR? \fIname\fR
+Unload a previously loaded binary extension.
+The library's _Unload entry point is called (if present), and the
+library is removed from the interpreter's tracking list.
+.RS
+.TP
+.B \-keeplibrary
+(Default.)  Call the _Unload entry point but do not close
+the shared library.  The library remains mapped in the process.
+.TP
+.B \-nokeeplibrary
+Call the _Unload entry point and then close the shared library
+via dlclose/FreeLibrary.  This option requires the host to have
+enabled
+.B TH8_UNLOAD_DANGEROUS
+via
+.BR Th8_EnableUnload .
+.TP
+.B \-nocomplain
+Suppress all errors silently, returning an empty string.
+.TP
+.B \-\-
+End of options; the next argument is treated as the library name
+even if it begins with a dash.
+.RE
+.IP
+Unloading must be enabled by the host via
+.BR Th8_EnableUnload .
+.SS "FILE COMMANDS"
+.TP
+\fBfile dirname\fR \fIname\fR
+Returns the directory portion of \fIname\fR, omitting the last
+component and its preceding separator.  Returns "." if the path
+contains no separator.  Pure string manipulation.
+.TP
+\fBfile exists\fR \fIname\fR
+Returns 1 if the named data exists according to the platform's
+.B xDataExists
+callback, 0 otherwise.  Returns 0 if
+.B xDataExists
+is not available or if \fIname\fR is the empty string.
+.TP
+\fBfile join\fR \fIname\fR ?\fIname\fR ...?
+Combines path components using a forward-slash separator.
+An absolute component resets the result.  Pure string manipulation.
+.TP
+\fBfile normalize\fR \fIname\fR
+Returns the canonical absolute path for \fIname\fR.
+Routes through the platform's
+.B xNormalizePath
+callback, which resolves
+.BR . ", " ..
+components and makes relative paths absolute.  On POSIX,
+.BR realpath (3)
+is used for existing paths.  If the platform callback is not
+available, the path is returned unchanged.
+.TP
+\fBfile split\fR \fIname\fR
+Returns a list whose elements are the components of the path.
+A leading separator becomes the first element.  Pure string manipulation.
+.TP
+\fBfile tail\fR \fIname\fR
+Returns the last component of \fIname\fR (everything after the
+last path separator).  Returns the name unchanged if it contains
+no separator.  Returns the empty string for root paths.
+Pure string manipulation.
+.TP
+\fBfile extension\fR \fIname\fR
+Returns the file extension of \fIname\fR (the last dot and
+everything after it in the last path component), or the empty
+string if no extension is present.  Pure string manipulation.
+.TP
+\fBfile nativename\fR \fIname\fR
+Converts directory separators to the native form: forward slashes
+on POSIX, backslashes on Windows.  Pure string manipulation.
+.TP
+\fBfile pathtype\fR \fIname\fR
+Returns one of \fBabsolute\fR, \fBrelative\fR, or
+\fBvolumerelative\fR.  An absolute path begins with a root
+separator or drive letter plus separator.  A volumerelative path
+begins with a drive letter without a separator (Windows only).
+All other paths are relative.  Pure string manipulation.
+.TP
+\fBfile rootname\fR \fIname\fR
+Returns the path with the file extension removed (everything
+before the last dot in the last path component).  If there is no
+extension, returns the path unchanged.  Pure string manipulation.
+.TP
+\fBfile rootpath\fR \fIname\fR
+Returns the filesystem root or mount point for the specified path
+via the platform's \fBxGetRootPath\fR callback.  On POSIX,
+this is typically \fB/\fR.  On Windows, this is the volume root
+(e.g., \fBC:\\\fR).
+.TP
+\fBfile same\fR \fIname1\fR \fIname2\fR
+Returns non-zero if both paths refer to the exact same physical
+file, as determined by the platform's \fBxSameFile\fR callback.
+On POSIX, this compares inode and device numbers.  On Windows,
+this uses \fBGetFileInformationByHandle\fR for file identity.
+.TP
+\fBfile separator\fR ?\fIname\fR?
+Without arguments, returns the native directory separator
+character (\fB/\fR on POSIX, \fB\\\fR on Windows).  With a
+\fIname\fR argument, returns the first directory separator
+found in the name, or the native separator if none is present.
+.TP
+\fBfile type\fR \fIname\fR
+Returns the type of the file identified by \fIname\fR:
+\fBfile\fR for regular files, \fBdirectory\fR for directories,
+\fBfile symbolicLink\fR or \fBdirectory symbolicLink\fR for
+symbolic links, \fBunsupported\fR for other file types, and
+\fBunknown\fR when the native API fails or the file does not
+exist.
+.TP
+\fBfile under\fR \fIname1\fR \fIname2\fR
+Returns non-zero if \fIname1\fR resides within the directory
+hierarchy of \fIname2\fR.
+.TP
+\fBfile validname\fR \fIpath\fR ?\fIpathType\fR?
+Returns non-zero if \fIpath\fR is syntactically valid for the
+operating system.  This command is exempt from base-path
+relative path restrictions.  The only supported \fIpathType\fR
+value is \fBNone\fR (case-insensitive).
+.TP
+\fBpwd\fR
+Returns the current working directory via the platform's
+.B xGetCwd
+callback.  In TH8's security model, the result is
+.B \(dq.\(dq
+(the base directory) or a relative path of the form
+.B \(dq./subdir\(dq
+if the current directory is underneath the base directory.
+Returns an error if the platform does not provide
+.BR xGetCwd ,
+or if the current directory is outside the base directory.
+.TP
+\fBcd\fR ?\fIdirName\fR?
+Changes the current working directory via the platform's
+.B xSetCwd
+callback.  If \fIdirName\fR is omitted, it defaults to
+.B \(dq.\(dq
+(the base directory).  Only paths at or underneath the base
+directory are accepted; all other paths produce a
+\(lqpermission denied\(rq error.  Returns an empty string on success.
+Returns an error if the platform does not provide
+.BR xSetCwd .
+.SS "TIME AND PROCESS"
+.TP
+\fBclock seconds\fR
+Returns the current time as an integer number of seconds since
+an implementation-defined epoch.
+Returns
+.B 0
+if time is unsupported.
+.TP
+\fBclock ntp\fR ?\fIserver ...\fR?
+Queries NTP v4 servers for the current time.  Returns the
+Unix timestamp with anti-spoof origin timestamp verification,
+multi-server consensus, and backward-clock detection.
+Requires the platform's
+.B xTimeMs
+callback.
+.TP
+\fBclock https\fR
+Retrieves authenticated time from an HTTPS endpoint with
+RSA-SHA512 signature verification against the embedded
+.B keyTime
+public key.  Uses a random nonce for anti-replay protection.
+.TP
+\fBafter\fR \fImilliseconds\fR
+Sleeps for \fImilliseconds\fR via the platform's
+.B xSleep
+callback.  The sleep is interruptible by
+.BR "interp cancel" ;
+checking occurs every 50ms.  Returns the empty string.
+It is an error if the platform does not provide
+.BR xSleep .
+.TP
+\fBtime\fR \fIscript\fR ?\fIcount\fR?
+Evaluates \fIscript\fR \fIcount\fR times (default 1) and returns
+a string of the form \(lq\fIN\fR microseconds per iteration\(rq.
+Uses the platform's
+.B xTimeUs
+callback for microsecond resolution.
+.TP
+\fBpid\fR
+Returns the process identifier of the host process.
+Returns
+.B 0
+if unsupported.
+.SS "NAMESPACES"
+.TP
+\fBnamespace eval\fR \fIname\fR \fIscript\fR ?\fIscript ...\fR?
+Evaluates \fIscript\fR in namespace \fIname\fR, creating it if
+necessary.  Commands defined via
+.B proc
+during the eval are placed in that namespace.  Multiple script
+arguments are concatenated with spaces.
+.RS
+.PP
+.B "Ephemeral frame semantics:"
+Variables created by
+.B set
+inside
+.B "namespace eval"
+are local to the evaluation frame and are
+.B destroyed
+when the eval completes.  Only the
+.B variable
+command creates persistent namespace variables.  This differs from
+Tcl 8.x/9.x, where
+.B set
+inside
+.B "namespace eval"
+creates persistent namespace variables.  Use
+.B variable
+for state that must outlive the eval.
+.RE
+.TP
+\fBnamespace current\fR
+Returns the fully-qualified name of the current namespace.
+.TP
+\fBnamespace exists\fR \fIname\fR
+Returns
+.B 1
+if \fIname\fR exists as a namespace,
+.B 0
+otherwise.
+.TP
+\fBnamespace children\fR ?\fInamespace\fR?
+Returns a list of the fully-qualified names of all child
+namespaces of \fInamespace\fR (default: current namespace).
+.TP
+\fBnamespace parent\fR ?\fInamespace\fR?
+Returns the fully-qualified name of the parent of
+\fInamespace\fR.  Returns the empty string for the global
+namespace.
+.TP
+\fBnamespace delete\fR \fInamespace\fR ?\fInamespace ...\fR?
+Deletes the named namespace(s) and all their contents.  It is
+an error to delete the global namespace
+.BR :: .
+.TP
+\fBnamespace code\fR \fIscript\fR
+Returns a script that evaluates \fIscript\fR in the current
+namespace when invoked later.
+.TP
+\fBnamespace export\fR ?\fIpattern ...\fR?
+Adds glob patterns to the namespace's export list.  Only
+commands whose names match an export pattern are eligible for
+.BR "namespace import" .
+With no arguments, returns the current export list.
+.TP
+\fBnamespace import\fR ?\fB\-force\fR? \fIpattern ...\fR?
+Creates local commands that delegate to exported commands in
+another namespace.  Each \fIpattern\fR is a fully qualified
+glob (e.g., \fB::srcns::*\fR).  Imported commands execute in
+the defining namespace context: \fBnamespace current\fR
+returns the source namespace, and the \fBvariable\fR command
+accesses the source namespace's variables.
+.RS
+.PP
+If \fB\-force\fR is specified, any existing command in the
+target namespace with the same name as an imported command is
+silently overwritten.  Without \fB\-force\fR, existing
+commands are not replaced.
+.RE
+.PP
+Command resolution: unqualified names are searched first in the
+current namespace, then in the global namespace.  Qualified
+names (containing
+.BR :: )
+are resolved directly in the named namespace.
+.SS "PACKAGES"
+.TP
+\fBpackage provide\fR \fIname\fR ?\fIversion\fR?
+Declares that package \fIname\fR version \fIversion\fR is loaded.
+Without \fIversion\fR, returns the currently loaded version.
+.TP
+\fBpackage require\fR ?\fB\-exact\fR? \fIname\fR ?\fIversion\fR?
+Loads package \fIname\fR.  Evaluates a registered
+.B "package ifneeded"
+script, or the
+.B "package unknown"
+handler if no script is registered.
+.TP
+\fBpackage ifneeded\fR \fIname\fR \fIversion\fR ?\fIscript\fR?
+Registers or queries the script that loads \fIname\fR version
+\fIversion\fR.
+.TP
+\fBpackage names\fR
+Returns a list of all packages registered via
+.BR "package provide" .
+.TP
+\fBpackage forget\fR \fIname\fR
+Removes all record of package \fIname\fR.
+.TP
+\fBpackage unknown\fR ?\fIcommand\fR?
+Gets or sets the handler invoked when
+.B "package require"
+cannot find a package.
+.TP
+\fBpackage vcompare\fR \fIv1\fR \fIv2\fR
+Returns \-1, 0, or 1 comparing dotted version strings.
+.TP
+\fBpackage vsatisfies\fR \fIversion\fR \fIrequirement\fR
+Returns 1 if \fIversion\fR satisfies \fIrequirement\fR (same
+major, remaining components >=).
+.SS "EVENTS"
+.TP
+\fBupdate\fR ?\fB\-idletasks\fR?
+Drain the per-interpreter event queue once and return.  Without
+\fB\-idletasks\fR, all queued events are processed; with
+\fB\-idletasks\fR, only idle-task events are processed.  The
+command does not block: when the queue is empty it returns
+immediately.  Useful for letting deferred work
+.RB ( "after 0" ", " "vwait" -signaled state updates) finish before
+proceeding.
+.TP
+\fBvwait\fR ?\fB\-timeout\fR \fIms\fR? \fIvarName\fR
+Block the current call until
+.I varName
+is written, then return its new value.  Other queued events
+continue to be processed while waiting (NRE-aware: nested
+.B vwait
+calls cooperate correctly).  With
+.BR \-timeout ,
+raise a
+.B "vwait: timeout"
+script error if
+.I varName
+is not signaled within
+.I ms
+milliseconds; otherwise the wait is unbounded.
+.SS "INTERPRETER CONTROL"
+.TP
+\fBinterp cancel\fR ?\fB\-unwind\fR? ?\fImessage\fR?
+Cancels the current interpreter.  Without \fB\-unwind\fR, the
+cancellation is interceptable by
+.BR catch .
+With \fB\-unwind\fR, the cancellation propagates through
+.B catch
+and unwinds the entire call stack.  If \fImessage\fR is given,
+it becomes the error message; otherwise a default message is used.
+.SS "SECURITY COMMANDS"
+.TP
+\fBsecure create\fR \fIvarName\fR ?\fIvalue\fR?
+Creates a new secure (AES-256-GCM encrypted-at-rest) variable.
+Allocates a key slot, generates a random key, and encrypts the
+initial value.  Requires \fBTH8_ENABLE_CRYPTOGRAPHY\fR.
+.TP
+\fBsecure exists\fR \fIvarName\fR
+Returns 1 if \fIvarName\fR is a secure variable, 0 otherwise.
+.TP
+\fBsecure delete\fR \fIvarName\fR
+Securely deletes the variable: zeros the ciphertext, zeros and
+frees the key slot, and unsets the Tcl variable.
+.TP
+\fBflags have\fR \fIflags\fR \fIrequired\fR
+Returns 1 if all of the \fIrequired\fR attribute flags are
+present in \fIflags\fR, 0 otherwise.  Supports wildcard
+characters: \fB*\fR, \fB#\fR, \fB!\fR, \fB$\fR, \fB@\fR.
+.TP
+\fBflags change\fR \fIflags\fR \fIchanges\fR
+Applies flag changes to \fIflags\fR, where \fIchanges\fR is a
+list of \fB+flag\fR (add) and \fB\-flag\fR (remove) directives.
+Returns the resulting flags string.
+.TP
+\fBharpy sign\fR \fIpublicKeyToken\fR \fIscriptText\fR
+Produce an RSA PKCS#1 v1.5 SHA\-512 detached signature over
+.I scriptText
+using the private key identified by
+.IR publicKeyToken
+(a 16\-hex\-digit token matching one of the keys loaded into
+the interpreter).  Returns the signature as a base64\-encoded
+string in the
+.I .b64sig
+sidecar format used by
+.BR signScript.sh
+and the signed\-only policy.  The private key half must be
+available in the loaded key material; key entries shipped
+with only the public half cannot sign.  Requires
+.BR TH8_ENABLE_CRYPTOGRAPHY .
+.TP
+\fBharpy verify\fR \fIpublicKeyToken\fR \fIscriptText\fR \fIsigText\fR
+Verify
+.I sigText
+(base64) against
+.I scriptText
+using the public key identified by
+.IR publicKeyToken .
+Returns 1 on a valid signature, 0 on a verifiable
+non\-match.  Raises a script error on malformed input or
+when
+.I publicKeyToken
+does not match the token embedded in the signature header
+(token\-mismatch is rejected at parse time so that a
+signature meant for one key cannot be silently re\-verified
+against another).
+.SS "HASHING"
+.TP
+\fBhash normal\fR \fIalgorithm\fR \fIstring\fR
+Computes a cryptographic digest of \fIstring\fR using the
+specified \fIalgorithm\fR and returns the hexadecimal result.
+The only supported algorithm is \fBSHA512\fR (case-insensitive).
+.SS "INTROSPECTION"
+.TP
+\fBinfo cmdcount\fR
+Returns the total number of commands evaluated by the interpreter
+since it was created.
+.TP
+\fBinfo commands\fR ?\fIpattern\fR?
+Returns a list of all commands matching the glob \fIpattern\fR.
+If \fIpattern\fR is omitted, all commands are listed.
+.TP
+\fBinfo context\fR
+Returns a stable 128-character hexadecimal string that serves as
+a SHA-512 fingerprint of the process identity.  The fingerprint
+is computed once from a 32-byte seed composed of the parent
+process ID (4 bytes), process ID (4 bytes), thread ID (8 bytes),
+and 16 bytes of cryptographic random entropy.  The value is
+cached for the lifetime of the process.
+.TP
+\fBinfo globals\fR ?\fIpattern\fR?
+Returns a list of all global variables matching \fIpattern\fR.
+.TP
+\fBinfo exists\fR \fIvarname\fR
+Returns
+.B 1
+if \fIvarname\fR exists in the current scope,
+.B 0
+otherwise.
+.TP
+\fBinfo level\fR ?\fInumber\fR?
+With no argument, returns the current procedure nesting level
+(0\ at global scope).  With an argument, returns a list of the
+command name and arguments at that level.  Positive values are
+absolute (1\ =\ outermost procedure); zero or negative values
+are relative to the current level (0\ =\ current,
+\-1\ =\ caller).
+.TP
+\fBinfo library\fR
+Returns
+.B ./lib/th8
+if the \fBth8\fR package has been provided (via
+.BR "package provide th8" ),
+or an empty string if it has not.  The check is based on the
+package registration state, not the existence of the directory
+on disk.  This allows scripts to locate the TH8 script library
+directory for sourcing auxiliary files.
+.TP
+\fBinfo patchlevel\fR
+Returns the TH8 patch level version string (e.g., \fB1.0.0\fR).
+The value is read from the
+.B VERSION
+file at build time and stored in
+.BR ::tcl_platform(patchLevel) .
+The format must conform to the regular expression
+.BR {^\ed+\e.\ed+(?:\e.\ed){0,2}(?:-[0-9A-Za-z][_0-9A-Za-z])?$} .
+.TP
+\fBinfo complete\fR \fIscript\fR
+Returns
+.B 1
+if \fIscript\fR is syntactically complete (all braces, brackets,
+and double-quotes are balanced),
+.B 0
+otherwise.  Useful for interactive shells that need to determine
+whether to prompt for continuation input.
+.TP
+\fBinfo args\fR \fIprocname\fR
+Returns a list of the argument names of the procedure
+\fIprocname\fR.
+.TP
+\fBinfo body\fR \fIprocname\fR
+Returns the body of the procedure \fIprocname\fR.
+.TP
+\fBinfo default\fR \fIprocname\fR \fIargname\fR \fIvarname\fR
+Returns 1 if the argument \fIargname\fR of procedure \fIprocname\fR
+has a default value, storing it in \fIvarname\fR; returns 0
+otherwise.  When the argument has no default, \fIvarname\fR is set
+to the empty string.  It is an error if \fIprocname\fR does not
+exist or \fIargname\fR is not an argument of the procedure.
+.TP
+\fBinfo functions\fR ?\fIpattern\fR?
+Returns a list of all registered math functions matching
+\fIpattern\fR.
+.TP
+\fBinfo loaded\fR
+Returns a list of all dynamically loaded libraries in the
+interpreter.
+.TP
+\fBinfo nameofexecutable\fR
+Returns the path to the host executable, as determined by the
+platform's \fBxGetExePath\fR callback.  Falls back to the
+\fB::th8_nameofexecutable\fR variable if set.
+.TP
+\fBinfo procs\fR ?\fIpattern\fR?
+Returns a list of all procedures (defined via
+.B proc
+or
+.BR nproc )
+matching \fIpattern\fR.  Built-in commands are excluded.
+.TP
+\fBinfo script\fR
+Returns the name of the innermost currently executing
+.B source
+file, or the empty string if not in a source context.
+.TP
+\fBinfo sharedlibextension\fR
+Returns the platform-specific shared library extension
+(e.g., \fB.so\fR, \fB.dylib\fR, \fB.dll\fR).
+.TP
+\fBinfo subcommands\fR \fIcommand\fR ?\fIpattern\fR?
+Returns a list of all subcommands of the ensemble \fIcommand\fR.
+If \fIpattern\fR is given, only subcommand names matching the
+glob pattern are returned.  Supported ensembles include
+.BR info ", " file ", " string ", " namespace ", " package ", and " array .
+It is an error if \fIcommand\fR is not an ensemble.
+.TP
+\fBinfo varlinks\fR
+Returns a list of all variable names in the current call frame
+that are linked to variables in other frames via \fBupvar\fR,
+\fBglobal\fR, or \fBvariable\fR.
+.TP
+\fBinfo vars\fR ?\fIpattern\fR?
+Returns a list of all variables in the current scope matching
+\fIpattern\fR.
+.SH "GLOBAL VARIABLES"
+The following variables are initialized at interpreter creation:
+.TP
+.B ::argv
+Argument list (empty by default).
+.TP
+.B ::auto_path
+Package index search path.  A Tcl list of directory names that
+.B Th8_AutoPathSearch
+scans for
+.B pkgIndex.th8
+files at interpreter startup.  Initialized to
+.B "lib/th8 lib/Standard1.0"
+by default; embedders may prepend or append paths before calling
+.BR Th8_AutoPathSearch .
+.TP
+.B ::errorCode
+Machine-readable error code.
+Set to
+.B NONE
+on each error unless a specific code is provided.
+.TP
+.B ::errorInfo
+Human-readable error stack trace.
+Built up during error propagation.
+.TP
+.B ::tcl_platform(engine)
+Engine identifier:
+.BR TH8 .
+.TP
+.B ::tcl_platform(patchLevel)
+Patch level version string (e.g., \fB1.0.0\fR).  Read from the
+.B VERSION
+file at build time.  Also returned by
+.BR "info patchlevel" .
+The format conforms to
+.BR {^\ed+\e.\ed+(?:\e.\ed){0,2}(?:-[0-9A-Za-z][_0-9A-Za-z])?$} .
+.TP
+.B ::tcl_platform(platform)
+Platform identifier:
+.B windows
+or
+.BR unix .
+.TP
+.B ::tcl_platform(source)
+Three-element list:
+.BR "{source_id source_timestamp source_tags}" .
+Contains the VCS checkout ID (Fossil hash or Git SHA), the
+checkout datetime, and the branch/tag names.
+Set at build time from
+.B "fossil info"
+or
+.BR "git log" .
+.TP
+.B ::tcl_platform(host)
+The hostname of the machine running the process.
+On POSIX, obtained from
+.BR gethostname (2).
+On Windows, obtained from
+.BR GetComputerNameA .
+Empty string if the hostname cannot be determined.
+.TP
+.B ::tcl_platform(user)
+The login name of the user running the process.
+On POSIX, obtained from
+.BR getpwuid (3)
+or the
+.B USER
+environment variable.
+On Windows, obtained from
+.BR GetUserNameA .
+Empty string if the user name cannot be determined.
+.TP
+.B ::tcl_platform(compileOptions)
+A Tcl list of active compile-time options (with the
+.B TH8_
+prefix stripped).
+.TP
+.B ::tcl_precision
+Controls double-to-string significant digits.
+.B 0
+means shortest representation.
+.SH "SECURITY MODEL"
+.SS "Safe by construction"
+TH8 has no built-in command that directly accesses the host
+operating system.  There is no
+.BR open ", " exec ", " socket ", or " file
+command.  ALL external interaction \(em I/O, file access, time,
+process identity, entropy \(em is mediated by
+.B Th8_Platform
+callbacks that the embedder provides.
+.PP
+This means every command is inherently safe: no command can
+escape the interpreter sandbox.  The security boundary is the
+platform callback table, not a command allowlist.
+.PP
+.BR gets " and " puts
+operate on channels identified by a
+.I pChannel
+pointer passed to the I/O callbacks; NULL selects the default
+channel (stdin/stdout/stderr).  Since there is no
+.B open
+command, scripts cannot obtain new channel handles.
+.BR source
+retrieves data through
+.BR xGetData ,
+which the platform controls (allowlist, virtual filesystem, or
+NULL to disable).
+.BR "clock seconds"
+reads the system clock at one-second granularity (insufficient
+for timing attacks); the callback may return a fixed value.
+.SS "Base path and file system confinement"
+The
+.I base path
+is the directory from which TH8 operates.  It is determined
+automatically from the location of the TH8 shared library at
+platform initialization time.  If the shared library resides in
+a directory named
+.B bin
+or
+.BR lib ,
+the parent directory is used as the base path.
+.PP
+The string
+.B \(dq.\(dq
+in all file system operations resolves to the base path.  The
+.B xGetCwd
+callback returns
+.B \(dq.\(dq
+if the actual current directory is the base directory, or a
+relative path of the form
+.B \(dq./subdir\(dq
+if it is underneath the base directory, and returns NULL
+(producing a \(lqpermission denied\(rq error) if the current
+directory is outside the base directory.
+.PP
+The
+.B xSetCwd
+callback accepts only paths that resolve to locations at or
+underneath the base directory.
+.PP
+The
+.B xNormalizePath
+callback returns paths under the base directory in the form
+.B \(dq./relative/path\(dq
+and returns paths outside the base directory verbatim as
+absolute paths.
+.PP
+If any of these callbacks
+.RB ( xGetCwd ", " xSetCwd ", " xNormalizePath )
+is NULL, the corresponding script command returns a
+\(lqpermission denied: access to file system unavailable\(rq
+error.
+.SS "Platform lifecycle callbacks"
+The
+.B Th8_Platform
+structure provides
+.B xInitialize
+and
+.B xFinalize
+callbacks for platform-level resource management.
+.B xInitialize
+is called by
+.B Th8_Initialize
+before any other platform callbacks, allowing the platform to
+set up mutexes, heaps, and other process-global resources.
+.B xFinalize
+is called by
+.B Th8_Finalize
+after all other cleanup, allowing the platform to release those
+resources.  If either callback is NULL, the corresponding step
+is silently skipped.
+.SS "Step counter"
+A per-interpreter counter bounds total work.
+Each command invocation, expression evaluation, pattern match
+iteration, and string search step increments the counter.
+When the configurable limit is exceeded, the interpreter returns
+an error:
+.IR "step limit exceeded" .
+.SS "Result size limit"
+A per-interpreter limit bounds the size of any string being
+constructed.
+When exceeded:
+.IR "result size limit exceeded" .
+.SS "Memory allocation limit"
+A per-interpreter ceiling on total memory allocated through the
+platform.  Prevents untrusted scripts from exhausting host memory
+via large numbers of variables, namespaces, or strings.
+Set via
+.BR Th8_SetAllocLimit() .
+.SS "Integer overflow protection"
+When enabled (default), integer arithmetic in
+.B expr
+and
+.B incr
+returns an error on overflow instead of wrapping silently.
+Disable via
+.B Th8_SetOverflowCheck(interp,\ 0)
+for Tcl 8.x compatible wrapping.
+.SS "Cancellation"
+A running script may be asynchronously cancelled via
+.BR Th8_CancelEval() .
+The check is performed at every work-unit boundary via the
+unified
+.B Th8_Ready()
+function.  With the
+.B TH8_CANCEL_UNWIND
+flag,
+.B catch
+cannot intercept the cancellation error, ensuring it propagates
+to the outermost evaluation caller.
+.SS "Native stack checking"
+If the platform provides stack bounds, TH8 detects impending
+C stack overflow at every recursive entry point.
+.SS "Taint tracking"
+Strings originating from untrusted sources carry a taint bit.
+Tainted strings cannot be evaluated as scripts.
+.SS "Pre-evaluation callback"
+The host may register a callback invoked before every script
+evaluation, which can reject scripts.  The callback receives the
+script text, the script origin name (if known), and the context
+pointer.  The origin name (zName/nName) is supplied by the
+evaluation functions
+.RB ( Th8_Eval ", " Th8_EvalDownlevel ", " Th8_Expr ", " Th8_NREval )
+and is typically the file name from which the script was loaded.
+If the callback returns anything other than
+.BR TH8_OK ,
+evaluation is aborted with that return code.
+.SS "Platform threading and diagnostic callbacks"
+.TP
+\fBxIntCmpXchg\fR(\fIpTarget\fR, \fIiExchange\fR, \fIiComparand\fR)
+Atomic integer compare-and-exchange.  Atomically compares
+\fI*pTarget\fR with \fIiComparand\fR; if equal, stores
+\fIiExchange\fR.  Returns the original value.
+On Windows, maps to \fBInterlockedCompareExchange\fR.
+On POSIX, maps to \fB__sync_val_compare_and_swap\fR.
+.TP
+\fBxMemBarrier\fR()
+Full memory barrier.  Ensures all prior writes are visible
+to other threads.  On Windows, maps to \fBMemoryBarrier()\fR.
+On POSIX, maps to \fB__sync_synchronize()\fR.
+.TP
+\fBxEmitTrace\fR(\fIzMsg\fR, \fIpCtx\fR)
+Emit a diagnostic trace message.  Used to report platform
+errors such as initialization failures.  On Windows, calls
+\fBOutputDebugStringA\fR.  On POSIX, calls \fBsyslog()\fR.
+.SH "C API REFERENCE"
+The complete C programming interface is documented in
+.BR th8_api (3).
+.SH "SCRIPT ANNOTATIONS"
+Scripts may contain annotations in Tcl comments that control
+when and how the script may be executed:
+.TP
+.B "# <<notBefore:YYYY_MM_DDThh_mm_ssZ>>"
+Earliest valid execution time.  The timestamp uses strict
+ISO-8601 format with underscore delimiters (Eagle compatibility).
+.TP
+.B "# <<notAfter:YYYY_MM_DDThh_mm_ssZ>>"
+Latest valid execution time.
+.TP
+.B "# <<flags:attributeFlags>>"
+Attribute flags (no spaces; complex flag strings are permitted).
+.PP
+Annotations are extracted from all scripts when the policy
+callbacks are installed.  The parsed values populate the
+.B ::th8_security(notBefore)
+,
+.B ::th8_security(notAfter)
+, and
+.B ::th8_security(flags)
+array elements.
+Enforcement (rejection of expired or not-yet-valid scripts)
+occurs only when the signed-only policy is enabled.
+Timestamps are validated with strict ISO-8601 rules including
+leap year bounds.
+.SH "SCRIPT SIGNATURE VERIFICATION"
+Script signature verification and RSA key management are documented in
+.BR th8_api (3).
+.SH "EMBEDDED PUBLIC KEYS"
+Embedded public key management is documented in
+.BR th8_api (3).
+.SH "COMPARISON WITH OTHER IMPLEMENTATIONS"
+.SS "TH8 vs TH1"
+TH1 is the minimal Tcl interpreter embedded in Fossil.
+TH8 is a ground-up redesign sharing no code with TH1.
+TH1 has a flat command set with no namespaces, packages, or
+expressions beyond basic integer arithmetic.
+TH8 provides the full Tcl 8.4 expression evaluator (28 math
+functions, all operators, ternary), namespaces with qualified
+name resolution, the package system, NRE (non-recursive engine),
+and a platform abstraction layer.
+TH1 has no security hardening; TH8 has overflow-checked
+arithmetic, SipHash, step/memory limits, and safe-by-construction
+command set.
+.SS "TH8 vs Tcl (native)"
+Native Tcl (8.x/9.x) is a full-featured language with bytecode
+compilation, event loops, channel I/O, socket networking, regular
+expression extensions, and a large standard library.
+TH8 implements the Tcl 8.4 core language (lexical rules,
+substitution, expressions, procedures, namespaces, packages) but
+intentionally omits features that create host dependencies:
+.BR open ", " exec ", " socket ", " file ", " encoding ", "
+.BR interp " (multi-interp), " chan ", and event loops."
+This makes TH8 suitable for embedding in security-critical
+environments where native Tcl's host access would be a liability.
+TH8's platform abstraction has no equivalent in native Tcl,
+which calls the C runtime and OS APIs directly.
+.SS "TH8 vs Eagle"
+Eagle is a managed (CLR/.NET) implementation of the Tcl language
+with extensions for .NET interop, COM automation, and Windows
+integration.  Eagle provides a compatible command set with
+additional features like the
+.B nproc
+(named parameters) and
+.B downlevel
+commands, which TH8 also implements.
+TH8 and Eagle share design philosophy (security-first, platform
+abstraction) but differ in implementation: Eagle runs on the CLR,
+TH8 is portable C99.  Both are intended to be conforming
+implementations of the Tcl Language Standard.
+.SS "TH8 vs Jim Tcl"
+Jim Tcl is a small Tcl interpreter focused on embedded use.
+Like TH8, it is written in C and targets resource-constrained
+environments.  Jim implements a subset of Tcl 8.5+ including
+.B {*}
+expansion and some features TH8 omits (event loop, I/O channels,
+.BR dict ).
+TH8 differs by using Tcl 8.4 syntax (no
+.BR {*} ),
+providing a full platform abstraction layer (Jim calls the CRT
+directly), NRE-based non-recursive evaluation, and comprehensive
+security hardening (overflow checking, SipHash, memory limits).
+Jim has no equivalent to TH8's safe-by-construction command model.
+.SS "TH8 vs Picol"
+Picol is a tiny (~500 line) Tcl interpreter by Salvatore
+Sanfilippo (antirez).  It demonstrates that a working Tcl core
+can be extremely small.
+TH8 is significantly more complete: full expression evaluator,
+namespaces, packages, NRE, regexp, security hardening, and a
+platform abstraction layer.  Picol is a teaching tool; TH8 is
+production-grade.
+.SS "TH8 vs Jacl"
+Jacl (Java Command Language) is a Java implementation of Tcl.
+It provides Tcl semantics on the JVM, similar to how Eagle
+provides them on the CLR.
+TH8 targets bare-metal and embedded environments where a JVM
+is unavailable.  Jacl has no platform abstraction; it relies
+on Java's standard library for all I/O.  TH8's C99 implementation
+with zero CRT dependencies makes it suitable for UEFI, kernel,
+and IoT use cases that Jacl cannot serve.
+.SH "OPTIONAL DEPENDENCIES"
+.SS "DNSSEC validation (libunbound)"
+When built with
+.B TH8_ENABLE_UNBOUND
+(the default on systems where libunbound is available),
+TH8 uses libunbound for DNSSEC validation of DNS queries
+made by
+.B "[clock ntp]"
+and the libcurl data-retrieval layer.
+.PP
+On macOS with Homebrew:
+.RS
+.nf
+brew install unbound
+sudo /opt/homebrew/sbin/unbound\-anchor \\
+    \-a /opt/homebrew/etc/unbound/root.key
+sudo mkdir \-p /etc/unbound
+sudo ln \-s /opt/homebrew/etc/unbound/root.key \\
+    /etc/unbound/root.key
+.fi
+.RE
+.PP
+The symlink is required because libunbound's validator module
+looks for the IANA root trust anchor at
+.B /etc/unbound/root.key
+regardless of Homebrew's install prefix.
+Without it, harmless but noisy diagnostic messages are emitted
+to stderr on every DNS resolution.
+.PP
+On Debian/Ubuntu:
+.B "apt install libunbound\-dev"
+(root.key is installed automatically).
+On FreeBSD:
+.BR "pkg install unbound" .
+.SH "SEE ALSO"
+.BR th8_re_syntax (1)
+\(em regular expression syntax reference.
+.PP
+Tcl(n), Tcl Language Standard
+.SH "AUTHOR"
+Joe Mistachkin
+.SH "COPYRIGHT"
+Copyright \(co 2026 Joe Mistachkin.  All rights reserved.

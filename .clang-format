@@ -1,0 +1,230 @@
+---
+# TH8 / Tcl Engineering Manual (TEM) C coding style.
+#
+# This file codifies the project's existing C source style so it can
+# be applied automatically with `clang-format`.  The companion driver
+# is `tools/format_code.tcl`.
+#
+# Customising the style:
+#     Edit this file -- every option is documented inline.  Re-run
+#     `tools/format_code.tcl --check` to see what would change before
+#     committing the new ruleset.
+#
+# Preservation guarantees:
+#     The defaults below are deliberately conservative about touching
+#     comments, includes, and string literals so that hand-tuned layout
+#     is preserved verbatim:
+#       * Block and inline comment text is NOT reflowed.
+#       * Trailing-comment column alignment is NOT changed.
+#       * Include order (the deliberate meta-header sequence) is kept.
+#       * String literals are not split across lines.
+#
+# Copyright (c) 2026 by Joe Mistachkin.  All rights reserved.
+
+Language:        Cpp
+Standard:        c++03
+DisableFormat:   false
+
+#
+# ---- Indentation ----------------------------------------------------
+#
+# IndentWidth=4 with TabWidth=8 and UseTab=Always produces the TEM
+# layout where the first level of indent is four spaces, the second
+# level is one tab (replacing eight spaces), the third level is one
+# tab plus four spaces, and so on.
+#
+IndentWidth:                  4
+TabWidth:                     8
+UseTab:                       ForIndentation
+ContinuationIndentWidth:      4
+ConstructorInitializerIndentWidth: 4
+IndentCaseLabels:             false
+IndentGotoLabels:             false
+# `AfterHash` keeps `#` at column 1 but indents nested directives
+# (e.g. `#  include` inside `#if`) by `PPIndentWidth` characters --
+# matches the existing project layout.
+IndentPPDirectives:           AfterHash
+PPIndentWidth:                2
+NamespaceIndentation:         None
+AccessModifierOffset:         -4
+
+#
+# ---- Function definition layout ------------------------------------
+#
+# TEM places the return type on its own line and the opening brace
+# of a function on its own line (Allman for definitions).  Control-
+# statement braces stay attached -- this is the Linux-kernel hybrid.
+#
+AlwaysBreakAfterReturnType:   AllDefinitions
+BreakBeforeBraces:            Linux
+BreakConstructorInitializers: BeforeColon
+BreakInheritanceList:         BeforeColon
+
+#
+# ---- Width ----------------------------------------------------------
+#
+# Existing code stays under 78 columns including tab expansion.  Set
+# the limit slightly higher so re-flow does not shorten existing lines.
+#
+ColumnLimit:                  78
+
+#
+# ---- Break penalties (controls how aggressively lines wrap) --------
+#
+# clang-format computes the "cost" of every candidate layout and
+# picks the cheapest.  Higher penalties make a given break MORE
+# expensive, so the formatter avoids it -- which means longer lines
+# stay together.  These values are tuned so lines comfortably under
+# the column limit are left alone; only lines that genuinely
+# overflow get wrapped.
+#
+# Tune ONLY these numbers if you want to change wrapping aggressiveness.
+# Lower them to wrap more eagerly; raise them to keep more on one line.
+#
+PenaltyBreakAssignment:           300
+PenaltyBreakBeforeFirstCallParameter: 400
+PenaltyBreakComment:              500
+PenaltyBreakFirstLessLess:        120
+PenaltyBreakOpenParenthesis:      400
+PenaltyBreakString:              1000
+PenaltyBreakTemplateDeclaration:   10
+PenaltyExcessCharacter:       1000000
+PenaltyIndentedWhitespace:          0
+PenaltyReturnTypeOnItsOwnLine:     10
+
+#
+# ---- Pointer / qualifier alignment ---------------------------------
+#
+# Style: `int *p`, `const char *zPath` -- right-aligned to the
+# identifier (BSD/Tcl convention).
+#
+PointerAlignment:             Right
+DerivePointerAlignment:       false
+QualifierAlignment:           Leave
+ReferenceAlignment:           Right
+
+#
+# ---- Spacing --------------------------------------------------------
+#
+SpaceBeforeParens:            ControlStatements
+SpaceAfterCStyleCast:         false
+SpaceAfterLogicalNot:         false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCaseColon:         false
+SpaceBeforeRangeBasedForLoopColon: true
+SpaceBeforeSquareBrackets:    false
+SpaceInEmptyBlock:            false
+SpaceInEmptyParentheses:      false
+SpacesInAngles:               Never
+SpacesInCStyleCastParentheses: false
+SpacesInConditionalStatement: false
+SpacesInContainerLiterals:    false
+SpacesInParentheses:          false
+SpacesInSquareBrackets:       false
+SpacesBeforeTrailingComments: 1
+Cpp11BracedListStyle:         true
+
+#
+# ---- Argument / parameter packing ----------------------------------
+#
+# Mirrors Eagle's C# preferences (Library/Components/Shared/...).
+#
+#   Function CALLS   -- pack arguments across continuation lines.
+#                       Short calls stay inline; long calls flow.
+#   Function DECLS   -- when wrapping is needed, ONE parameter per
+#                       line.  Short declarations still fit on a
+#                       single line; only over-long ones break.
+#
+# This combination preserves Eagle's "all-or-nothing" declaration
+# layout while letting call sites wrap pragmatically.
+#
+BinPackArguments:             true
+BinPackParameters:            false
+AllowAllArgumentsOnNextLine:  true
+AllowAllParametersOfDeclarationOnNextLine: false
+ExperimentalAutoDetectBinPacking: false
+
+#
+# ---- Single-line statements ----------------------------------------
+#
+# Permit `if (cond) return rc;` (no else branch) since the codebase
+# uses this idiom.  Reject everything else so blocks remain
+# debuggable.
+#
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLambdasOnASingleLine: None
+AllowShortLoopsOnASingleLine: false
+
+#
+# ---- Comment preservation (USER-VISIBLE: do not change lightly) ----
+#
+# `ReflowComments: Never` keeps comment text byte-for-byte.
+# `AlignTrailingComments` with Kind=Leave preserves the column at
+# which trailing comments were written (no auto-realignment).
+#
+ReflowComments:               Never
+AlignTrailingComments:
+  Kind:                       Leave
+  OverEmptyLines:             0
+
+#
+# ---- Includes -------------------------------------------------------
+#
+# The codebase deliberately orders meta-headers (libc, msvc, win32,
+# posix, macos) by platform layering rules.  Do NOT sort.
+#
+SortIncludes:                 Never
+IncludeBlocks:                Preserve
+
+#
+# ---- Strings --------------------------------------------------------
+#
+BreakStringLiterals:          false
+
+#
+# ---- Macros that look like control statements ---------------------
+#
+# Add project-specific macros here so clang-format treats them as
+# `for`/`while` (e.g. inserts space, doesn't merge body).
+#
+ForEachMacros:
+  - foreach
+  - TH8_FOREACH
+
+#
+# ---- Other ----------------------------------------------------------
+#
+# AlwaysBreak: when a function declaration / call doesn't fit on
+# one line, break right after `(` and put the first parameter on a
+# new line indented one continuation level.  Mirrors the Eagle C#
+# style.  Short calls / declarations that DO fit on one line are
+# unaffected.
+#
+AlignAfterOpenBracket:        AlwaysBreak
+AlignArrayOfStructures:       None
+AlignConsecutiveAssignments:  None
+AlignConsecutiveBitFields:    None
+AlignConsecutiveDeclarations: None
+# Keep aligned columns inside thematic macro groups (the project
+# hand-aligns related #defines).  clang-format will pad each group
+# to the longest name; if you don't want any padding, change to
+# None and the formatter will collapse to a single space.
+AlignConsecutiveMacros:       Consecutive
+AlignEscapedNewlines:         Right
+AlignOperands:                AlignAfterOperator
+AllowAllConstructorInitializersOnNextLine: true
+BreakBeforeBinaryOperators:   None
+BreakBeforeTernaryOperators:  true
+CompactNamespaces:            false
+EmptyLineBeforeAccessModifier: LogicalBlock
+FixNamespaceComments:         false
+KeepEmptyLinesAtTheStartOfBlocks: true
+MaxEmptyLinesToKeep:          2
+SeparateDefinitionBlocks:     Leave
+ShortNamespaceLines:          1
+SortUsingDeclarations:        false
+...

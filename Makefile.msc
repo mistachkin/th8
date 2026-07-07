@@ -1,0 +1,1298 @@
+#
+# Makefile.msc -- MSVC build system for the TH8 interpreter.
+#
+# Usage (from a Visual Studio Developer Command Prompt):
+#   nmake /f Makefile.msc                  Build dll + shell.
+#   nmake /f Makefile.msc all              Build everything possible.
+#   nmake /f Makefile.msc shell            Build th8sh.exe only.
+#   nmake /f Makefile.msc dll              Build th8.dll.
+#   nmake /f Makefile.msc clean            Remove all build artifacts.
+#   nmake /f Makefile.msc th8test          Run test suite in TH8.
+#   nmake /f Makefile.msc tcltest          Run test suite in Tcl.
+#   nmake /f Makefile.msc eagletest        Run test suite in Eagle.
+#   nmake /f Makefile.msc stubs            Build th8stub.lib.
+#   nmake /f Makefile.msc testlib          Build test libraries.
+#   nmake /f Makefile.msc bridge           Build TH8 <-> Tcl bridge DLLs.
+#   nmake /f Makefile.msc zlib             Build the zlib static libaries.
+#   nmake /f Makefile.msc curl             Build the curl static libaries.
+#   nmake /f Makefile.msc openssl          Build the OpenSSL DLLs.
+#   nmake /f Makefile.msc ENABLE_REGEXP=0  Exclude regexp support.
+#   nmake /f Makefile.msc DEBUG=1          Debug build.
+#
+# All build artifacts are placed in the bin\ sub-directory.
+# All source files are in the src\ sub-directory.
+#
+# Copyright (c) 2026 by Joe Mistachkin.  All rights reserved.
+#
+# See the file "license.terms" for information on usage and redistribution of
+# this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+#
+# Source and build output directories.
+#
+
+S = src
+B = bin
+
+#
+# Toolchain.
+#
+
+CC       = cl.exe
+LD       = link.exe
+LIB_CMD  = lib.exe
+
+#
+# Optional features.
+#
+
+!IFNDEF ENABLE_REGEXP
+ENABLE_REGEXP = 1
+!ENDIF
+
+!IFNDEF ENABLE_LIBCURL
+ENABLE_LIBCURL = 1
+!ENDIF
+
+!IFNDEF ENABLE_BIGINT
+ENABLE_BIGINT = 1
+!ENDIF
+
+!IFNDEF ENABLE_CRYPTOGRAPHY
+ENABLE_CRYPTOGRAPHY = 1
+!ENDIF
+
+!IFNDEF ENABLE_MIMALLOC
+ENABLE_MIMALLOC = 1
+!ENDIF
+
+!IFNDEF ENABLE_EXPRESSIONS
+ENABLE_EXPRESSIONS = 1
+!ENDIF
+
+!IFNDEF ENABLE_LOAD
+ENABLE_LOAD = 1
+!ENDIF
+
+!IFNDEF ENABLE_TEST_KEY
+ENABLE_TEST_KEY = 0
+!ENDIF
+
+!IFNDEF ENABLE_VARIABLES
+ENABLE_VARIABLES = 1
+!ENDIF
+
+!IFNDEF DEBUG
+DEBUG = 1
+!ENDIF
+
+#
+# Plugin compile-time gates.  Each can be excluded by setting
+# the variable to 0 on the nmake command line, e.g.:
+#   nmake /f Makefile.msc PLUGIN_LOOPING=0
+#
+
+!IFNDEF PLUGIN_CONTROL
+PLUGIN_CONTROL = 1
+!ENDIF
+!IFNDEF PLUGIN_EVENTS
+PLUGIN_EVENTS = 1
+!ENDIF
+!IFNDEF PLUGIN_EXPRESSIONS
+PLUGIN_EXPRESSIONS = 1
+!ENDIF
+!IFNDEF PLUGIN_EXTENSIBILITY
+PLUGIN_EXTENSIBILITY = 1
+!ENDIF
+!IFNDEF PLUGIN_FILE_SYSTEMS
+PLUGIN_FILE_SYSTEMS = 1
+!ENDIF
+!IFNDEF PLUGIN_FORMATTING
+PLUGIN_FORMATTING = 1
+!ENDIF
+!IFNDEF PLUGIN_INTROSPECTION
+PLUGIN_INTROSPECTION = 1
+!ENDIF
+!IFNDEF PLUGIN_IO
+PLUGIN_IO = 1
+!ENDIF
+!IFNDEF PLUGIN_LISTS
+PLUGIN_LISTS = 1
+!ENDIF
+!IFNDEF PLUGIN_LOOPING
+PLUGIN_LOOPING = 1
+!ENDIF
+!IFNDEF PLUGIN_MANAGEMENT
+PLUGIN_MANAGEMENT = 1
+!ENDIF
+!IFNDEF PLUGIN_PROCEDURES
+PLUGIN_PROCEDURES = 1
+!ENDIF
+!IFNDEF PLUGIN_STRINGS
+PLUGIN_STRINGS = 1
+!ENDIF
+!IFNDEF PLUGIN_TIMEKEEPING
+PLUGIN_TIMEKEEPING = 1
+!ENDIF
+!IFNDEF PLUGIN_VARIABLES
+PLUGIN_VARIABLES = 1
+!ENDIF
+
+#
+# Feature dependency cascade.
+#
+!IF !$(ENABLE_EXPRESSIONS)
+PLUGIN_CONTROL = 0
+PLUGIN_EXPRESSIONS = 0
+PLUGIN_FORMATTING = 0
+PLUGIN_LOOPING = 0
+!ENDIF
+
+!IF !$(ENABLE_LOAD)
+PLUGIN_EXTENSIBILITY = 0
+!ENDIF
+
+!IF !$(ENABLE_VARIABLES)
+PLUGIN_VARIABLES = 0
+!ENDIF
+
+#
+# Compiler flags.
+#
+
+UTF_DIR  = externals\utf
+ZLIB_DIR = externals\zlib
+CURL_DIR = externals\curl
+
+!IF "$(PLATFORM)" == "x86" || "$(PROCESSOR_ARCHITECTURE)" == "x86"
+ZLIB_LIB_DIR = $(ZLIB_DIR)\lib\x86
+!ELSE
+ZLIB_LIB_DIR = $(ZLIB_DIR)\lib\x64
+!ENDIF
+
+#
+# PLATFORM_DEPS: CRT linkage fixups for the static amalgamation shell.
+# DLL_NODEFAULTLIB: suppress the static CRT when linking DLLs built with /MD.
+#
+# With /MD (dynamic CRT), the linker imports msvcrt.lib automatically.
+# We suppress libcmt.lib (static CRT) to avoid the LNK4098 conflict.
+# In debug mode (/MDd), we must also suppress libcmtd.lib.
+#
+!IF $(DEBUG)
+DLL_NODEFAULTLIB = /NODEFAULTLIB:libcmt.lib /NODEFAULTLIB:libcmtd.lib /NODEFAULTLIB:msvcrt.lib
+PLATFORM_DEPS = /NODEFAULTLIB:libcmt.lib /NODEFAULTLIB:libcmtd.lib /NODEFAULTLIB:msvcrt.lib
+!ELSE
+DLL_NODEFAULTLIB = /NODEFAULTLIB:libcmt.lib /NODEFAULTLIB:libcmtd.lib /NODEFAULTLIB:msvcrtd.lib
+PLATFORM_DEPS = /NODEFAULTLIB:libcmt.lib /NODEFAULTLIB:libcmtd.lib /NODEFAULTLIB:msvcrtd.lib
+!ENDIF
+
+CFLAGS_BASE = /nologo /W4 /WX- /wd4100 /wd4127 /wd4146 /wd4200 /wd4201 /wd4204 /wd4702 /wd4706 /I$(S) /I$(B) /I$(SPILORNIS_DIR) /I$(UTF_DIR) $(BIGINT_INCLUDES) $(CRYPTOGRAPHY_INCLUDES) $(UNBOUND_INCLUDES) $(MIMALLOC_INCLUDES)
+CFLAGS_BASE = $(CFLAGS_BASE) /D_CRT_SECURE_NO_DEPRECATE=1 /D_CRT_SECURE_NO_WARNINGS=1
+CFLAGS_BASE = $(CFLAGS_BASE) /D_CRT_NONSTDC_NO_DEPRECATE=1 /D_CRT_NONSTDC_NO_WARNINGS=1
+
+!IF "$(PLATFORM)" == "x86" || "$(PROCESSOR_ARCHITECTURE)" == "x86"
+CURL_LIB_DIR = $(CURL_DIR)\lib\x86
+!ELSE
+CURL_LIB_DIR = $(CURL_DIR)\lib\x64
+!ENDIF
+
+!IF $(ENABLE_LIBCURL)
+CURL_DEFS = /DTH8_ENABLE_LIBCURL /DCURL_STATICLIB /I$(CURL_DIR)\src\include
+CURL_OBJ  = $(B)\th8_curl.obj
+CURL_LIBS = $(ZLIB_LIB_DIR)\zlib.lib $(CURL_LIB_DIR)\libcurl_a.lib user32.lib ws2_32.lib crypt32.lib normaliz.lib advapi32.lib secur32.lib wldap32.lib Iphlpapi.lib
+!ELSE
+CURL_DEFS =
+CURL_OBJ  =
+CURL_LIBS =
+!ENDIF
+
+!IF $(ENABLE_REGEXP)
+REGEXP_DEFS = /DTH8_ENABLE_REGEXP
+!ELSE
+REGEXP_DEFS =
+!ENDIF
+
+TOMMATH_BUILD = externals\tommath\build
+
+!IF $(ENABLE_BIGINT)
+BIGINT_DEFS     = /DTH8_ENABLE_BIGINT
+BIGINT_INCLUDES = /I$(TOMMATH_BUILD)
+BIGINT_OBJ      = $(B)\th8_bigint.obj $(B)\tommath_amalg.obj
+!ELSE
+BIGINT_DEFS     =
+BIGINT_INCLUDES =
+BIGINT_OBJ      =
+!ENDIF
+
+HARPY_PLUGIN_DIR = $(S)\plugins\harpy
+CRYPTOGRAPHY_PLUGIN_DIR = $(S)\plugins\crypto
+
+!IFNDEF OPENSSL_DIR
+OPENSSL_DIR = externals\openssl
+!ENDIF
+
+!IF $(ENABLE_CRYPTOGRAPHY)
+CRYPTOGRAPHY_DEFS     = /DTH8_ENABLE_CRYPTOGRAPHY
+CRYPTOGRAPHY_INCLUDES = /I$(OPENSSL_DIR)\include
+CRYPTOGRAPHY_OBJ      = $(B)\th8_snk.obj $(B)\th8_harpy.obj $(B)\th8_policy.obj $(B)\th8_keyRoot.obj $(B)\th8_keyTime.obj $(B)\th8_key0.obj $(B)\th8_keyTest.obj $(B)\th8_keyring_stub.obj $(B)\th8_secure.obj $(B)\th8_time.obj
+!IF "$(PLATFORM)" == "x86" || "$(PROCESSOR_ARCHITECTURE)" == "x86"
+CRYPTOGRAPHY_LIBS     = $(OPENSSL_DIR)\lib\x86\libcrypto.lib $(OPENSSL_DIR)\lib\x86\libssl.lib
+!ELSE
+CRYPTOGRAPHY_LIBS     = $(OPENSSL_DIR)\lib\x64\libcrypto.lib $(OPENSSL_DIR)\lib\x64\libssl.lib
+!ENDIF
+!ELSE
+CRYPTOGRAPHY_DEFS     =
+CRYPTOGRAPHY_INCLUDES =
+CRYPTOGRAPHY_OBJ      =
+CRYPTOGRAPHY_LIBS     =
+!ENDIF
+
+#
+# mimalloc high-performance allocator (optional).
+#
+
+!IFNDEF MIMALLOC_DIR
+MIMALLOC_DIR = externals\mimalloc
+!ENDIF
+
+!IF $(ENABLE_MIMALLOC)
+MIMALLOC_DEFS       = /DTH8_USE_MIMALLOC
+MIMALLOC_INCLUDES   = /I$(MIMALLOC_DIR)\include
+MIMALLOC_PLAT_OBJ   = $(B)\th8_mimalloc.obj
+MIMALLOC_STATIC_OBJ = $(B)\mimalloc_static.obj
+!ELSE
+MIMALLOC_DEFS       =
+MIMALLOC_INCLUDES   =
+MIMALLOC_PLAT_OBJ   =
+MIMALLOC_STATIC_OBJ =
+!ENDIF
+
+#
+# libunbound for DNSSEC-validated DNS resolution (optional).
+#
+
+!IFNDEF ENABLE_UNBOUND
+ENABLE_UNBOUND = 0
+!ENDIF
+
+!IFNDEF UNBOUND_DIR
+UNBOUND_DIR = externals\unbound
+!ENDIF
+
+!IF $(ENABLE_UNBOUND)
+UNBOUND_DEFS     = /DTH8_ENABLE_UNBOUND
+UNBOUND_INCLUDES = /I$(UNBOUND_DIR)\include
+UNBOUND_LIBS     = $(UNBOUND_DIR)\lib\unbound.lib
+UNBOUND_OBJ      = $(B)\th8_unbound.obj
+!ELSE
+UNBOUND_DEFS     =
+UNBOUND_INCLUDES =
+UNBOUND_LIBS     =
+UNBOUND_OBJ      =
+!ENDIF
+
+#
+# FEATURE_DEFS: all compile-time feature flags.  Used by CFLAGS_DLL,
+# CFLAGS_APP, and standalone compilation (e.g. stubs, shell) so that
+# conditional types (Th8_RsaKey, etc.) resolve correctly everywhere.
+#
+#
+# Feature and plugin defines.
+#
+
+!IF $(ENABLE_EXPRESSIONS)
+EXPR_DEFS = /DTH8_ENABLE_EXPRESSIONS
+!ELSE
+EXPR_DEFS =
+!ENDIF
+
+!IF $(ENABLE_LOAD)
+LOAD_DEFS = /DTH8_ENABLE_LOAD
+!ELSE
+LOAD_DEFS =
+!ENDIF
+
+!IF $(ENABLE_VARIABLES)
+VARIABLES_DEFS = /DTH8_ENABLE_VARIABLES
+!ELSE
+VARIABLES_DEFS =
+!ENDIF
+
+!IF $(ENABLE_TEST_KEY)
+TEST_DEFS = /DTH8_ENABLE_TEST_KEY
+!ELSE
+TEST_DEFS =
+!ENDIF
+
+!IFNDEF ENABLE_FAULT_INJECTION
+ENABLE_FAULT_INJECTION = 1
+!ENDIF
+
+!IF $(ENABLE_FAULT_INJECTION)
+FAULT_DEFS = /DTH8_ENABLE_FAULT_INJECTION
+!ELSE
+FAULT_DEFS =
+!ENDIF
+
+PLUGIN_DEFS =
+!IF $(PLUGIN_CONTROL)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_CONTROL
+!ENDIF
+!IF $(PLUGIN_EVENTS)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_EVENTS
+!ENDIF
+!IF $(PLUGIN_EXPRESSIONS)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_EXPRESSIONS
+!ENDIF
+!IF $(PLUGIN_EXTENSIBILITY)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_EXTENSIBILITY
+!ENDIF
+!IF $(PLUGIN_FILE_SYSTEMS)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_FILE_SYSTEMS
+!ENDIF
+!IF $(PLUGIN_FORMATTING)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_FORMATTING
+!ENDIF
+!IF $(PLUGIN_INTROSPECTION)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_INTROSPECTION
+!ENDIF
+!IF $(PLUGIN_IO)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_IO
+!ENDIF
+!IF $(PLUGIN_LISTS)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_LISTS
+!ENDIF
+!IF $(PLUGIN_LOOPING)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_LOOPING
+!ENDIF
+!IF $(PLUGIN_MANAGEMENT)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_MANAGEMENT
+!ENDIF
+!IF $(PLUGIN_PROCEDURES)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_PROCEDURES
+!ENDIF
+!IF $(PLUGIN_STRINGS)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_STRINGS
+!ENDIF
+!IF $(PLUGIN_TIMEKEEPING)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_TIMEKEEPING
+!ENDIF
+!IF $(PLUGIN_VARIABLES)
+PLUGIN_DEFS = $(PLUGIN_DEFS) /DTH8_PLUGIN_VARIABLES
+!ENDIF
+
+FEATURE_DEFS = $(REGEXP_DEFS) $(CURL_DEFS) $(BIGINT_DEFS) $(CRYPTOGRAPHY_DEFS) $(UNBOUND_DEFS) $(MIMALLOC_DEFS) $(EXPR_DEFS) $(LOAD_DEFS) $(VARIABLES_DEFS) $(PLUGIN_DEFS) $(TEST_DEFS) $(FAULT_DEFS)
+
+!IF $(DEBUG)
+#
+# CFLAGS_DLL: for objects compiled into the DLL (dllexport).
+# CFLAGS_APP: for objects linked against the DLL (dllimport).
+#
+CFLAGS_DLL = $(CFLAGS_BASE) $(FEATURE_DEFS) /DTH8_BUILD_DLL /Od /Zi /Fd$(B)\ /MDd /DTH8_BENCHMARKING /DTH8_DEBUG
+CFLAGS_APP = $(CFLAGS_BASE) $(FEATURE_DEFS) /Od /Zi /Fd$(B)\ /MDd /DTH8_BENCHMARKING /DTH8_DEBUG
+LDFLAGS = /nologo /DEBUG
+!ELSE
+CFLAGS_DLL = $(CFLAGS_BASE) $(FEATURE_DEFS) /DTH8_BUILD_DLL /O2 /MD /DTH8_BENCHMARKING /DNDEBUG
+CFLAGS_APP = $(CFLAGS_BASE) $(FEATURE_DEFS) /O2 /MD /DTH8_BENCHMARKING /DNDEBUG
+LDFLAGS = /nologo
+!ENDIF
+
+#
+# Default CFLAGS is DLL mode (used by CORE_OBJ compile rules).
+#
+CFLAGS = $(CFLAGS_DLL)
+
+#
+# External source locations.
+#
+
+SPILORNIS_DIR = externals\spilornis
+SPILORNIS_SRC = $(SPILORNIS_DIR)\Spilornis.c
+REGEX_BUILD   = externals\regex\build
+SQLITE3_DIR   = externals\sqlite3
+
+#
+# Source files.
+#
+
+CORE_HDR = $(S)\th8.h $(S)\th8_plat.h $(S)\th8_hash.h $(S)\th8_util.h $(S)\th8_spilornis.h
+
+#
+# Spencer regex engine objects (only when ENABLE_REGEXP=1).
+#
+
+REGEX_CFLAGS = /wd4018 /wd4244 /wd4267 /wd4389 \
+               /wd4505 /wd4701 /wd4702 \
+               /I$(S)\plugins\regexp /I$(REGEX_BUILD)
+
+!IF $(ENABLE_REGEXP)
+REGEX_OBJ = $(B)\regex_regcomp.obj $(B)\regex_regexec.obj \
+            $(B)\regex_regfree.obj $(B)\regex_regprefix.obj \
+            $(B)\regex_regerror.obj
+!ELSE
+REGEX_OBJ =
+!ENDIF
+
+#
+# Spilornis flags (suppress warnings from external code).
+#
+
+SPILORNIS_CFLAGS = /wd4100 /wd4189 /wd4204 /wd4505 \
+                   /wd4706 /wd4996
+
+#
+# Object files.
+#
+
+CORE_OBJ = $(B)\th8_core.obj $(B)\th8_channel.obj $(B)\th8_protect.obj \
+           $(B)\th8_plat.obj $(B)\th8_hash.obj \
+           $(B)\th8_util.obj $(B)\th8_base64.obj $(B)\th8_expr.obj \
+           $(B)\th8_load.obj $(B)\th8_vars.obj \
+           $(B)\th8_glob.obj $(B)\th8_math.obj \
+           $(B)\th8_cache.obj \
+           $(B)\th8_attrflags.obj $(B)\th8_plugin.obj \
+           $(B)\th8_control.obj $(B)\th8_events.obj \
+           $(B)\th8_expressions.obj $(B)\th8_extensibility.obj \
+           $(B)\th8_filesystems.obj \
+           $(B)\th8_formatting.obj \
+           $(B)\th8_introspection.obj \
+           $(B)\th8_io.obj $(B)\th8_lists.obj $(B)\th8_looping.obj \
+           $(B)\th8_management.obj $(B)\th8_procedures.obj \
+           $(B)\th8_strings.obj \
+           $(B)\th8_timekeeping.obj $(B)\th8_variables.obj \
+           $(B)\th8_harpy_cmds.obj $(B)\th8_crypto_cmds.obj \
+           $(B)\th8_lang.obj $(B)\th8_xlib.obj $(B)\th8_fault.obj \
+           $(B)\th8_env.obj $(B)\th8_mem.obj \
+           $(B)\th8_regex.obj \
+           $(B)\th8_nullio.obj $(B)\th8_win32.obj $(B)\th8_libc.obj \
+           $(B)\th8_ctime.obj $(CURL_OBJ) $(BIGINT_OBJ) $(CRYPTOGRAPHY_OBJ) \
+           $(MIMALLOC_PLAT_OBJ) $(MIMALLOC_STATIC_OBJ) $(UNBOUND_OBJ) \
+           $(B)\th8_spilornis.obj $(B)\spilornis.obj \
+           $(B)\th8StubInit.obj $(B)\th8InternalStubInit.obj \
+           $(B)\th8StubLib.obj \
+           $(B)\ConvertUTF_v2.obj $(REGEX_OBJ)
+
+STUBS_OBJ = $(B)\th8StubInit_standalone.obj $(B)\th8StubLib_standalone.obj
+
+#
+# Output files.
+#
+
+STATIC_LIB  = $(B)\th8s.lib
+STUBS_LIB   = $(B)\th8stub.lib
+DYNAMIC_LIB = $(B)\th8.dll
+IMPORT_LIB  = $(B)\th8.lib
+SHELL_BIN   = $(B)\th8sh.exe
+VERSIONHDR  = $(B)\th8_version_gen.h
+
+#
+# Win32 resource files.  rc/th8.rc is built twice -- once as the DLL
+# variant (th8.res) and once with /DSHELL as the EXE variant
+# (th8sh.res).  Each .res is linked into its respective binary so
+# Explorer's properties dialog (and any tool that reads the Win32
+# VERSIONINFO block) sees the right metadata for the DLL vs the EXE.
+# /I rc lets the resource compiler find th8.ico via the bare file
+# name in the .rc.
+#
+# RC defines (in addition to the standard winresrc.h ones):
+#   /DTH8_OUTPUT_FILE=th8     internal/original-filename token (DLL)
+#   /DTH8_OUTPUT_FILE=th8sh   internal/original-filename token (EXE)
+#   /DSHELL               selects the EXE-specific text fields
+#
+RC          = rc.exe
+RC_RES_DLL  = $(B)\th8.res
+RC_RES_SHL  = $(B)\th8sh.res
+RC_FLAGS    = /nologo /I$(S) /I$(B) /Irc
+
+# ----------------------------------------------------------------
+# Default target.
+# ----------------------------------------------------------------
+
+all: $(STATIC_LIB) $(DYNAMIC_LIB) stubs $(SHELL_BIN) testlib bridge sqlite3-ext audit audit-reqs
+
+# ----------------------------------------------------------------
+# Generated version header.
+# ----------------------------------------------------------------
+
+$(VERSIONHDR):
+	-if not exist "$(B)" mkdir "$(B)"
+	tclsh tools\mkversion.tcl "$(VERSIONHDR)"
+
+# ----------------------------------------------------------------
+# Win32 resource files (version info + TH8 icon).
+#
+# Both variants depend on rc\th8.rc and the auto-generated
+# th8_version_gen.h
+# ----------------------------------------------------------------
+
+$(RC_RES_DLL): rc\th8.rc $(VERSIONHDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(RC) $(RC_FLAGS) /DTH8_OUTPUT_FILE=th8 /Fo$@ rc\th8.rc
+
+$(RC_RES_SHL): rc\th8.rc $(VERSIONHDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(RC) $(RC_FLAGS) /DSHELL /DTH8_OUTPUT_FILE=th8sh /Fo$@ rc\th8.rc
+
+# ----------------------------------------------------------------
+# Static library.
+# ----------------------------------------------------------------
+
+static: $(STATIC_LIB)
+
+$(STATIC_LIB): $(VERSIONHDR) $(CORE_OBJ)
+	$(LIB_CMD) /nologo /OUT:$@ $(CORE_OBJ)
+
+# ----------------------------------------------------------------
+# Dynamic library (DLL).
+#
+# The linker produces both th8.dll and the import library th8.lib.
+# The shell links against the import library so that
+# GetModuleHandle("th8.dll") can locate the DLL at runtime
+# (needed by the platform layer for base-path detection).
+# ----------------------------------------------------------------
+
+dll: $(DYNAMIC_LIB)
+
+$(DYNAMIC_LIB): $(VERSIONHDR) $(CORE_OBJ) $(RC_RES_DLL)
+	$(LD) /DLL $(LDFLAGS) $(DLL_NODEFAULTLIB) /OUT:$@ /IMPLIB:$(IMPORT_LIB) $(CORE_OBJ) $(RC_RES_DLL) $(CURL_LIBS) $(CRYPTOGRAPHY_LIBS) $(UNBOUND_LIBS) user32.lib wintrust.lib crypt32.lib
+	-if not exist "$(B)" mkdir "$(B)"
+!IF "$(PLATFORM)" == "x86" || "$(PROCESSOR_ARCHITECTURE)" == "x86"
+	copy /Y "$(OPENSSL_DIR)\lib\x86\libcrypto-3-x86.dll" "$(B)\"
+	copy /Y "$(OPENSSL_DIR)\lib\x86\libssl-3-x86.dll" "$(B)\"
+!ELSE
+	copy /Y "$(OPENSSL_DIR)\lib\x64\libcrypto-3-x64.dll" "$(B)\"
+	copy /Y "$(OPENSSL_DIR)\lib\x64\libssl-3-x64.dll" "$(B)\"
+!ENDIF
+
+# ----------------------------------------------------------------
+# Stubs library (for extensions to link against).
+# ----------------------------------------------------------------
+
+stubs: $(STUBS_LIB)
+
+#
+# Stubs objects: compiled with TH8_API forced to empty so that
+# function addresses in the initializer table are plain symbols
+# (no dllimport thunks).  This avoids MSVC C4232 warnings.
+#
+
+$(B)\th8StubInit_standalone.obj: $(S)\th8StubInit.c $(S)\th8.h $(S)\th8Decls.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS_BASE) $(FEATURE_DEFS) /DTH8_API= /c /Fo$@ $(S)\th8StubInit.c
+
+$(B)\th8StubLib_standalone.obj: $(S)\th8StubLib.c $(S)\th8.h $(S)\th8Decls.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS_BASE) $(FEATURE_DEFS) /DTH8_API= /c /Fo$@ $(S)\th8StubLib.c
+
+$(STUBS_LIB): $(STUBS_OBJ)
+	$(LIB_CMD) /nologo /OUT:$@ $(STUBS_OBJ)
+
+# ----------------------------------------------------------------
+# Stubs regeneration (from th8.h).
+# ----------------------------------------------------------------
+
+genstubs:
+	tclsh tools\mkstubs.tcl $(S)\th8.h $(S)\th8Decls.h $(S)\th8StubInit.c
+
+# ----------------------------------------------------------------
+# Interactive shell.
+#
+# The shell links against the DLL import library (th8.lib) plus
+# the shell-specific objects (th8sh, th8_libc, th8_win32).  This
+# ensures the th8.dll module is loaded into the process, allowing
+# GetModuleHandle("th8.dll") to succeed for base-path detection.
+# ----------------------------------------------------------------
+
+shell: $(DYNAMIC_LIB) $(SHELL_BIN)
+
+$(SHELL_BIN): $(B)\th8sh.obj $(B)\th8_shell.obj $(IMPORT_LIB) $(RC_RES_SHL)
+	$(LD) $(LDFLAGS) /OUT:$@ $(B)\th8sh.obj $(B)\th8_shell.obj \
+	  $(RC_RES_SHL) $(IMPORT_LIB) user32.lib advapi32.lib wintrust.lib crypt32.lib
+
+# ----------------------------------------------------------------
+# zlib rules.
+# ----------------------------------------------------------------
+
+zlib:
+	pushd "$(ZLIB_DIR)\src" && $(MAKE) /f win32\Makefile.msc zlib.lib && popd
+
+# ----------------------------------------------------------------
+# curl rules.
+# ----------------------------------------------------------------
+
+curl-win32: zlib
+	call externals\curl\build_win32.bat
+
+curl-win64: zlib
+	call externals\curl\build_win64.bat
+
+curl: curl-win32 curl-win64
+
+# ----------------------------------------------------------------
+# OpenSSL rules.
+# ----------------------------------------------------------------
+
+openssl-win32:
+	cd "$(PERL_SRC_DIR)"
+	perl Configure VC-WIN32
+	$(MAKE) /f makefile
+
+openssl-win64:
+	cd "$(PERL_SRC_DIR)"
+	perl Configure VC-WIN64A
+	$(MAKE) /f makefile
+
+openssl: openssl-win32 openssl-win64
+
+# ----------------------------------------------------------------
+# Testing rules.
+# ----------------------------------------------------------------
+
+th8test-only:
+	$(B)\th8sh.exe tests\all.tcl
+
+th8test: fresh th8test-only
+
+tcltest:
+	tclsh tests\all.tcl
+
+eagletest:
+	SET CreateFlags=+UseNamespaces
+	eagle -preInitialize "expr {flags(\"+BooleanToInteger StringToInteger\")}" -file tests\all.tcl
+
+# ----------------------------------------------------------------
+# libtommath: prepare patched sources.
+# ----------------------------------------------------------------
+
+tommath_vendor:
+!IF $(ENABLE_BIGINT)
+	echo BigInt support is enabled.
+	tclsh tools/tommath_amalg.tcl bin/
+!ELSE
+	echo BigInt support is disabled.
+!ENDIF
+
+# ----------------------------------------------------------------
+# Compilation rules.
+# ----------------------------------------------------------------
+
+$(B)\th8_core.obj: $(S)\th8_core.c $(CORE_HDR) tommath_vendor spilornis_vendor
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_core.c
+
+$(B)\th8_channel.obj: $(S)\th8_channel.c $(CORE_HDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_channel.c
+
+$(B)\th8_protect.obj: $(S)\th8_protect.c $(CORE_HDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_protect.c
+
+$(B)\th8_plat.obj: $(S)\th8_plat.c $(CORE_HDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_plat.c
+
+$(B)\th8_hash.obj: $(S)\th8_hash.c $(CORE_HDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_hash.c
+
+$(B)\th8_hash_standalone.obj: $(S)\th8_hash.c $(S)\th8_hash.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS_BASE) /DTH8_HASH_STANDALONE /I$(S) /c /Fo$@ $(S)\th8_hash.c
+
+$(B)\th8_util.obj: $(S)\th8_util.c $(CORE_HDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_util.c
+
+$(B)\th8_base64.obj: $(S)\th8_base64.c $(S)\th8.h $(S)\th8_util.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_base64.c
+
+$(B)\th8_expr.obj: $(S)\th8_expr.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_int_core.h $(S)\th8_expr.h tommath_vendor
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_expr.c
+
+$(B)\th8_load.obj: $(S)\th8_load.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_int_core.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_load.c
+
+$(B)\th8_vars.obj: $(S)\th8_vars.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_int_core.h $(S)\th8_vars.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_vars.c
+
+$(B)\th8_glob.obj: $(S)\th8_glob.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_glob.c
+
+$(B)\th8_math.obj: $(S)\th8_math.c $(CORE_HDR) tommath_vendor
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_math.c
+
+$(B)\th8_cache.obj: $(S)\th8_cache.c $(CORE_HDR) $(S)\th8_int.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_cache.c
+
+$(B)\th8_attrflags.obj: $(HARPY_PLUGIN_DIR)\th8_attrflags.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_attrflags.c
+
+$(B)\th8_plugin.obj: $(S)\th8_plugin.c $(S)\th8_plugin.h $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_plugin.c
+
+$(B)\th8_lang.obj: $(S)\th8_lang.c $(CORE_HDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_lang.c
+
+$(B)\th8_xlib.obj: $(S)\th8_xlib.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_xlib.c
+
+$(B)\th8_fault.obj: $(S)\th8_fault.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_fault.c
+
+$(B)\th8_env.obj: $(S)\th8_env.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_env.c
+
+$(B)\th8_mem.obj: $(S)\th8_mem.c $(S)\th8.h $(S)\th8_int.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_mem.c
+
+# ----------------------------------------------------------------
+# Plugin compilation rules.
+# ----------------------------------------------------------------
+
+$(B)\th8_control.obj: $(S)\plugins\th8_control.c $(S)\th8.h $(S)\th8_util.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_control.c
+
+$(B)\th8_events.obj: $(S)\plugins\th8_events.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_events.c
+
+$(B)\th8_expressions.obj: $(S)\plugins\th8_expressions.c $(S)\th8.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_expressions.c
+
+$(B)\th8_extensibility.obj: $(S)\plugins\th8_extensibility.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_extensibility.c
+
+$(B)\th8_filesystems.obj: $(S)\plugins\th8_filesystems.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_filesystems.c
+
+$(B)\th8_formatting.obj: $(S)\plugins\th8_formatting.c $(S)\th8.h $(S)\th8_util.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_formatting.c
+
+$(B)\th8_introspection.obj: $(S)\plugins\th8_introspection.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_introspection.c
+
+$(B)\th8_io.obj: $(S)\plugins\th8_io.c $(S)\th8.h $(S)\th8_util.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_io.c
+
+$(B)\th8_lists.obj: $(S)\plugins\th8_lists.c $(CORE_HDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_lists.c
+
+$(B)\th8_looping.obj: $(S)\plugins\th8_looping.c $(S)\th8.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_looping.c
+
+$(B)\th8_management.obj: $(S)\plugins\th8_management.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_management.c
+
+$(B)\th8_procedures.obj: $(S)\plugins\th8_procedures.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_procedures.c
+
+$(B)\th8_strings.obj: $(S)\plugins\th8_strings.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_strings.c
+
+$(B)\th8_timekeeping.obj: $(S)\plugins\th8_timekeeping.c $(S)\th8.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_timekeeping.c
+
+$(B)\th8_variables.obj: $(S)\plugins\th8_variables.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_vars.h $(S)\th8_util.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_variables.c
+
+$(B)\th8_harpy_cmds.obj: $(S)\plugins\th8_harpy.c $(S)\th8.h $(S)\th8_util.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_harpy.c
+
+$(B)\th8_crypto_cmds.obj: $(CRYPTOGRAPHY_PLUGIN_DIR)\th8_crypto_cmds.c $(S)\th8.h $(S)\th8_util.h $(S)\th8_plugin.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(CRYPTOGRAPHY_PLUGIN_DIR)\th8_crypto_cmds.c
+
+$(B)\th8_regex.obj: $(S)\plugins\regexp\th8_regex.c $(CORE_HDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\regexp\th8_regex.c
+
+$(B)\th8_nullio.obj: $(S)\th8_nullio.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_nullio.c
+
+$(B)\th8_win32.obj: $(S)\th8_win32.c $(CORE_HDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_win32.c
+
+$(B)\th8_libc.obj: $(S)\th8_libc.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_libc.c
+
+$(B)\th8_ctime.obj: $(S)\th8_ctime.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_ctime.c
+
+!IF $(ENABLE_LIBCURL)
+$(B)\th8_curl.obj: $(S)\th8_curl.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_curl.c
+!ENDIF
+
+!IF $(ENABLE_UNBOUND)
+$(B)\th8_unbound.obj: $(S)\th8_unbound.c $(S)\th8.h $(S)\th8_unbound.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_unbound.c
+!ENDIF
+
+# ----------------------------------------------------------------
+# BigInt support (libtommath amalgamation).
+# ----------------------------------------------------------------
+
+!IF $(ENABLE_BIGINT)
+# The tommath_amalg.tcl script copies vendor/ to build/ and
+# applies patches from patches/ before generating the amalgamation.
+$(B)\tommath_amalg.c: externals\tommath\vendor\tommath.h tommath_vendor
+
+$(B)\tommath_amalg.obj: $(B)\tommath_amalg.c
+	$(CC) $(CFLAGS_BASE) $(FEATURE_DEFS) /I$(TOMMATH_BUILD) /c /Fo$@ $(B)\tommath_amalg.c
+
+$(B)\th8_bigint.obj: $(S)\th8_bigint.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_bigint.h tommath_vendor
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_bigint.c
+!ENDIF
+
+# ----------------------------------------------------------------
+# mimalloc allocator.
+# ----------------------------------------------------------------
+
+!IF $(ENABLE_MIMALLOC)
+MI_SRC = $(MIMALLOC_DIR)\src
+MI_INC = $(MIMALLOC_DIR)\include
+
+# mimalloc's static.c #includes all source files.  Compile with
+# reduced warnings since mimalloc uses MSVC extensions internally.
+# CRT flag must match the main build (/MD for release, /MDd for debug).
+$(MIMALLOC_STATIC_OBJ): $(MI_SRC)\static.c
+	-if not exist "$(B)" mkdir "$(B)"
+!IF $(DEBUG)
+	$(CC) /nologo /W3 /Od /MDd /DMI_STATIC_LIB /I$(MI_INC) /I$(MI_SRC) /c /Fo$@ $(MI_SRC)\static.c
+!ELSE
+	$(CC) /nologo /W3 /O2 /MD /DMI_STATIC_LIB /I$(MI_INC) /I$(MI_SRC) /c /Fo$@ $(MI_SRC)\static.c
+!ENDIF
+
+$(MIMALLOC_PLAT_OBJ): $(S)\th8_mimalloc.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_mimalloc.c
+!ENDIF
+
+# ----------------------------------------------------------------
+# Crypto support (RSA key loading).
+# ----------------------------------------------------------------
+
+!IF $(ENABLE_CRYPTOGRAPHY)
+$(B)\th8_snk.obj: $(HARPY_PLUGIN_DIR)\th8_snk.c $(S)\th8.h $(S)\th8_util.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_snk.c
+
+$(B)\th8_harpy.obj: $(HARPY_PLUGIN_DIR)\th8_harpy.c $(S)\th8.h $(S)\th8_util.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_harpy.c
+
+$(B)\th8_policy.obj: $(HARPY_PLUGIN_DIR)\th8_policy.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_policy.c
+
+$(B)\th8_keyRoot.obj: $(HARPY_PLUGIN_DIR)\th8_keyRoot.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_keyRoot.c
+
+$(B)\th8_keyTime.obj: $(HARPY_PLUGIN_DIR)\th8_keyTime.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_keyTime.c
+
+$(B)\th8_key0.obj: $(HARPY_PLUGIN_DIR)\th8_key0.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_key0.c
+
+$(B)\th8_keyring_stub.obj: $(HARPY_PLUGIN_DIR)\th8_keyring_stub.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_keyring_stub.c
+
+$(B)\th8_keyTest.obj: $(HARPY_PLUGIN_DIR)\th8_keyTest.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_keyTest.c
+
+$(B)\th8_secure.obj: $(CRYPTOGRAPHY_PLUGIN_DIR)\th8_secure.c $(S)\th8.h $(S)\th8_util.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(CRYPTOGRAPHY_PLUGIN_DIR)\th8_secure.c
+
+$(B)\th8_time.obj: $(HARPY_PLUGIN_DIR)\th8_time.c $(S)\th8.h $(S)\th8_util.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_time.c
+!ENDIF
+
+# ----------------------------------------------------------------
+# Spilornis: rename conflicting types to se_* prefixed names.
+# ----------------------------------------------------------------
+
+spilornis_vendor:
+	-if not exist "$(B)" mkdir "$(B)"
+	tclsh tools\mkspilornis.tcl $(SPILORNIS_DIR)\Spilornis.c $(B)\Spilornis.c
+	tclsh tools\mkspilornis.tcl $(SPILORNIS_DIR)\Spilornis.h $(B)\Spilornis.h
+	tclsh tools\mkspilornis.tcl $(SPILORNIS_DIR)\SpilornisInt.h $(B)\SpilornisInt.h
+	tclsh tools\mkspilornis.tcl $(SPILORNIS_DIR)\SpilornisDef.h $(B)\SpilornisDef.h
+
+$(B)\th8_spilornis.obj: $(S)\th8_spilornis.c $(S)\th8_spilornis.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_spilornis.c
+
+$(B)\spilornis.obj: $(S)\th8_spilornis.h spilornis_vendor
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) $(SPILORNIS_CFLAGS) \
+	  /FIth8_spilornis.h /c /Fo$@ $(B)\Spilornis.c
+
+$(B)\th8StubInit.obj: $(S)\th8StubInit.c $(S)\th8.h $(S)\th8Decls.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8StubInit.c
+
+$(B)\th8InternalStubInit.obj: $(S)\th8InternalStubInit.c $(S)\th8.h \
+	    $(S)\th8_int.h $(S)\th8InternalDecls.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8InternalStubInit.c
+
+$(B)\th8StubLib.obj: $(S)\th8StubLib.c $(S)\th8.h $(S)\th8Decls.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8StubLib.c
+
+$(B)\ConvertUTF_v2.obj: $(UTF_DIR)\ConvertUTF_v2.c $(UTF_DIR)\ConvertUTF_v2.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /wd4505 /c /Fo$@ $(UTF_DIR)\ConvertUTF_v2.c
+
+#
+# Shell-specific objects: compiled WITHOUT TH8_BUILD_DLL so that
+# TH8_API resolves to __declspec(dllimport), matching the
+# import library.
+#
+
+$(B)\th8sh.obj: $(S)\th8sh.c $(S)\th8_shell.h $(CORE_HDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS_APP) /c /Fo$@ $(S)\th8sh.c
+
+$(B)\th8_shell.obj: $(S)\th8_shell.c $(S)\th8_shell.h $(CORE_HDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS_APP) /c /Fo$@ $(S)\th8_shell.c
+
+$(B)\th8_shell_amal.obj: $(S)\th8_shell.c $(S)\th8_shell.h $(CORE_HDR)
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS_APP) /DTH8_BUILD_STATIC /c /Fo$@ $(S)\th8_shell.c
+
+# ----------------------------------------------------------------
+# Spencer regex engine: prepare patched sources.
+# ----------------------------------------------------------------
+
+regex_vendor:
+!IF $(ENABLE_REGEXP)
+	echo Regular expression support is enabled.
+	tclsh tools\regex_vendor.tcl
+!ELSE
+	echo Regular expression support is disabled.
+!ENDIF
+
+# ----------------------------------------------------------------
+# Spencer regex engine objects.
+# ----------------------------------------------------------------
+
+$(B)\regex_regcomp.obj: regex_vendor $(REGEX_BUILD)\regcomp.c
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) $(REGEX_CFLAGS) /c /Fo$@ $(REGEX_BUILD)\regcomp.c
+
+$(B)\regex_regexec.obj: regex_vendor $(REGEX_BUILD)\regexec.c
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) $(REGEX_CFLAGS) /c /Fo$@ $(REGEX_BUILD)\regexec.c
+
+$(B)\regex_regfree.obj: regex_vendor $(REGEX_BUILD)\regfree.c
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) $(REGEX_CFLAGS) /c /Fo$@ $(REGEX_BUILD)\regfree.c
+
+$(B)\regex_regprefix.obj: regex_vendor $(REGEX_BUILD)\regprefix.c
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) $(REGEX_CFLAGS) /c /Fo$@ $(REGEX_BUILD)\regprefix.c
+
+$(B)\regex_regerror.obj: regex_vendor $(REGEX_BUILD)\regerror.c
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) $(REGEX_CFLAGS) /c /Fo$@ $(REGEX_BUILD)\regerror.c
+
+# ----------------------------------------------------------------
+# Test shared libraries (for [load]/[unload] lifecycle testing).
+#
+# Two separate DLLs from the same source file:
+#
+#   th8test.dll     -- TH8 mode (Th8test_Init / Th8test_Unload).
+#                      Linked against th8.lib.
+#
+#   tclth8test.dll  -- Tcl mode (Tclth8test_Init / Tclth8test_Unload).
+#                      Linked against tclstub86.lib via externals\tcl.
+#
+# Usage:
+#   nmake /f Makefile.msc testlib
+# ----------------------------------------------------------------
+
+TCL_EXTDIR   = externals\tcl
+TCL_INCLUDE  = $(TCL_EXTDIR)\include
+TCL_STUBSLIB = $(TCL_EXTDIR)\lib\x64\tclstub86.lib
+
+TESTLIB_TH8  = $(B)\th8test.dll
+TESTLIB_TCL  = $(B)\tclth8test.dll
+
+TESTLIB_CFLAGS = $(CFLAGS) /I$(S)\test /wd4100
+
+testlib: $(TESTLIB_TH8) $(TESTLIB_TCL)
+
+# TH8 test DLL (stubs-based).
+
+$(B)\th8_testlib_th8.obj: $(S)\test\th8_testlib.c $(S)\th8.h $(S)\th8Decls.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(TESTLIB_CFLAGS) /DTH8_TESTLIB_TH8 /DUSE_TH8_STUBS \
+	  /c /Fo$@ $(S)\test\th8_testlib.c
+
+$(TESTLIB_TH8): $(B)\th8_testlib_th8.obj $(B)\ConvertUTF_v2.obj $(STUBS_LIB)
+	$(LD) /DLL $(LDFLAGS) $(DLL_NODEFAULTLIB) /OUT:$@ $(B)\th8_testlib_th8.obj $(B)\ConvertUTF_v2.obj $(STUBS_LIB) advapi32.lib
+
+# Tcl test DLL (stubs-based).
+
+$(B)\th8_testlib_tcl.obj: $(S)\test\th8_testlib.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(TESTLIB_CFLAGS) /DTH8_TESTLIB_TCL /DUSE_TCL_STUBS \
+	  /I$(TCL_INCLUDE) /c /Fo$@ $(S)\test\th8_testlib.c
+
+$(TESTLIB_TCL): $(B)\th8_testlib_tcl.obj
+	$(LD) /DLL $(LDFLAGS) $(DLL_NODEFAULTLIB) /OUT:$@ $(B)\th8_testlib_tcl.obj $(TCL_STUBSLIB)
+
+# ----------------------------------------------------------------
+# SQLite key-value extension.
+# ----------------------------------------------------------------
+
+SQLITE3_EXT = $(B)\th8sqlite3.dll
+
+SQLITE3_OPTS = /DSQLITE_ENABLE_API_ARMOR=1 \
+               /DSQLITE_ENABLE_BYTECODE_VTAB=1 \
+               /DSQLITE_ENABLE_COLUMN_METADATA=1 \
+               /DSQLITE_ENABLE_DBPAGE_VTAB=1 \
+               /DSQLITE_ENABLE_DBSTAT_VTAB=1 \
+               /DSQLITE_ENABLE_FTS5=1 \
+               /DSQLITE_ENABLE_LOAD_EXTENSION=1 \
+               /DSQLITE_ENABLE_MATH_FUNCTIONS=1 \
+               /DSQLITE_ENABLE_MEMORY_MANAGEMENT=1 \
+               /DSQLITE_ENABLE_RTREE=1 \
+               /DSQLITE_ENABLE_STAT4=1 \
+               /DSQLITE_ENABLE_STMTVTAB=1 \
+               /DSQLITE_ENABLE_UPDATE_DELETE_LIMIT=1 \
+               /DSQLITE_SECURE_DELETE=1 \
+               /DSQLITE_SOUNDEX=1 \
+               /DSQLITE_THREADSAFE=1 \
+               /DSQLITE_USE_URI=1
+
+SQLITE3_CFLAGS = $(CFLAGS) /I$(S)\sqlite3 /I$(SQLITE3_DIR) /DUSE_TH8_STUBS
+
+sqlite3-ext: stubs $(SQLITE3_EXT)
+
+$(B)\th8_sqlite3.obj: $(S)\sqlite3\th8_sqlite3.c $(S)\sqlite3\th8_sqlite3.h \
+    $(S)\th8.h $(S)\th8Decls.h $(SQLITE3_DIR)\sqlite3.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(SQLITE3_CFLAGS) /c /Fo$@ $(S)\sqlite3\th8_sqlite3.c
+
+$(B)\sqlite3.obj: $(SQLITE3_DIR)\sqlite3.c $(SQLITE3_DIR)\sqlite3.h
+	-if not exist "$(B)" mkdir "$(B)"
+!IF $(DEBUG)
+	$(CC) /nologo /W3 /O2 /MDd $(SQLITE3_OPTS) /c /Fo$@ $(SQLITE3_DIR)\sqlite3.c
+!ELSE
+	$(CC) /nologo /W3 /O2 /MD /DNDEBUG $(SQLITE3_OPTS) /c /Fo$@ $(SQLITE3_DIR)\sqlite3.c
+!ENDIF
+
+$(SQLITE3_EXT): $(B)\th8_sqlite3.obj $(B)\sqlite3.obj $(STUBS_LIB)
+	$(LD) /DLL $(LDFLAGS) $(DLL_NODEFAULTLIB) /OUT:$@ $(B)\th8_sqlite3.obj $(B)\sqlite3.obj $(STUBS_LIB)
+
+# ----------------------------------------------------------------
+# Bridge library (TH8 <-> Tcl cross-interpreter evaluation).
+#
+# Two separate DLLs from the same source file:
+#
+#   th8bridge_tcl.dll -- loaded into tclsh, provides [th8Eval].
+#                        Links: th8 core objects + tclstub.
+#
+#   th8bridge_th8.dll -- loaded into th8sh, provides [tclEval].
+#                        Uses reverse stubs to load Tcl at runtime.
+#                        Links: th8stub + tclstub (no tcl import lib needed).
+#
+# Usage:
+#   nmake /f Makefile.msc bridge
+# ----------------------------------------------------------------
+
+BRIDGE_TCL = $(B)\th8bridge_tcl.dll
+BRIDGE_TH8 = $(B)\th8bridge_th8.dll
+
+BRIDGE_CFLAGS = $(CFLAGS) /wd4100
+
+# Bridge: TH8-in-Tcl mode (always buildable with bundled Tcl stubs).
+
+$(B)\th8_tcl_tclmode.obj: $(S)\test\th8_tcl.c $(S)\th8.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(BRIDGE_CFLAGS) /DTH8_TCL_BRIDGE_TCL \
+	  /I$(TCL_INCLUDE) /c /Fo$@ $(S)\test\th8_tcl.c
+
+$(BRIDGE_TCL): $(B)\th8_tcl_tclmode.obj $(CORE_OBJ)
+	$(LD) /DLL $(LDFLAGS) $(DLL_NODEFAULTLIB) /OUT:$@ $(B)\th8_tcl_tclmode.obj \
+	  $(CORE_OBJ) $(TCL_STUBSLIB) $(CURL_LIBS) $(CRYPTOGRAPHY_LIBS) $(UNBOUND_LIBS)
+
+# Reverse-stubs Tcl loader (generated from externals\mmm\tcl.c).
+
+$(B)\th8_tcl_stubs.c: externals\mmm\tcl.c tools\vendor_tcl.tcl
+	-if not exist "$(B)" mkdir "$(B)"
+	tclsh tools\vendor_tcl.tcl $(B)
+
+$(B)\th8_tcl_stubs.obj: $(B)\th8_tcl_stubs.c
+	$(CC) $(BRIDGE_CFLAGS) /DUSE_TCL_STUBS /DENABLE_TCL_PRIVATE_STUBS \
+	  /I$(TCL_INCLUDE) /c /Fo$@ $(B)\th8_tcl_stubs.c
+
+# Bridge: Tcl-in-TH8 mode (reverse stubs -- no tcl import library needed).
+
+$(B)\th8_tcl_th8mode.obj: $(S)\test\th8_tcl.c $(S)\th8.h $(S)\th8Decls.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(BRIDGE_CFLAGS) /DTH8_TCL_BRIDGE_TH8 /DUSE_TH8_STUBS \
+	  /c /Fo$@ $(S)\test\th8_tcl.c
+
+$(BRIDGE_TH8): $(B)\th8_tcl_th8mode.obj $(B)\th8_tcl_stubs.obj $(STUBS_LIB)
+	$(LD) /DLL $(LDFLAGS) $(DLL_NODEFAULTLIB) /OUT:$@ $(B)\th8_tcl_th8mode.obj \
+	  $(B)\th8_tcl_stubs.obj $(STUBS_LIB) $(TCL_STUBSLIB)
+
+bridge: $(BRIDGE_TCL) $(BRIDGE_TH8)
+
+# ----------------------------------------------------------------
+# Amalgamation.
+#
+# Produces a single th8.c file containing all TH8 core source.
+# The amalgamation compile uses only /I$(B) (for th8.h) and
+# external system library includes (OpenSSL, etc.) -- no TH8-
+# internal include paths -- proving that th8.c + th8.h are
+# fully self-contained.
+# ----------------------------------------------------------------
+
+!IFNDEF USE_AMALGAMATION
+USE_AMALGAMATION = 0
+!ENDIF
+
+AMAL_FILE = $(B)\th8.c
+EXTLIB_INCLUDES = $(CRYPTOGRAPHY_INCLUDES) $(UNBOUND_INCLUDES) $(MIMALLOC_INCLUDES)
+
+$(B)\regex_amalg.c: regex_vendor
+	-if not exist "$(B)" mkdir "$(B)"
+	tclsh tools\regex_amalg.tcl $(B)\
+
+amalgamation: $(VERSIONHDR) $(B)\regex_amalg.c tommath_vendor spilornis_vendor
+	tclsh tools\mkamal.tcl -o $(AMAL_FILE)
+	copy /Y $(S)\th8.h $(B)\th8.h
+
+$(B)\th8_amal.obj: amalgamation $(B)\th8.h
+	$(CC) $(CFLAGS_APP) /I$(B) $(EXTLIB_INCLUDES) $(REGEX_CFLAGS) /DTH8_BUILD_STATIC /c /Fo$@ $(AMAL_FILE)
+
+amalgamation-shell: $(B)\th8_amal.obj $(B)\th8_shell_amal.obj $(MIMALLOC_STATIC_OBJ)
+	copy /Y "$(S)\test\th8_testlib.h" "$(B)\"
+	$(CC) $(CFLAGS_APP) /DTH8_BUILD_STATIC /DTH8_AMALGAMATION /I$(B) $(EXTLIB_INCLUDES) /c /Fo$(B)\th8sh_amal.obj $(S)\th8sh.c
+!IF $(ENABLE_MIMALLOC)
+	$(LD) $(LDFLAGS) /OUT:$(B)\th8sh_amal.exe $(B)\th8_amal.obj $(MIMALLOC_STATIC_OBJ) $(B)\th8sh_amal.obj $(B)\th8_shell_amal.obj $(CURL_LIBS) $(CRYPTOGRAPHY_LIBS) $(UNBOUND_LIBS) user32.lib wintrust.lib crypt32.lib $(PLATFORM_DEPS)
+!ELSE
+	$(LD) $(LDFLAGS) /OUT:$(B)\th8sh_amal.exe $(B)\th8_amal.obj $(B)\th8sh_amal.obj $(B)\th8_shell_amal.obj $(CURL_LIBS) $(CRYPTOGRAPHY_LIBS) $(UNBOUND_LIBS) user32.lib wintrust.lib crypt32.lib $(PLATFORM_DEPS)
+!ENDIF
+!IF $(ENABLE_CRYPTOGRAPHY)
+!IF "$(PLATFORM)" == "x86" || "$(PROCESSOR_ARCHITECTURE)" == "x86"
+	copy /Y "$(OPENSSL_DIR)\lib\x86\libcrypto-3-x86.dll" "$(B)\"
+	copy /Y "$(OPENSSL_DIR)\lib\x86\libssl-3-x86.dll" "$(B)\"
+!ELSE
+	copy /Y "$(OPENSSL_DIR)\lib\x64\libcrypto-3-x64.dll" "$(B)\"
+	copy /Y "$(OPENSSL_DIR)\lib\x64\libssl-3-x64.dll" "$(B)\"
+!ENDIF
+!ENDIF
+
+amalgamation-test: amalgamation-shell
+	$(B)\th8sh_amal.exe tests\all.tcl
+
+# ----------------------------------------------------------------
+# Clean.
+# ----------------------------------------------------------------
+
+clean:
+	-if exist "$(B)" rmdir /s /q "$(B)" 2>nul
+	-if exist "$(REGEX_BUILD)" rmdir /s /q "$(REGEX_BUILD)" 2>nul
+	-if exist "$(TOMMATH_BUILD)" rmdir /s /q "$(TOMMATH_BUILD)" 2>nul
+
+fresh: clean genstubs all
+	@echo BUILT FRESH AND CLEAN...
+
+# ----------------------------------------------------------------
+# CRT dependency audit.
+# Uses tools/audit_patterns.tcl crt-objects, which auto-detects
+# the host symbol extractor (dumpbin /symbols on MSVC, nm -u on
+# POSIX) and reads tools/data/crt_functions.txt and
+# tools/data/crt_exceptions.txt for the ban-list and allow-list.
+# ----------------------------------------------------------------
+
+check-crt:
+	tclsh tools\audit_patterns.tcl crt-objects $(B)
+
+# ----------------------------------------------------------------
+# Source-level + format + CRT audit (combined).
+# Mirrors the POSIX `audit` target.
+# ----------------------------------------------------------------
+
+audit:
+	tclsh tools\audit_patterns.tcl source
+	tclsh tools\audit_patterns.tcl crt-objects $(B)
+
+#
+# Requirements-marker audit (tools/mkreq.tcl).  Catches:
+#   * R-marker hash drift in the standard (text edited without
+#     updating the marker);
+#   * orphan R-markers cited by tests that no longer exist (or
+#     never existed) in the standard.
+#
+
+audit-reqs:
+	tclsh tools\mkreq.tcl --verify docs\public\tcl_language_standard_v1.md
+	tclsh tools\mkreq.tcl --verify docs\public\th8_language_extensions.md
+	tclsh tools\mkreq.tcl --verify docs\public\th8_public_c_api_specification.md
+	tclsh tools\mkreq.tcl --verify docs\public\th8_internal_api_specification.md
+	tclsh tools\mkreq.tcl --check-tests \
+		docs\public\tcl_language_standard_v1.md \
+		docs\public\th8_language_extensions.md \
+		docs\public\th8_public_c_api_specification.md \
+		docs\public\th8_internal_api_specification.md \
+		tests
+
+#
+# Formatting check (clang-format).  Separated from `audit` until
+# every existing violation is fixed; once clean, fold into `audit`.
+#
+
+audit-format:
+	tclsh tools\audit_patterns.tcl format

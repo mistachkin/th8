@@ -1,0 +1,25 @@
+###############################################################################
+#
+# pkgIndex.tcl --
+#
+# Tcl Package Index File
+#
+# Copyright (c) 2026 by Joe Mistachkin.  All rights reserved.
+#
+# See the file "license.terms" for information on usage and redistribution of
+# this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+###############################################################################
+
+if {![package vsatisfies [package provide Tcl] 8.4]} then {return}
+if {[string length [package provide Eagle]] > 0} then {return}
+if {[string length [package provide TH8]] > 0} then {return}
+
+package ifneeded th8test 1.0 \
+    [list source [file join $dir test.tcl]]
+
+package ifneeded th8test_exec 1.0 \
+    [list source [file join $dir exec.tcl]]
+
+package ifneeded th8test_load 1.0 \
+    [list source [file join $dir load.tcl]]

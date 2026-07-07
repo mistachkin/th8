@@ -1,0 +1,11 @@
+namespace eval ::test_ns {
+  proc helper {} { return "from_namespace" }
+}
+
+set r1 [::test_ns::helper]
+
+set r2 [catch {error "test_error"} msg]
+
+set r3 [uplevel #0 {expr {10 + 20}}]
+
+list $r1 $r2 $r3

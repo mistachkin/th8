@@ -1,0 +1,386 @@
+# TH8 Continuous Integration
+#
+# Jobs:
+#   test            -- build + run tests/all.tcl on Linux and macOS
+#   valgrind        -- tests/all.tcl under valgrind --leak-check=full (Linux)
+#   mcdc            -- MC/DC coverage report (Linux clang+llvm)
+#   fuzz-smoke      -- 60-second libFuzzer pass over every harness on PRs
+#   fuzz-campaign   -- multi-hour AFL++ rotation on a self-hosted runner
+#
+# Required local toolchain on every runner:
+#   GNU make, C toolchain, tclsh >= 8.6 (the `audit-format` gate calls
+#   tools/format_code.tcl which `package require Tcl 8.6`), clang-format,
+#   pkg-config, openssl + libcurl + libunbound dev headers.
+#
+# Self-hosted runner for `fuzz-campaign` is expected to advertise the
+# labels [self-hosted, linux, fuzz] and to have `afl-clang-fast` from
+# AFL++ on PATH in addition to the standard toolchain above.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    # Nightly AFL++ campaign kicks off at 07:00 UTC.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+    inputs:
+      fuzz_hours:
+        description: 'AFL++ rotation campaign total hours'
+        required: false
+        default: '24'
+        type: string
+      fuzz_parallel:
+        description: 'AFL++ concurrent fuzzers per phase'
+        required: false
+        default: '4'
+        type: string
+
+# Cancel old in-flight PR runs when a new commit lands; never cancel
+# scheduled or push-to-main runs.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # --------------------------------------------------------------------
+  # Test suite -- builds the debug shell with the embedded test signing
+  # key, then runs tests/all.tcl on Linux and macOS in parallel.  The
+  # `debug` make target already runs `audit`, `audit-reqs`, and
+  # `manlint` as part of its `all` dependency, so style + R-marker
+  # gates also run here.
+  # --------------------------------------------------------------------
+  test:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config \
+            tcl8.6 tcl8.6-dev \
+            clang-format \
+            mandoc \
+            libssl-dev libunbound-dev libcurl4-openssl-dev
+          # The Makefile calls bare `tclsh`; Ubuntu ships only `tclsh8.6`
+          # under that exact name when the metapackage is missing.  Wire
+          # up a /usr/local/bin/tclsh shim that resolves to 8.6.
+          if ! command -v tclsh >/dev/null; then
+            sudo ln -sf "$(command -v tclsh8.6)" /usr/local/bin/tclsh
+          fi
+
+      - name: Install deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install tcl-tk@8 clang-format mandoc openssl@3 unbound
+          # tcl-tk@8 is keg-only: expose its 8.6 tclsh on PATH so the
+          # `audit-format` gate doesn't fall back to the system Tcl 8.5.
+          echo "$(brew --prefix tcl-tk@8)/bin" >> "$GITHUB_PATH"
+
+      - name: Verify Tcl >= 8.6
+        run: |
+          tclsh <<<'puts $tcl_version' | tee tcl_ver.txt
+          test "$(cat tcl_ver.txt)" = "8.6" \
+            || { echo "Tcl 8.6 required"; exit 1; }
+
+      - name: Build debug + test key
+        run: make -j"$(getconf _NPROCESSORS_ONLN)" ENABLE_TEST_KEY=1 clean debug
+
+      - name: Run test suite
+        run: make ENABLE_TEST_KEY=1 th8test-only
+
+      - name: Verify expected pass rate
+        run: |
+          # Suite must report `Passed: <n>` and `Failed: 0`.  Surface
+          # the summary in the job log even on success.
+          tail -20 bin/th8-test.log
+          grep -q 'Failed:[[:space:]]*0' bin/th8-test.log
+          grep -q 'OVERALL STATUS: SUCCESS' bin/th8-test.log
+
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.os }}
+          path: bin/th8-test.log
+          if-no-files-found: ignore
+
+  # --------------------------------------------------------------------
+  # Valgrind run.  Builds the non-static debug shell, then runs
+  # tests/all.tcl under `valgrind --leak-check=full --error-exitcode=1`
+  # with the project's tools/data/th8.supp suppressions.  Linux-only:
+  # valgrind on Apple Silicon macOS is unreliable (Rosetta + memory-tag
+  # quirks).  Slow -- the suite normally completes in ~3 min, under
+  # valgrind expect 30-90 min on a hosted Linux runner.
+  # --------------------------------------------------------------------
+  valgrind:
+    name: Valgrind (leak-check=full)
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config \
+            tcl8.6 tcl8.6-dev \
+            clang-format \
+            mandoc \
+            valgrind \
+            libssl-dev libunbound-dev libcurl4-openssl-dev
+          if ! command -v tclsh >/dev/null; then
+            sudo ln -sf "$(command -v tclsh8.6)" /usr/local/bin/tclsh
+          fi
+
+      - name: Build + run suite under valgrind
+        # The Makefile's `valgrind` recipe internally recurses with
+        # CFLAGS=$(CFLAGS_DEBUG); passing ENABLE_TEST_KEY=1 on the
+        # command line propagates through MAKEFLAGS so the embedded
+        # test signing key is compiled in (signed-only tests don't
+        # try to fetch the production key from the network).
+        # --error-exitcode=1 in the recipe makes any leak / error
+        # fail the job.
+        run: make ENABLE_TEST_KEY=1 valgrind 2>&1 | tee valgrind.log
+
+      - name: Upload valgrind log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: valgrind-log
+          path: valgrind.log
+          if-no-files-found: ignore
+
+  # --------------------------------------------------------------------
+  # MC/DC coverage.  Runs on Linux because GitHub-hosted Linux has a
+  # well-pinned clang/llvm toolchain; macOS runners would also work but
+  # cost ~10x as much per minute.  The Makefile's `mcdc` recipe calls
+  # `xcrun llvm-cov` / `xcrun llvm-profdata`; on Linux we shim `xcrun`
+  # so the underlying tool is invoked directly.
+  # --------------------------------------------------------------------
+  mcdc:
+    name: MC/DC coverage
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config \
+            tcl8.6 tcl8.6-dev \
+            clang-18 llvm-18 \
+            clang-format \
+            mandoc \
+            libssl-dev libunbound-dev libcurl4-openssl-dev
+          # Unversioned aliases the Makefile expects.
+          for tool in clang clang++ llvm-cov llvm-profdata; do
+            if ! command -v "$tool" >/dev/null && command -v "${tool}-18" >/dev/null; then
+              sudo ln -sf "$(command -v ${tool}-18)" "/usr/local/bin/$tool"
+            fi
+          done
+          if ! command -v tclsh >/dev/null; then
+            sudo ln -sf "$(command -v tclsh8.6)" /usr/local/bin/tclsh
+          fi
+          # `make mcdc` invokes `xcrun llvm-{profdata,cov}`; provide an
+          # xcrun shim that forwards to the underlying tool.
+          sudo tee /usr/local/bin/xcrun >/dev/null <<'SHIM'
+          #!/usr/bin/env bash
+          exec "$@"
+          SHIM
+          sudo chmod +x /usr/local/bin/xcrun
+
+      - name: Build instrumented + run suite
+        run: make mcdc
+
+      - name: Generate coverage report
+        run: |
+          make mcdc-report     | tee mcdc-report.txt
+          make mcdc-uncovered  > mcdc-uncovered.txt
+
+      - name: Summarize in job summary
+        run: |
+          {
+            echo '## MC/DC coverage'
+            echo
+            echo '```'
+            grep -E '^TOTAL|^plugins/|^src/' mcdc-report.txt | tail -40
+            echo '```'
+            echo
+            echo "Uncovered decision count: $(grep -c 'MC/DC Coverage for Decision: 0.00%' mcdc-uncovered.txt || true)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload MC/DC artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcdc-${{ github.sha }}
+          path: |
+            bin/mcdc.profdata
+            mcdc-report.txt
+            mcdc-uncovered.txt
+
+  # --------------------------------------------------------------------
+  # libFuzzer smoke pass.  60 seconds per harness, all six harnesses,
+  # on every PR.  Catches regressions that produce a quickly-reachable
+  # crash/leak/UBSan error without burning hours of CI minutes.
+  # ASan + UBSan are always linked in via the Makefile's FUZZ_FLAGS.
+  # --------------------------------------------------------------------
+  fuzz-smoke:
+    name: Fuzz smoke (libFuzzer)
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config \
+            tcl8.6 tcl8.6-dev \
+            clang-18 llvm-18 \
+            clang-format \
+            libssl-dev libunbound-dev libcurl4-openssl-dev
+          for tool in clang clang++ llvm-cov llvm-profdata; do
+            if ! command -v "$tool" >/dev/null && command -v "${tool}-18" >/dev/null; then
+              sudo ln -sf "$(command -v ${tool}-18)" "/usr/local/bin/$tool"
+            fi
+          done
+          if ! command -v tclsh >/dev/null; then
+            sudo ln -sf "$(command -v tclsh8.6)" /usr/local/bin/tclsh
+          fi
+
+      - name: Build all libFuzzer harnesses
+        run: make -j"$(getconf _NPROCESSORS_ONLN)" FUZZ_MODE=libfuzzer fuzz
+
+      - name: Smoke each harness (60s)
+        run: |
+          set -e
+          mkdir -p fuzz-artifacts
+          for target in eval expr list format harpy snk; do
+            echo "::group::fuzz_${target}"
+            ./bin/fuzz_${target} \
+              fuzz/corpus_${target} \
+              -max_total_time=60 \
+              -timeout=10 \
+              -print_final_stats=1 \
+              -artifact_prefix=fuzz-artifacts/${target}-
+            echo "::endgroup::"
+          done
+
+      - name: Upload fuzz artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-smoke-artifacts
+          path: fuzz-artifacts/
+          if-no-files-found: ignore
+
+  # --------------------------------------------------------------------
+  # AFL++ rotation campaign on a self-hosted runner.
+  #
+  # Triggers: nightly schedule + manual workflow_dispatch.
+  # Default budget: 24h (configurable via workflow_dispatch input).
+  # Runner labels: [self-hosted, linux, fuzz].
+  #
+  # The self-hosted runner is expected to have:
+  #   - Everything `test` and `fuzz-smoke` need (compilers, Tcl 8.6,
+  #     openssl/libcurl/libunbound headers, clang-format)
+  #   - afl-clang-fast and afl-fuzz from AFL++ on PATH
+  #   - Performance sysctls suitable for fuzzing
+  #     (kernel.core_pattern, cpufreq governor, etc. -- AFL++ docs)
+  # --------------------------------------------------------------------
+  fuzz-campaign:
+    name: Fuzz campaign (AFL++ rotation)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, fuzz]
+    # 26h cap: the default 24h campaign + slack for build / sync /
+    # artifact upload.  Override via inputs.fuzz_hours if you bump the
+    # campaign budget.
+    timeout-minutes: 1560
+    env:
+      TOTAL_HOURS: ${{ inputs.fuzz_hours || '24' }}
+      PARALLEL: ${{ inputs.fuzz_parallel || '4' }}
+      FUZZ_OUT: ${{ github.workspace }}/build/fuzz_rotate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sanity-check toolchain
+        run: |
+          set -e
+          tclsh <<<'puts $tcl_version'
+          which afl-clang-fast
+          which afl-fuzz
+          which clang
+          which clang-format
+
+      - name: Build AFL++ harnesses
+        run: bash tools/fuzz_rotate.sh build
+
+      - name: Print campaign plan
+        run: bash tools/fuzz_rotate.sh plan
+
+      - name: Run rotation campaign
+        run: bash tools/fuzz_rotate.sh start
+
+      - name: Summarize campaign
+        if: always()
+        run: |
+          bash tools/fuzz_rotate.sh summary | tee fuzz-summary.txt
+          {
+            echo '## AFL++ campaign summary'
+            echo
+            echo '```'
+            cat fuzz-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload crashes / hangs / logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-campaign-${{ github.run_id }}
+          path: |
+            build/fuzz_rotate/crashes
+            build/fuzz_rotate/hangs
+            build/fuzz_rotate/logs
+            fuzz-summary.txt
+          if-no-files-found: ignore
+
+      - name: Stop campaign (cleanup)
+        if: always()
+        run: bash tools/fuzz_rotate.sh stop || true
+
+      - name: Fail job if any crash was found
+        if: always()
+        run: |
+          # Treat any aggregated crash file as a CI failure so the
+          # nightly run goes red in the UI.  Hangs aren't auto-failures
+          # (TH8 has documented long-running scripts in the corpus).
+          set -e
+          if [ -d build/fuzz_rotate/crashes ] && \
+             find build/fuzz_rotate/crashes -type f | grep -q .; then
+            echo "::error::AFL++ campaign produced crash inputs"
+            exit 1
+          fi

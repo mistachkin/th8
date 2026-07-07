@@ -1,0 +1,103 @@
+###############################################################################
+#
+# signScript.th8 --
+#
+#     Sign a TH8 script.  Reads the script text from stdin, signs it
+#     with the test signing key, and writes the .b64sig signature to
+#     stdout.
+#
+# Usage (invoked by signScript.sh):
+#
+#     th8sh signScript.th8 < script.tcl > script.tcl.b64sig
+#
+# Requirements:
+#     - ENABLE_CRYPTOGRAPHY in compileOptions
+#     - [harpy] command available
+#     - th8testlib (for load_snk key loading)
+#     - tests/helpers/testkey2048.snk (the test signing key)
+#
+# Copyright (c) 2026 by Joe Mistachkin.  All rights reserved.
+#
+# See the file "license.terms" for information on usage and redistribution of
+# this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+###############################################################################
+
+#
+# Verify required features are present.
+#
+
+if {![info exists ::tcl_platform(compileOptions)]} then {
+  puts stdout "signScript: tcl_platform(compileOptions) not available"
+  exit 1
+}
+
+if {[lsearch -exact \
+    $::tcl_platform(compileOptions) ENABLE_CRYPTOGRAPHY] < 0} then {
+  puts stdout "signScript: ENABLE_CRYPTOGRAPHY not compiled in"
+  exit 1
+}
+
+if {[llength [info commands harpy]] == 0} then {
+  puts stdout "signScript: \[harpy\] command not available"
+  exit 1
+}
+
+#
+# Load the test library (provides load_snk and key_token).
+# Then, Verify the testlib commands are available.
+#
+
+if {[catch {package require th8testlib}]} then {
+  puts stdout "signScript: cannot load th8testlib"
+  exit 1
+}
+
+if {[llength [info commands th8testlib::load_snk]] == 0} then {
+  puts stdout "signScript: th8testlib::load_snk not available"
+  exit 1
+}
+
+#
+# Load the test signing key into the policy and get its token.
+#
+
+set snkPath tests/helpers/testkey2048.snk
+
+if {![file exists $snkPath]} then {
+    puts stdout "signScript: key file not found: $snkPath"
+    exit 1
+}
+
+set token [th8testlib::load_snk $snkPath]
+
+if {[string length $token] == 0} then {
+    puts stdout "signScript: unexpected token length: $token"
+    exit 1
+}
+
+#
+# Read the entire script from stdin, preserving exact bytes.
+#
+
+set script [read stdin]
+
+if {[string length $script] == 0} {
+    puts stdout "signScript: no input received on stdin"
+    exit 1
+}
+
+#
+# Sign the script text.
+#
+
+if {[catch {harpy sign $token $script} signature]} {
+    puts stdout "signScript: signing failed: $signature"
+    exit 1
+}
+
+#
+# Emit the .b64sig content to stdout.
+#
+
+puts -nonewline $signature

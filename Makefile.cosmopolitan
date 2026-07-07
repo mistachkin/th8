@@ -1,0 +1,454 @@
+# Makefile.cosmopolitan -- Build TH8 as an Actually Portable Executable
+#                          using Cosmopolitan Libc.
+#
+# The resulting th8sh.com runs natively on Linux, macOS, Windows,
+# FreeBSD, OpenBSD, and NetBSD from a single binary.
+#
+# Prerequisites:
+#   - Cosmopolitan Libc source tree in externals/cosmopolitan/
+#   - The cosmocc toolchain built (tool/cosmocc/bin/)
+#
+# Usage:
+#   make -f Makefile.cosmopolitan fresh     Build everything from scratch
+#   make -f Makefile.cosmopolitan shell     Build the APE shell only
+#   make -f Makefile.cosmopolitan clean     Remove build artifacts
+#
+# Optional:
+#   ENABLE_MIMALLOC=1   Use mimalloc allocator
+#   ENABLE_BIGINT=1     Enable arbitrary precision integers
+#   ENABLE_REGEXP=1     Enable regular expressions (default)
+#   DEBUG=1             Debug build with -O0 -g
+#
+
+# ----------------------------------------------------------------
+# Toolchain.
+# ----------------------------------------------------------------
+
+COSMO_DIR  = externals/cosmopolitan
+COSMOCC    = $(COSMO_DIR)/tool/cosmocc/bin/cosmocc
+COSMOAR    = $(COSMO_DIR)/tool/cosmocc/bin/cosmoar
+COSMORANLIB = $(COSMO_DIR)/tool/cosmocc/bin/cosmoranlib
+
+CC  = $(COSMOCC)
+AR  = $(COSMOAR)
+RL  = $(COSMORANLIB)
+
+# ----------------------------------------------------------------
+# Directories.
+# ----------------------------------------------------------------
+
+S = src/
+B = bin-cosmo/
+
+# External libraries.
+TOMMATH_DIR    = externals/tommath
+UTF_DIR        = externals/utf
+SPILORNIS_DIR  = externals/spilornis
+BESTLINE_DIR  = externals/bestline
+
+# ----------------------------------------------------------------
+# Feature gates.
+# ----------------------------------------------------------------
+
+ENABLE_REGEXP     ?= 1
+ENABLE_BIGINT     ?= 0
+ENABLE_MIMALLOC   ?= 0
+ENABLE_EXPRESSIONS ?= 1
+ENABLE_LOAD       ?= 1
+ENABLE_VARIABLES  ?= 1
+
+# Crypto and curl are disabled by default for cosmo builds
+# (OpenSSL is not available in Cosmopolitan without extra work).
+ENABLE_CRYPTOGRAPHY ?= 0
+ENABLE_LIBCURL      ?= 0
+
+# Plugin gates (all enabled by default).
+PLUGIN_CONTROL       ?= 1
+PLUGIN_EXPRESSIONS   ?= 1
+PLUGIN_EXTENSIBILITY ?= 1
+PLUGIN_FILE_SYSTEMS  ?= 1
+PLUGIN_FORMATTING    ?= 1
+PLUGIN_INTROSPECTION ?= 1
+PLUGIN_IO            ?= 1
+PLUGIN_LISTS         ?= 1
+PLUGIN_LOOPING       ?= 1
+PLUGIN_MANAGEMENT    ?= 1
+PLUGIN_PROCEDURES    ?= 1
+PLUGIN_STRINGS       ?= 1
+PLUGIN_TIMEKEEPING   ?= 1
+PLUGIN_VARIABLES     ?= 1
+
+# ----------------------------------------------------------------
+# Compose FEATURE_DEFS from gates.
+# ----------------------------------------------------------------
+
+FEATURE_DEFS = -DTH8_PLATFORM_COSMOPOLITAN
+
+ifeq ($(ENABLE_REGEXP),1)
+  FEATURE_DEFS += -DTH8_ENABLE_REGEXP
+endif
+ifeq ($(ENABLE_BIGINT),1)
+  FEATURE_DEFS += -DTH8_ENABLE_BIGINT
+  BIGINT_INCLUDES = -I$(TOMMATH_DIR)
+  BIGINT_OBJ = $(B)th8_bigint.o $(B)tommath_amalg.o
+endif
+ifeq ($(ENABLE_EXPRESSIONS),1)
+  FEATURE_DEFS += -DTH8_ENABLE_EXPRESSIONS
+endif
+ifeq ($(ENABLE_LOAD),1)
+  FEATURE_DEFS += -DTH8_ENABLE_LOAD
+endif
+ifeq ($(ENABLE_VARIABLES),1)
+  FEATURE_DEFS += -DTH8_ENABLE_VARIABLES
+endif
+ifeq ($(ENABLE_MIMALLOC),1)
+  FEATURE_DEFS += -DTH8_USE_MIMALLOC
+  MIMALLOC_INCLUDES = -Iexternals/mimalloc/include
+  MIMALLOC_OBJ = $(B)th8_mimalloc.o $(B)mimalloc_static.o
+endif
+
+# Plugin defines.
+ifeq ($(PLUGIN_CONTROL),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_CONTROL
+endif
+ifeq ($(PLUGIN_EXPRESSIONS),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_EXPRESSIONS
+endif
+ifeq ($(PLUGIN_EXTENSIBILITY),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_EXTENSIBILITY
+endif
+ifeq ($(PLUGIN_FILE_SYSTEMS),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_FILE_SYSTEMS
+endif
+ifeq ($(PLUGIN_FORMATTING),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_FORMATTING
+endif
+ifeq ($(PLUGIN_INTROSPECTION),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_INTROSPECTION
+endif
+ifeq ($(PLUGIN_IO),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_IO
+endif
+ifeq ($(PLUGIN_LISTS),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_LISTS
+endif
+ifeq ($(PLUGIN_LOOPING),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_LOOPING
+endif
+ifeq ($(PLUGIN_MANAGEMENT),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_MANAGEMENT
+endif
+ifeq ($(PLUGIN_PROCEDURES),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_PROCEDURES
+endif
+ifeq ($(PLUGIN_STRINGS),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_STRINGS
+endif
+ifeq ($(PLUGIN_TIMEKEEPING),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_TIMEKEEPING
+endif
+ifeq ($(PLUGIN_VARIABLES),1)
+  FEATURE_DEFS += -DTH8_PLUGIN_VARIABLES
+endif
+
+# ----------------------------------------------------------------
+# Compiler flags.
+# ----------------------------------------------------------------
+
+WARNINGS = -Wall -Wextra -Wno-unused-parameter -Wno-long-long
+
+INCLUDES = -I$(S) -I$(B) -Isrc/test -I$(UTF_DIR) -I$(SPILORNIS_DIR) \
+           $(BIGINT_INCLUDES) $(MIMALLOC_INCLUDES)
+
+ifeq ($(DEBUG),1)
+  OPTFLAGS = -O0 -g -DTH8_DEBUG
+else
+  OPTFLAGS = -O2 -DNDEBUG
+endif
+
+CFLAGS = $(WARNINGS) $(FEATURE_DEFS) $(OPTFLAGS) $(INCLUDES)
+
+# Regex requires additional include paths and relaxed warnings.
+REGEX_BUILD = externals/regex/build
+REGEX_CFLAGS = $(CFLAGS) -Isrc/plugins/regexp -I$(REGEX_BUILD) \
+               -Wno-sign-compare -Wno-unused-function -Wno-unused-variable
+
+# ----------------------------------------------------------------
+# Object files.
+# ----------------------------------------------------------------
+
+CORE_OBJ = \
+    $(B)th8_core.o $(B)th8_plat.o $(B)th8_hash.o $(B)th8_util.o \
+    $(B)th8_base64.o $(B)th8_expr.o $(B)th8_load.o $(B)th8_vars.o \
+    $(B)th8_glob.o $(B)th8_math.o $(B)th8_cache.o $(B)th8_plugin.o \
+    $(B)th8_control.o $(B)th8_expressions.o $(B)th8_extensibility.o \
+    $(B)th8_filesystems.o $(B)th8_formatting.o $(B)th8_introspection.o \
+    $(B)th8_io.o $(B)th8_lists.o $(B)th8_looping.o \
+    $(B)th8_management.o $(B)th8_procedures.o $(B)th8_strings.o \
+    $(B)th8_timekeeping.o $(B)th8_variables.o \
+    $(B)th8_harpy_cmds.o \
+    $(B)th8_lang.o $(B)th8_xlib.o \
+    $(B)th8_regex.o $(B)th8_nullio.o $(B)th8_ctime.o \
+    $(B)th8_cosmopolitan.o $(B)th8_posix.o $(B)th8_libc.o \
+    $(BIGINT_OBJ) $(MIMALLOC_OBJ) \
+    $(B)spilornis.o $(B)th8StubInit.o $(B)ConvertUTF_v2.o
+
+ifeq ($(ENABLE_REGEXP),1)
+CORE_OBJ += \
+    $(B)regex_regcomp.o $(B)regex_regexec.o $(B)regex_regfree.o \
+    $(B)regex_regprefix.o $(B)regex_regerror.o
+endif
+
+STATIC_LIB = $(B)libth8.a
+SHELL_BIN  = $(B)th8sh.com
+
+# ----------------------------------------------------------------
+# Targets.
+# ----------------------------------------------------------------
+
+.PHONY: all shell clean fresh genstubs bootstrap-check
+
+# Sanity-check that the Cosmopolitan toolchain is present before any
+# compile step.  Prints an actionable error pointing at
+# tools/bootstrap_cosmo.sh when the toolchain is missing, instead of
+# letting make fail with a cryptic "$(COSMOCC): not found" later.
+bootstrap-check:
+	@if [ ! -x "$(COSMOCC)" ]; then \
+	  echo "Cosmopolitan toolchain not found at $(COSMOCC)."; \
+	  echo "Run:  bash tools/bootstrap_cosmo.sh"; \
+	  echo "(see tools/bootstrap_cosmo.sh --help for options)"; \
+	  exit 1; \
+	fi
+
+all: bootstrap-check $(STATIC_LIB) $(SHELL_BIN)
+
+shell: bootstrap-check $(SHELL_BIN)
+
+$(B):
+	mkdir -p $(B)
+
+# ----------------------------------------------------------------
+# Static library.
+# ----------------------------------------------------------------
+
+$(STATIC_LIB): $(CORE_OBJ) | $(B)
+	$(AR) rcs $@ $(CORE_OBJ)
+	$(RL) $@
+
+# ----------------------------------------------------------------
+# Shell (APE binary).
+# ----------------------------------------------------------------
+
+$(SHELL_BIN): $(B)th8sh.o $(B)bestline.o $(STATIC_LIB) | $(B)
+	$(CC) $(CFLAGS) -static -o $@ \
+	    $(B)th8sh.o $(B)bestline.o $(STATIC_LIB) -lm -lpthread
+
+$(B)th8sh.o: $(S)th8sh.c $(S)th8.h $(S)th8_plat.h | $(B)
+	$(CC) $(CFLAGS) -DTH8_USE_BESTLINE \
+	    -I$(BESTLINE_DIR) -c -o $@ $(S)th8sh.c
+
+$(B)bestline.o: $(BESTLINE_DIR)/bestline.c | $(B)
+	$(CC) $(WARNINGS) $(OPTFLAGS) \
+	    -I$(BESTLINE_DIR) -c -o $@ $(BESTLINE_DIR)/bestline.c
+
+# ----------------------------------------------------------------
+# Core interpreter objects.
+# ----------------------------------------------------------------
+
+$(B)th8_core.o: $(S)th8_core.c $(S)th8.h $(S)th8_int.h $(S)th8_int_core.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_core.c
+
+$(B)th8_plat.o: $(S)th8_plat.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_plat.c
+
+$(B)th8_hash.o: $(S)th8_hash.c $(S)th8.h $(S)th8_hash.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_hash.c
+
+$(B)th8_util.o: $(S)th8_util.c $(S)th8.h $(S)th8_util.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_util.c
+
+$(B)th8_base64.o: $(S)th8_base64.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_base64.c
+
+$(B)th8_expr.o: $(S)th8_expr.c $(S)th8.h $(S)th8_int.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_expr.c
+
+$(B)th8_load.o: $(S)th8_load.c $(S)th8.h $(S)th8_int.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_load.c
+
+$(B)th8_vars.o: $(S)th8_vars.c $(S)th8.h $(S)th8_int.h $(S)th8_int_core.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_vars.c
+
+$(B)th8_glob.o: $(S)th8_glob.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_glob.c
+
+$(B)th8_math.o: $(S)th8_math.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_math.c
+
+$(B)th8_cache.o: $(S)th8_cache.c $(S)th8.h $(S)th8_int.h $(S)th8_hash.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_cache.c
+
+$(B)th8_plugin.o: $(S)th8_plugin.c $(S)th8.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_plugin.c
+
+$(B)th8_lang.o: $(S)th8_lang.c $(S)th8.h $(S)th8_int.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_lang.c
+
+$(B)th8_xlib.o: $(S)th8_xlib.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_xlib.c
+
+$(B)th8_ctime.o: $(S)th8_ctime.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_ctime.c
+
+# ----------------------------------------------------------------
+# Plugin objects.
+# ----------------------------------------------------------------
+
+$(B)th8_control.o: $(S)plugins/th8_control.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_control.c
+
+$(B)th8_expressions.o: $(S)plugins/th8_expressions.c $(S)th8.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_expressions.c
+
+$(B)th8_extensibility.o: $(S)plugins/th8_extensibility.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_extensibility.c
+
+$(B)th8_filesystems.o: $(S)plugins/th8_filesystems.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_filesystems.c
+
+$(B)th8_formatting.o: $(S)plugins/th8_formatting.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_formatting.c
+
+$(B)th8_introspection.o: $(S)plugins/th8_introspection.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_introspection.c
+
+$(B)th8_io.o: $(S)plugins/th8_io.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_io.c
+
+$(B)th8_lists.o: $(S)plugins/th8_lists.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_lists.c
+
+$(B)th8_looping.o: $(S)plugins/th8_looping.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_looping.c
+
+$(B)th8_management.o: $(S)plugins/th8_management.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_management.c
+
+$(B)th8_procedures.o: $(S)plugins/th8_procedures.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_procedures.c
+
+$(B)th8_strings.o: $(S)plugins/th8_strings.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_strings.c
+
+$(B)th8_timekeeping.o: $(S)plugins/th8_timekeeping.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_timekeeping.c
+
+$(B)th8_variables.o: $(S)plugins/th8_variables.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_variables.c
+
+$(B)th8_harpy_cmds.o: $(S)plugins/th8_harpy.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)plugins/th8_harpy.c
+
+# ----------------------------------------------------------------
+# Platform objects.
+# ----------------------------------------------------------------
+
+$(B)th8_cosmopolitan.o: $(S)th8_cosmopolitan.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_cosmopolitan.c
+
+$(B)th8_posix.o: $(S)th8_posix.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_posix.c
+
+$(B)th8_libc.o: $(S)th8_libc.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_libc.c
+
+$(B)th8_nullio.o: $(S)th8_nullio.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_nullio.c
+
+# ----------------------------------------------------------------
+# Regex engine.
+# ----------------------------------------------------------------
+
+ifeq ($(ENABLE_REGEXP),1)
+$(B)th8_regex.o: $(S)th8_regex.c $(S)th8.h | $(B)
+	$(CC) $(REGEX_CFLAGS) -c -o $@ $(S)th8_regex.c
+
+$(B)regex_regcomp.o: $(REGEX_BUILD)/regcomp.c | $(B)
+	$(CC) $(REGEX_CFLAGS) -c -o $@ $(REGEX_BUILD)/regcomp.c
+
+$(B)regex_regexec.o: $(REGEX_BUILD)/regexec.c | $(B)
+	$(CC) $(REGEX_CFLAGS) -c -o $@ $(REGEX_BUILD)/regexec.c
+
+$(B)regex_regfree.o: $(REGEX_BUILD)/regfree.c | $(B)
+	$(CC) $(REGEX_CFLAGS) -c -o $@ $(REGEX_BUILD)/regfree.c
+
+$(B)regex_regprefix.o: $(REGEX_BUILD)/regprefix.c | $(B)
+	$(CC) $(REGEX_CFLAGS) -c -o $@ $(REGEX_BUILD)/regprefix.c
+
+$(B)regex_regerror.o: $(REGEX_BUILD)/regerror.c | $(B)
+	$(CC) $(REGEX_CFLAGS) -c -o $@ $(REGEX_BUILD)/regerror.c
+else
+$(B)th8_regex.o: $(S)th8_regex.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_regex.c
+endif
+
+# ----------------------------------------------------------------
+# External libraries.
+# ----------------------------------------------------------------
+
+$(B)spilornis.o: $(SPILORNIS_DIR)/Spilornis.c | $(B)
+	$(CC) $(CFLAGS) -Wno-sign-compare -c -o $@ $(SPILORNIS_DIR)/Spilornis.c
+
+$(B)ConvertUTF_v2.o: $(UTF_DIR)/ConvertUTF_v2.c | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(UTF_DIR)/ConvertUTF_v2.c
+
+$(B)th8StubInit.o: $(S)th8StubInit.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8StubInit.c
+
+# ----------------------------------------------------------------
+# Optional: bigint (libtommath).
+# ----------------------------------------------------------------
+
+ifeq ($(ENABLE_BIGINT),1)
+$(B)tommath_amalg.o: $(B)tommath_amalg.c | $(B)
+	$(CC) $(WARNINGS) $(OPTFLAGS) -I$(TOMMATH_DIR) -c -o $@ $(B)tommath_amalg.c
+
+$(B)tommath_amalg.c: $(TOMMATH_DIR)/tommath.h
+	tclsh tools/tommath_amalg.tcl $(B)
+
+$(B)th8_bigint.o: $(S)th8_bigint.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_bigint.c
+endif
+
+# ----------------------------------------------------------------
+# Optional: mimalloc.
+# ----------------------------------------------------------------
+
+ifeq ($(ENABLE_MIMALLOC),1)
+MI_SRC = externals/mimalloc/src
+MI_INC = externals/mimalloc/include
+
+$(B)mimalloc_static.o: $(MI_SRC)/static.c | $(B)
+	$(CC) -O2 -DMI_STATIC_LIB -I$(MI_INC) -I$(MI_SRC) \
+	    -Wno-unused-parameter -c -o $@ $(MI_SRC)/static.c
+
+$(B)th8_mimalloc.o: $(S)th8_mimalloc.c $(S)th8.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $(S)th8_mimalloc.c
+endif
+
+# ----------------------------------------------------------------
+# Stubs generation (requires tclsh on build host).
+# ----------------------------------------------------------------
+
+genstubs:
+	tclsh tools/mkstubs.tcl $(S)th8.h $(S)th8Decls.h $(S)th8StubInit.c
+	clang-format -i --style=file $(S)th8Decls.h $(S)th8StubInit.c
+
+# ----------------------------------------------------------------
+# Cleanup.
+# ----------------------------------------------------------------
+
+clean:
+	rm -rf $(B)
+
+fresh: clean genstubs all

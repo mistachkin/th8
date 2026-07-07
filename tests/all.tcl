@@ -1,0 +1,303 @@
+###############################################################################
+#
+# all.tcl --
+#
+# Copyright (c) 2026 by Joe Mistachkin.  All rights reserved.
+#
+# See the file "license.terms" for information on usage and redistribution of
+# this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+###############################################################################
+
+if {[catch {package require Tcl}] == 0 || \
+    [catch {package require Eagle}] == 0} then {
+  lappend ::auto_path [file join [file normalize \
+      [file dirname [file dirname [info script]]]] lib th8]
+
+  lappend ::auto_path [file join [file normalize \
+      [file dirname [file dirname [info script]]]] lib Standard1.0]
+}
+
+###############################################################################
+
+package require th8
+package require th8test
+package require th8test_exec
+package require th8test_load
+package require th8sqlite3
+
+###############################################################################
+
+initializeTests
+
+###############################################################################
+
+detectLoadLib
+
+###############################################################################
+
+setupLoadConstraints
+setupCryptoConstraints
+setupFaultConstraints
+setupSqliteConstraints
+setupFileConstraints
+setupCommandConstraints
+setupSubCommandConstraints
+setupNamespaceConstraints
+setupCurlConstraints
+setupCommonConstraints
+
+###############################################################################
+
+runAllTests {
+  after.tcl
+  append.tcl
+  arrayops.tcl
+  base64.tcl
+  benchmark.tcl
+  bigint.tcl
+  binary.tcl
+  catch.tcl
+  chanredir.tcl
+  clockext.tcl
+  controlflow.tcl
+  coroutine.tcl
+  coverage/coverage.tcl
+  coverage/coverage2.tcl
+  coverage/coverage3.tcl
+  coverage/coverage4.tcl
+  coverage/coverage5.tcl
+  coverage/coverage6.tcl
+  coverage/coverage7.tcl
+  coverage/coverage8.tcl
+  coverage/coverage9.tcl
+  coverage/coverage_argc_edges.tcl
+  coverage/coverage_afmapget_nocreate_mcdc.tcl
+  coverage/coverage_array_search.tcl
+  coverage/coverage_array_search_buckets.tcl
+  coverage/coverage_backslash_escapes.tcl
+  coverage/coverage_bigint_mcdc.tcl
+  coverage/coverage_bigint_misc.tcl
+  coverage/coverage_brace_bslash_eol.tcl
+  coverage/coverage_bslash_nl_eof.tcl
+  coverage/coverage_bug22_math_null.tcl
+  coverage/coverage_bug25_diag.tcl
+  coverage/coverage_cache_double_remove_mcdc.tcl
+  coverage/coverage_channel_control_fault.tcl
+  coverage/coverage_channel_reads.tcl
+  coverage/coverage_char_classify_neg.tcl
+  coverage/coverage_comment_backslash.tcl
+  coverage/coverage_control_misc.tcl
+  coverage/coverage_core_mcdc.tcl
+  coverage/coverage_crlf_translate.tcl
+  coverage/coverage_curl_scheme.tcl
+  coverage/coverage_curl_uri.tcl
+  coverage/coverage_dict_with_oom.tcl
+  coverage/coverage_double_inf_prefix.tcl
+  coverage/coverage_double_long.tcl
+  coverage/coverage_double_precision.tcl
+  coverage/coverage_expr_arith.tcl
+  coverage/coverage_expr_bigint_type.tcl
+  coverage/coverage_expr_int_min_no_bigint.tcl
+  coverage/coverage_expr_logical.tcl
+  coverage/coverage_expr_partial.tcl
+  coverage/coverage_expr_strict.tcl
+  coverage/coverage_expr_top_comma.tcl
+  coverage/coverage_expr_var_assign.tcl
+  coverage/coverage_embedded_key_faults_mcdc.tcl
+  coverage/coverage_env_kv.tcl
+  coverage/coverage_env_mcdc.tcl
+  coverage/coverage_failclock.tcl
+  coverage/coverage_failgetcwd.tcl
+  coverage/coverage_fault_anywhere.tcl
+  coverage/coverage_fault_null_cb.tcl
+  coverage/coverage_filesystems.tcl
+  coverage/coverage_file_paths_2.tcl
+  coverage/coverage_flag_set_highbit_mcdc.tcl
+  coverage/coverage_flags_brace.tcl
+  coverage/coverage_flags_colon.tcl
+  coverage/coverage_flags_have_null_mcdc.tcl
+  coverage/coverage_flags_have_wildcards_mcdc.tcl
+  coverage/coverage_flags_hex.tcl
+  coverage/coverage_flags_hex_sub0.tcl
+  coverage/coverage_flags_maxkeys.tcl
+  coverage/coverage_flags_options.tcl
+  coverage/coverage_flags_show.tcl
+  coverage/coverage_flags_show_multi.tcl
+  coverage/coverage_flags_space_skip.tcl
+  coverage/coverage_flags_wildcards.tcl
+  coverage/coverage_format_float.tcl
+  coverage/coverage_format_g_signed.tcl
+  coverage/coverage_foreach_pairs.tcl
+  coverage/coverage_format_specs.tcl
+  coverage/coverage_glob.tcl
+  coverage/coverage_glob_steplimit.tcl
+  coverage/coverage_harpy_flags_ann.tcl
+  coverage/coverage_harpy_sigload_mcdc.tcl
+  coverage/coverage_harpy_nondigit.tcl
+  coverage/coverage_harpy_range.tcl
+  coverage/coverage_harpy_sep.tcl
+  coverage/coverage_harpy_subcmd.tcl
+  coverage/coverage_harpy_timestamp.tcl
+  coverage/coverage_harpy_unknown_ann.tcl
+  coverage/coverage_import_noexport.tcl
+  coverage/coverage_info_level_mcdc.tcl
+  coverage/coverage_info_misc.tcl
+  coverage/coverage_info_procs_mixed.tcl
+  coverage/coverage_io_gets_crlf.tcl
+  coverage/coverage_io_misc.tcl
+  coverage/coverage_io_read.tcl
+  coverage/coverage_io_read_stdin.tcl
+  coverage/coverage_json_dispatch.tcl
+  coverage/coverage_list_integer_err.tcl
+  coverage/coverage_list_oom_mcdc.tcl
+  coverage/coverage_lists_misc.tcl
+  coverage/coverage_load_mcdc.tcl
+  coverage/coverage_load_name_match_mcdc.tcl
+  coverage/coverage_loop_edges.tcl
+  coverage/coverage_lsort_dict.tcl
+  coverage/coverage_lsort_index.tcl
+  coverage/coverage_lsort_real.tcl
+  coverage/coverage_math_mcdc.tcl
+  coverage/coverage_math_misc.tcl
+  coverage/coverage_namespace.tcl
+  coverage/coverage_namespace_empty.tcl
+  coverage/coverage_namespace_export.tcl
+  coverage/coverage_namespace_import.tcl
+  coverage/coverage_namespace_misc.tcl
+  coverage/coverage_namespace_short.tcl
+  coverage/coverage_ns_eval_multi.tcl
+  coverage/coverage_nspat_resolve.tcl
+  coverage/coverage_null_guards.tcl
+  coverage/coverage_oom_dual_pointer.tcl
+  coverage/coverage_oom_filtered.tcl
+  coverage/coverage_package_states.tcl
+  coverage/coverage_package_versions.tcl
+  coverage/coverage_parse_command_internal.tcl
+  coverage/coverage_parser.tcl
+  coverage/coverage_partial_struct.tcl
+  coverage/coverage_path_dotcomp.tcl
+  coverage/coverage_path_under_base.tcl
+  coverage/coverage_plat_mcdc.tcl
+  coverage/coverage_platform_cb_null.tcl
+  coverage/coverage_plugin_mcdc.tcl
+  coverage/coverage_policy_eval_pre_mcdc.tcl
+  coverage/coverage_policy_find_key_mcdc.tcl
+  coverage/coverage_policy_verify_data_mcdc.tcl
+  coverage/coverage_posix_path_mcdc.tcl
+  coverage/coverage_proc_args.tcl
+  coverage/coverage_proc_lambda.tcl
+  coverage/coverage_proc_param.tcl
+  coverage/coverage_proc_unsupported.tcl
+  coverage/coverage_protected_null.tcl
+  coverage/coverage_quick_pairs.tcl
+  coverage/coverage_random_bytes.tcl
+  coverage/coverage_read_opts.tcl
+  coverage/coverage_samefile.tcl
+  coverage/coverage_scan.tcl
+  coverage/coverage_scan_dual_e.tcl
+  coverage/coverage_secure_canary_noppage_mcdc.tcl
+  coverage/coverage_secure_dispatch.tcl
+  coverage/coverage_secure_load_blob_mcdc.tcl
+  coverage/coverage_secure_setvar_nonseure_mcdc.tcl
+  coverage/coverage_sensitive_release.tcl
+  coverage/coverage_shell_subprocess.tcl
+  coverage/coverage_string_50pct.tcl
+  coverage/coverage_string_list_nocase.tcl
+  coverage/coverage_switch_nocase.tcl
+  coverage/coverage_switch_oom.tcl
+  coverage/coverage_sysvar_mcdc.tcl
+  coverage/coverage_tcl_precision.tcl
+  coverage/coverage_tokenizer.tcl
+  coverage/coverage_var_misc.tcl
+  coverage/coverage_variable_single_colon.tcl
+  coverage/coverage_varlinks_local.tcl
+  coverage/coverage_vwait_misc.tcl
+  coverage/coverage_wide_cache_oom.tcl
+  coverage/coverage_wrong_args.tcl
+  coverage/coverage_xlib_empty.tcl
+  coverage/regex/patterns_deep.tcl
+  coverage/regex/regexp_switches.tcl
+  coverage/regex/regsub_coverage.tcl
+  crypto.tcl
+  curl.tcl
+  datamodel.tcl
+  debug.tcl
+  dict.tcl
+  downlevel.tcl
+  eval.tcl
+  expansion.tcl
+  flags.tcl
+  evalfile.tcl
+  evaluation.tcl
+  event.tcl
+  exprformat.tcl
+  expr.tcl
+  fault/fault1.tcl
+  file.tcl
+  filetail.tcl
+  for.tcl
+  foreach.tcl
+  fuzzing.tcl
+  format.tcl
+  harpy.tcl
+  mathfunc.tcl
+  gets.tcl
+  hooks.tcl
+  if.tcl
+  incr.tcl
+  info.tcl
+  infodefault.tcl
+  infosubcmds.tcl
+  introspect.tcl
+  join.tcl
+  kv_json.tcl
+  lambda.tcl
+  lassign.tcl
+  lappend.tcl
+  lexical.tcl
+  lindex.tcl
+  list.tcl
+  liststring.tcl
+  listutf8.tcl
+  llength.tcl
+  load.tcl
+  lrange.tcl
+  lremove.tcl
+  lreplace.tcl
+  lreverse.tcl
+  lsearch.tcl
+  lsort.tcl
+  mathfunc2.tcl
+  namespace.tcl
+  newcmds.tcl
+  newfeatures.tcl
+  package.tcl
+  pendingdelete.tcl
+  platform.tcl
+  proc.tcl
+  pwdcd.tcl
+  regex.tcl
+  regexfull.tcl
+  regexsyntax.tcl
+  safealloc.tcl
+  scan.tcl
+  secure.tcl
+  security.tcl
+  sensitive.tcl
+  security/sandbox_escape.tcl
+  security/sandbox_info.tcl
+  security/sandbox_limits.tcl
+  security/sandbox_resource.tcl
+  set.tcl
+  split.tcl
+  string.tcl
+  subst.tcl
+  suspend.tcl
+  switch.tcl
+  try.tcl
+  unset.tcl
+  variable.tcl
+  varsystem.tcl
+  while.tcl
+}

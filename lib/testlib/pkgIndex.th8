@@ -1,0 +1,27 @@
+###############################################################################
+#
+# pkgIndex.th8 --
+#
+# TH8 Package Index File
+#
+# Copyright (c) 2026 by Joe Mistachkin.  All rights reserved.
+#
+# See the file "license.terms" for information on usage and redistribution of
+# this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+###############################################################################
+
+if {![package vsatisfies [package provide Tcl] 8.4]} then {return}
+if {[string length [package provide Eagle]] > 0} then {return}
+if {![package vsatisfies [package provide TH8] 1.0]} then {return}
+
+if {[info exists tcl_platform(platform)] && \
+    $tcl_platform(platform) eq "windows"} then {
+  package ifneeded th8testlib 1.0 \
+      [list load [file join [file dirname [info nameofexecutable]] \
+      th8test[info sharedlibextension]]:Th8test]
+} else {
+  package ifneeded th8testlib 1.0 \
+      [list load [file join [file dirname [info nameofexecutable]] \
+      libth8test[info sharedlibextension]]:Th8test]
+}

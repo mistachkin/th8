@@ -1,0 +1,61 @@
+# tests/.unset_whitelist -- subject-test allowlist for tools/scan_unset_placement.tcl
+#
+# Each entry whitelists a test name (or test-name [string match] glob)
+# where one of the cleanup-class commands -- unset, array unset, file
+# delete, namespace delete, close, rename -- is the test's subject.
+# Placing those commands in `-body` or `-setup` rather than `-cleanup`
+# is intentional for these tests; the scanner should not flag them.
+#
+# Format: one entry per line:
+#   <test-name-glob>            <reason>
+#
+# Lines starting with '#' are comments; blank lines are ignored.  The
+# test-name glob is matched via Tcl's [string match].
+#
+# Verified against the iter #4 audit-loop sampling (3 of 51 confirmed
+# subject-tests by inspection) plus the obvious file-by-file rationale:
+#
+#   tests/unset.tcl, tests/varsystem.tcl, tests/arrayops.tcl test the
+#   variable / array commands directly.
+#   tests/dict.tcl dict-19.2 verifies R-62849-08308 (dict-update binding
+#   unset).
+#   tests/newcmds.tcl infovarlinks-* test variable-link cleanup.
+#   tests/pendingdelete.tcl pendingdelete-4.1 tests rename-to-empty.
+#   tests/coverage/* drives subject vectors in MC/DC test code where
+#   the cleanup-class command itself is the line being covered.
+
+# tests/unset.tcl -- the unset command is the entire subject.
+unset-*                         unset command itself
+
+# tests/varsystem.tcl -- variable / array unset semantics.
+varsystem-4.*                   variable unset semantics
+varsystem-6.*                   array unset semantics
+
+# tests/arrayops.tcl -- array unset / single-element unset semantics.
+arrayops-5.6                    array unset is the subject
+arrayops-5.7a                   unset of array element is the subject
+
+# tests/dict.tcl -- dict update binding unset.
+dict-19.2                       dict update binding unset removes key
+
+# tests/newcmds.tcl -- variable-link cleanup tests.
+infovarlinks-1.3                variable-link unset is the subject
+infovarlinks-1.6                variable-link unset is the subject
+
+# tests/pendingdelete.tcl -- rename-to-empty teardown semantics.
+pendingdelete-4.1               rename-to-empty is the test subject
+
+# tests/coverage/ -- MC/DC coverage drivers where the cleanup-class
+# command is the line being covered.
+coverage2-2.4                   rename of nonexistent command is the subject
+coverage5-1.8                   namespace delete with no args is the subject
+coverage5-6.*                   array unset MC/DC coverage
+coverage8-11.1                  close of bad channel name is the subject
+arrsearch-4.2                   array unset mid-search is the subject
+core_mcdc-2.1                   unset mid-search drives MC/DC vector
+io_misc-2.*                     close with bad args coverage
+pa_cov-1.8                      rename-to-empty drives proc-arg cleanup vector
+scan_cov-6.3                    scan-leaves-var-unset semantics
+scan_cov-8.1                    scan-leaves-var-unset semantics
+scandualE-1.1                   scan-leaves-var-unset semantics
+secure_setvar_nonsecure-1.1     unset triggers secure setvar nonsecure path

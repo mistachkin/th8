@@ -1,0 +1,19 @@
+# COSMO_VERSION -- pinned Cosmopolitan toolchain release for
+# tools/bootstrap_cosmo.sh.
+#
+# Sourced as a POSIX shell fragment.  See
+# https://github.com/jart/cosmopolitan/releases for available
+# release tags and the corresponding cosmocc-<version>.zip
+# SHA-256 checksums.
+#
+# When updating, bump both fields together and re-run:
+#     bash tools/bootstrap_cosmo.sh --force
+#
+# The toolchain installed by a fresh-clone bootstrap of this
+# repo is cosmocc (GCC) 14.1.0; values below identify the
+# upstream cosmopolitan release whose cosmocc tarball matches.
+# A SHA-256 placeholder is recorded here; verify against the
+# release notes before any download is performed.
+
+COSMOCC_VERSION=4.0.2
+COSMOCC_SHA256=0000000000000000000000000000000000000000000000000000000000000000

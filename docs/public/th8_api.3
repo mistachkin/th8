@@ -1,0 +1,2144 @@
+.TH TH8_API 3 "June 22, 2026" "TH8" "TH8 Library Functions"
+.SH NAME
+th8_api \- TH8 interpreter C programming interface
+.SH SYNOPSIS
+.B #include "th8.h"
+.SH DESCRIPTION
+This manual page documents the C programming interface to the TH8
+interpreter library.  All functions listed here are declared in
+.B th8.h
+and are available to applications that link against
+.BR libth8 .
+.SS "Interpreter Lifecycle"
+.TP
+.BI "Th8_Interp *Th8_CreateInterp(Th8_Platform *" pPlatform ");"
+Create a new interpreter.  The platform table is copied internally;
+the caller may free or reuse
+.I pPlatform
+after this call.  Returns NULL on allocation failure.
+.TP
+.BI "void Th8_DeleteInterp(Th8_Interp *" interp ");"
+Destroy the interpreter and free all resources.
+.TP
+.BI "int Th8_RestoreInterp(Th8_Interp *" interp ", int " flags ");"
+Re-create built-in state after destructive operations (e.g.\&
+.BR "namespace delete ::" ).
+.I flags
+is a bitmask:
+.BR TH8_RESTORE_COMMANDS " (0x01),"
+.BR TH8_RESTORE_VARIABLES " (0x02),"
+.BR TH8_RESTORE_ALL " (0x03)."
+.SS "Platform Composability"
+.TP
+.BI "int Th8_MergePlatform(Th8_Platform *" pDst ", const Th8_Platform *" pSrc ");"
+For each NULL callback slot in
+.IR pDst ,
+copy the value from
+.IR pSrc .
+If the
+.B nVersion
+fields of
+.I pDst
+and
+.I pSrc
+differ, the merge is skipped and
+.B TH8_ERROR
+is returned to prevent struct layout mismatches.
+Returns
+.B TH8_OK
+on success.  The
+.B pCtx
+field is never merged.  Typical usage:
+.RS
+.nf
+.ft CW
+Th8_Platform plat = *Th8_GetPosixPlatform();
+Th8_MergePlatform(&plat, Th8_GetLibcPlatform());
+interp = Th8_CreateInterp(&plat);
+.ft
+.fi
+.RE
+.TP
+.BI "Th8_Platform *Th8_GetPosixPlatform(void);"
+Returns the POSIX platform (I/O, time, stack bounds).
+Memory and CRT callbacks are NULL (provided by libc platform).
+.TP
+.BI "Th8_Platform *Th8_GetWin32Platform(void);"
+Returns the Win32 platform.
+.TP
+.BI "Th8_Platform *Th8_GetNullIoPlatform(void);"
+Returns the null I/O platform.  All I/O callbacks are implemented
+but produce no side effects: data retrieval returns empty,
+output is discarded, binary loading is forbidden,
+.B "file exists"
+returns 0, and
+.B "file normalize"
+returns the path verbatim.  Merge with
+.B Th8_GetLibcPlatform
+for a fully sandboxed interpreter.
+.TP
+.BI "Th8_Platform *Th8_GetLibcPlatform(void);"
+Returns the C runtime platform (memory, memcpy, math, string,
+qsort, vsnprintf).
+.SS "Script Evaluation"
+.TP
+.BI "int Th8_Eval(Th8_Interp *" interp ", int " iFrame ", const char *" zProg ", size_t " nProg ", const char *" zName ", size_t " nName ");"
+Evaluate script
+.I zProg
+.RI ( nProg
+bytes, or
+.B TH8_NOLEN
+for NUL-terminated).
+.I iFrame
+controls scope: 0\ =\ current, negative\ =\ relative
+caller, positive\ =\ absolute level.
+.I zName / nName
+is the script origin name (e.g., the file name from which the
+script was loaded); pass NULL/0 if unknown.  The origin name is
+forwarded to the pre-eval callback (see
+.BR Th8_SetPreEvalCallback ),
+enabling policy decisions based on the source of the script.
+.TP
+.BI "int Th8_EvalDownlevel(Th8_Interp *" interp ", const char *" zProg ", size_t " nProg ", const char *" zName ", size_t " nName ");"
+Evaluate a script in the caller's frame (equivalent to
+.B Th8_Eval
+with iFrame=\-1).  This is the implementation of
+.BR "[uplevel 1 ...]" .
+.I zName / nName
+is the script origin name (NULL/0 if unknown), forwarded to the
+pre-eval callback.
+.TP
+.BI "int Th8_Expr(Th8_Interp *" interp ", const char *" zExpr ", size_t " nExpr ", const char *" zName ", size_t " nName ");"
+Evaluate an expression.  Result is set on the interpreter.
+.I zName / nName
+is the script origin name (NULL/0 if unknown), forwarded to the
+pre-eval callback.
+.TP
+.BI "int Th8_Complete(const char *" zScript ", size_t " nScript ");"
+Returns 1 if braces, brackets, and quotes are balanced
+(the script can be evaluated).  Returns 0 if more input is
+needed.  Does not require an interpreter.
+.SS "NRE (Non-Recursive Engine)"
+.TP
+.BI "int Th8_NREval(Th8_Interp *" interp ", const char *" zProg ", size_t " nProg ", const char *" zName ", size_t " nName ");"
+Non-recursive eval: pushes the script onto the NRE callback
+chain.  Used by NRE-converted commands instead of
+.BR Th8_Eval .
+.I zName / nName
+is the script origin name (NULL/0 if unknown), forwarded to the
+pre-eval callback.
+.TP
+.BI "void Th8_NRAddCallback(Th8_Interp *" interp ", Th8_CallbackProc " xProc ", void *" p0 ", void *" p1 ", void *" p2 ", void *" p3 ");"
+Push a continuation callback.  Callbacks are LIFO: push the
+continuation first, then call
+.BR Th8_NREval .
+.TP
+.BI "int Th8_NRInFrame(Th8_Interp *" interp ", Th8_CallbackProc " xCall ", void *" p0 ", void *" p1 ", void *" p2 ", void *" p3 ");"
+Push a new call frame with automatic cleanup.  The work callback
+.I xCall
+runs first; then the frame is popped and freed.
+.TP
+.BI "int Th8_EvalTrampoline(Th8_Interp *" interp ");"
+Drain all pending NRE callbacks.
+.SS "Variables"
+.TP
+.BI "int Th8_GetVar(Th8_Interp *" interp ", const char *" zVar ", size_t " nVar ");"
+Read a variable.  On success, the interpreter result is the value.
+.TP
+.BI "int Th8_SetVar(Th8_Interp *" interp ", const char *" zVar ", size_t " nVar ", const char *" zVal ", size_t " nVal ");"
+Set a variable, creating it if necessary.
+.TP
+.BI "int Th8_UnsetVar(Th8_Interp *" interp ", const char *" zVar ", size_t " nVar ");"
+Remove a variable.
+.TP
+.BI "int Th8_ExistsVar(Th8_Interp *" interp ", const char *" zVar ", size_t " nVar ");"
+Returns 1 if the variable exists, 0 otherwise.
+.TP
+.BI "int Th8_LinkVar(Th8_Interp *" interp ", const char *" zLocal ", size_t " nLocal ", int " iFrame ", const char *" zRemote ", size_t " nRemote ");"
+Link a local variable to a variable in another frame.
+Used by
+.B upvar
+and
+.BR global .
+.SS "Commands"
+.TP
+.BI "int Th8_CreateCommand(Th8_Interp *" interp ", const char *" zName ", Th8_CommandProc " xProc ", void *" pContext ", void (*" xDel ")(Th8_Interp*, void*));"
+Register a new command.  If a command with the same name exists,
+it is replaced (and its
+.I xDel
+is called).
+.TP
+.BI "int Th8_RenameCommand(Th8_Interp *" interp ", const char *" zOld ", size_t " nOld ", const char *" zNew ", size_t " nNew ");"
+Rename or delete a command.  If
+.I zNew
+is empty, the command is deleted.
+.TP
+.BI "void Th8_SetCommandCopy(Th8_Interp *" interp ", const char *" zName ", void *(*" xCopy ")(Th8_Interp*, void*));"
+Set a deep-copy callback for safe namespace import.
+.SS "Result Management"
+.TP
+.BI "int Th8_SetResult(Th8_Interp *" interp ", const char *" z ", size_t " n ");"
+Set the interpreter result string.
+.TP
+.BI "const char *Th8_GetResult(Th8_Interp *" interp ", size_t *" pn ");"
+Return a pointer to the current result.
+.TP
+.BI "char *Th8_TakeResult(Th8_Interp *" interp ", size_t *" pn ");"
+Transfer ownership of the result to the caller.
+The caller must free the returned pointer via
+.BR Th8_Free .
+Refuses for sensitive results: returns NULL and replaces the
+interpreter result with an error message.  Sensitive results
+must be consumed in place via
+.BR Th8_GetResult .
+.TP
+.BI "int Th8_IsResultSensitive(Th8_Interp *" interp ");"
+Return non-zero if the current result is marked sensitive.
+Always available; on builds without
+.B TH8_ENABLE_CRYPTOGRAPHY
+returns 0 because no API is available to set the flag.
+.TP
+.BI "void Th8_MarkResultSensitive(Th8_Interp *" interp ");"
+Mark the current result as containing sensitive plaintext.
+The buffer is securely zeroed via
+.B Th8_SecureZero
+before being freed on the next overwrite or clear.
+Idempotent.  Available only when TH8 is built with
+.BR TH8_ENABLE_CRYPTOGRAPHY .
+.TP
+.BI "int Th8_SetResultSensitive(Th8_Interp *" interp ", const char *" z ", size_t " n ");"
+Set the interpreter result to a copy of
+.I z
+.RI ( n
+bytes) stored in a per-interpreter mlock'd, guard-paged
+backing region.  The result is automatically marked
+sensitive.  Returns
+.B TH8_OK
+on success or
+.B TH8_ERROR
+if the value exceeds the region's capacity (one OS page minus
+the integrity canary) or if the region cannot be allocated.
+The protected region is allocated lazily on first call and
+reused for the lifetime of the interpreter.
+Available only when TH8 is built with
+.BR TH8_ENABLE_CRYPTOGRAPHY .
+.TP
+.BI "void Th8_SetResultInt(Th8_Interp *" interp ", int " iVal ");"
+Set the result to the string representation of
+.IR iVal .
+.TP
+.BI "void Th8_SetResultWideInt(Th8_Interp *" interp ", th8_int64_t " wVal ");"
+Set the result to the string representation of a 64-bit integer.
+.SS "String and List Operations"
+.TP
+.BI "int Th8_StringAppend(Th8_Interp *" interp ", char **" pz ", size_t *" pn ", const char *" zApp ", size_t " nApp ");"
+Append
+.I nApp
+bytes to the buffer at
+.IR *pz .
+The buffer is grown as needed.
+.TP
+.BI "int Th8_SplitList(Th8_Interp *" interp ", const char *" zList ", size_t " nList ", char ***" paz ", size_t **" pan ", int *" pn ");"
+Parse a Tcl list into element arrays.  Caller frees with
+.BR Th8_Free .
+.TP
+.BI "int Th8_ListAppend(Th8_Interp *" interp ", char **" pz ", size_t *" pn ", const char *" zElem ", size_t " nElem ");"
+Append a properly quoted element to a list string.
+.SS "Type Conversion"
+.TP
+.BI "int Th8_ToInt(Th8_Interp *" interp ", const char *" z ", size_t " n ", int *" piVal ");"
+Parse a string as a 32-bit integer.  Supports decimal,
+.B 0x
+hex,
+.B 0o
+octal,
+.B 0b
+binary, and leading-zero implicit octal (e.g., 010 = 8).
+.TP
+.BI "int Th8_ToWideInt(Th8_Interp *" interp ", const char *" z ", size_t " n ", th8_int64_t *" pwVal ");"
+Parse a string as a 64-bit integer.
+.TP
+.BI "int Th8_ToDouble(Th8_Interp *" interp ", const char *" z ", size_t " n ", double *" pdVal ");"
+Parse a string as a double-precision float.  Correctly
+rounded to nearest-even per IEEE 754 across the entire
+finite double range when
+.B TH8_ENABLE_BIGINT
+is defined (which the default build sets); otherwise
+accurate to within 1 ULP on the small minority of
+halfway-rounding inputs.
+.TP
+.BI "int Th8_ToBoolean(Th8_Interp *" interp ", const char *" z ", size_t " n ", int *" pbVal ");"
+Parse a string as a boolean (0 or 1).  Accepts integers
+(0 = false, nonzero = true) and the case-insensitive strings
+.BR true / false ", " yes / no ", " on / off .
+.SS "Cancellation"
+.TP
+.BI "int Th8_CancelEval(Th8_Interp *" interp ", const char *" zMsg ", size_t " nMsg ", int " flags ");"
+Request asynchronous script cancellation.
+.I flags
+may include
+.B TH8_CANCEL_UNWIND
+(prevent
+.B catch
+from intercepting) and
+.B TH8_CANCEL_STATIC
+(message is a static string; safe for signal handlers).
+.TP
+.BI "int Th8_IsCanceled(Th8_Interp *" interp ", int " flags ");"
+Check for pending cancellation.
+.TP
+.BI "int Th8_IsBeingUnwound(Th8_Interp *" interp ");"
+Returns non-zero if cancellation with
+.B TH8_CANCEL_UNWIND
+is active.
+.SS "Cancel-Unwind Recovery"
+When
+.B TH8_CANCEL_UNWIND
+fires during evaluation, the NRE trampoline discards all pending
+callbacks (including internal cleanup callbacks) without running
+them.  This would leave the eval nesting depth
+.RB ( nEvalDepth )
+elevated and internal evaluation state leaked.
+.PP
+To handle this, the outermost
+.B Th8_Eval
+saves the nesting depth on entry and, when it detects that
+cancellation is still active on return, restores
+.B nEvalDepth
+to the saved value.  If this is the outermost call
+(saved depth was 0), the cancellation state is also cleared
+automatically so that the interpreter can accept new scripts
+without requiring an explicit call to
+.BR Th8_ResetCancel .
+This enables interactive REPLs and embedding hosts to recover
+gracefully after a cancel-unwind event.
+.SS "Security Limits"
+.TP
+.BI "int Th8_Ready(Th8_Interp *" interp ");"
+Unified safety gate.  Checks (in order): native stack overflow,
+cancellation, step counter.  Called at every work-unit boundary.
+.TP
+.BI "void Th8_SetStepLimit(Th8_Interp *" interp ", th8_int64_t " nLimit ");"
+Set the maximum number of evaluation steps (0\ =\ unlimited).
+.TP
+.BI "th8_int64_t Th8_GetStepCount(Th8_Interp *" interp ");"
+Returns the current step count.
+.TP
+.BI "void Th8_SetResultLimit(Th8_Interp *" interp ", size_t " nLimit ");"
+Set the maximum result/string size (0\ =\ use
+.BR TH8_MX_STRLEN ).
+.TP
+.BI "void Th8_SetAllocLimit(Th8_Interp *" interp ", size_t " nLimit ");"
+Set the per-interpreter memory ceiling (0\ =\ unlimited).
+.TP
+.BI "size_t Th8_GetAllocBytes(Th8_Interp *" interp ");"
+Returns total bytes allocated by this interpreter.
+.TP
+.BI "void Th8_SetOverflowCheck(Th8_Interp *" interp ", int " bEnable ");"
+Enable (1) or disable (0) integer overflow detection.
+.TP
+.BI "int Th8_EnableLoad(Th8_Interp *" interp ", int " bEnable ");"
+Enable or disable the
+.B xLoad
+binary loading callback.  When enabling, a fresh 64-bit random
+token is generated from
+.BR xRandomBytes .
+Returns
+.B TH8_ERROR
+if no entropy source is available.
+The token and gate fields are stored in distant regions of the
+interpreter struct to resist linear buffer overflow.
+Only the C embedder can call this; scripts cannot enable loading.
+.TP
+.BI "int Th8_IsLoadEnabled(Th8_Interp *" interp ");"
+Returns non-zero if binary loading is currently enabled.
+.TP
+.BI "int Th8_EnableUnload(Th8_Interp *" interp ", int " flags ");"
+Enable or disable the
+.B [unload]
+command.  The
+.I flags
+argument is a bitmask of:
+.RS
+.TP
+.B TH8_UNLOAD_OK
+Enable the [unload] command itself.
+.TP
+.B TH8_UNLOAD_DANGEROUS
+Enable actual library closing (dlclose/FreeLibrary) via the
+.B \-nokeeplibrary
+option.
+.RE
+.IP
+Passing 0 disables unloading entirely.
+Each non-zero call regenerates the security token.
+Returns
+.B TH8_ERROR
+if no entropy source is available.
+.TP
+.BI "int Th8_IsUnloadEnabled(Th8_Interp *" interp ");"
+Returns non-zero if the [unload] command is enabled.
+.TP
+.BI "int Th8_IsUnloadDangerous(Th8_Interp *" interp ");"
+Returns non-zero if
+.B \-nokeeplibrary
+(actual library closing) is enabled.
+.TP
+.BI "void Th8_SetPreLoadCallback(Th8_Interp *" interp ", Th8_PreLoadProc " xProc ", void *" pCtx ");"
+Register a callback that is invoked before each
+.B [load]
+operation.  The callback receives the library name and can veto
+the load by returning
+.BR TH8_ERROR .
+This provides fine-grained per-library access control,
+complementing the binary
+.B Th8_EnableLoad
+gate.  Pass
+.I xProc
+== NULL to remove the callback.
+.TP
+.BI "int Th8_Load(Th8_Interp *" interp ", const char *" zName ", size_t " nName ", const char *" zProc ", size_t " nProc ");"
+Load a binary extension.  Checks the load gate, consults the
+pre-load callback (if registered), calls
+.BR xLoad ,
+and records the library in the tracking list.
+Returns
+.B TH8_OK
+on success.
+.TP
+.BI "int Th8_Unload(Th8_Interp *" interp ", const char *" zName ", size_t " nName ", const char *" zProc ", size_t " nProc ", int " bClose ");"
+Unload a previously loaded binary.  Checks the unload gate,
+calls
+.BR xUnload ,
+and removes the library from tracking.
+.I bClose
+is 0 for
+.B \-keeplibrary
+(default) or 1 for
+.BR \-nokeeplibrary .
+.TP
+.BI "void *Th8_GetStubs(Th8_Interp *" interp ");"
+Return the interpreter's stubs table pointer (opaque
+.BR "void *" ).
+Used internally by
+.BR Th8_InitStubs .
+.TP
+.BI "const Th8StubsTable *Th8_InitStubs(Th8_Interp *" interp ", const char *" version ", int " exact ");"
+Initialize the stubs table for a binary extension.
+.I version
+is the minimum required version string.  If
+.I exact
+is non-zero, an exact version match is required.
+Returns the stubs table pointer on success, or NULL on
+version mismatch or failure.
+Extensions call this first in their _Init function.
+.TP
+.BI "int Th8_DataExists(Th8_Interp *" interp ", const char *" zName ", size_t " nName ", int *" pAttrs ");"
+Test whether named data exists via the platform's
+.B xDataExists
+callback.  Returns 1 if the data exists, 0 otherwise.
+If
+.I pAttrs
+is non-NULL, the file type attributes are stored there using
+.BR TH8_FILE_ATTR_FILE " (1),"
+.BR TH8_FILE_ATTR_DIRECTORY " (2),"
+.BR TH8_FILE_ATTR_UNSUPPORTED " (3), and"
+.BR TH8_FILE_ATTR_SYMLINK " (4, OR'd with FILE or DIRECTORY)."
+Pass NULL for
+.I pAttrs
+if file type information is not needed.
+.TP
+.BI "char *Th8_NormalizePath(Th8_Interp *" interp ", const char *" zPath ", size_t " nPath ");"
+Normalize a file path via the platform's
+.B xNormalizePath
+callback.  Returns a NUL-terminated string allocated via
+.BR Th8_Malloc ;
+the caller must free it with
+.BR Th8_Free .
+Returns NULL if the platform callback is not available.
+.TP
+.BI "int Th8_SetCwd(Th8_Interp *" interp ", const char *" zDir ", size_t " nDir ");"
+Change the current working directory via the platform's
+.B xSetCwd
+callback.  The path must resolve to a location at or underneath
+the base directory; paths outside the base directory are rejected
+with a \(lqpermission denied\(rq error.
+Returns
+.B TH8_OK
+on success,
+.B TH8_ERROR
+if the callback is not available or the path is rejected.
+.TP
+\fBTh8_GetCwd\fR(\fIinterp\fR)
+Returns the current working directory as a malloc'd UTF-8 string
+via the platform's \fBxGetCwd\fR callback.  The caller must free
+the result with \fBTh8_Free\fR.  Returns NULL if the callback is
+not available or if the current directory is outside the base
+directory.
+.TP
+.BI "void Th8_AutoPathSearch(Th8_Interp *" interp ");"
+Walk the
+.B ::auto_path
+variable and source every
+.B pkgIndex.th8
+file found.  For each directory in the list, the variable
+.B ::dir
+is set to the directory path and the index file is evaluated.
+This populates the package hash with
+.B "package ifneeded"
+entries.  Must be called after language commands are registered.
+.TP
+.BI "int Th8_MathOp(Th8_Interp *" interp ", int " op ", double *" pResult ", double " a ", double " b ");"
+Invoke a platform math function identified by a
+.B TH8_MATH_*
+operation code.
+.I pResult
+receives the computed value from arguments
+.I a
+and
+.IR b .
+Returns
+.B TH8_OK
+on success or
+.B TH8_ERROR
+on failure (e.g.\& unsupported operation).
+.SS "Process Lifecycle"
+.TP
+.BI "int Th8_Initialize(Th8_Platform *" pPlatform ");"
+Initialize the TH8 library for use in the current process.
+Must be called exactly once before any other TH8 API call.
+The
+.I pPlatform
+provides mutex callbacks for protecting process-global state.
+If NULL or mutex callbacks are NULL, TH8 operates in single-threaded
+mode.
+.RS
+.PP
+If the platform provides an
+.B xInitialize
+callback, it is called first, before any other platform callbacks
+are used.  This allows the platform to set up internal resources
+such as mutexes and heaps.
+.PP
+After platform initialization,
+.B Th8_Initialize
+sets the current working directory to the base directory by calling
+.BR "xSetCwd(\(dq.\(dq, 1, ...)" .
+This establishes \(lq.\(rq as the canonical base path for all
+subsequent file system operations.  If
+.B xSetCwd
+is NULL, the current-directory reset is silently skipped.
+.RE
+.IP
+Returns
+.B TH8_OK
+on success,
+.B TH8_ERROR
+on failure.
+.TP
+.BI "int Th8_Finalize(Th8_Platform *" pPlatform ");"
+Finalize the TH8 library, releasing process-global resources.
+After this call, no TH8 API may be used until
+.B Th8_Initialize
+is called again.
+If the platform provides an
+.B xFinalize
+callback, it is called after all other cleanup is complete,
+allowing the platform to release internal resources such as
+mutexes and heaps.
+Returns
+.B TH8_OK
+on success.
+.TP
+.BI "void Th8_GlobalMutexEnter(void);"
+Enter the process-global mutex.  No-op in single-threaded mode.
+Used by platform code to protect process-global state.
+.TP
+.BI "void Th8_GlobalMutexLeave(void);"
+Leave the process-global mutex.
+.TP
+\fBTh8_MemBarrier\fR()
+Issues a full memory barrier via the platform's \fBxMemBarrier\fR
+callback, ensuring all prior writes are visible to other threads.
+No-op if the callback is NULL (single-threaded mode).
+.TP
+\fBTh8_EmitTrace\fR(\fIzFmt\fR, ...)
+Emit a formatted diagnostic trace message via the platform's
+\fBxEmitTrace\fR callback.  Accepts \fBprintf\fR\-style format
+and arguments.  The formatted message is truncated to 512 bytes.
+No-op if the callback is NULL.  Available in all builds; the
+\fBTH8_TRACE_ERR\fR macro (debug builds only) calls this with
+the source file, line number, a message, and the system error
+code (\fBerrno\fR on POSIX, \fBGetLastError()\fR on Win32).
+.SS "Frames and Introspection"
+.TP
+.BI "int Th8_InFrame(Th8_Interp *" interp ", int (*" xCall ")(Th8_Interp*, void*, void*), void *" p1 ", void *" p2 ");"
+Push a new frame, call
+.IR xCall ,
+pop the frame.
+.TP
+.BI "void Th8_SetFrameObjv(Th8_Interp *" interp ", int " argc ", const char **" argv ", size_t *" argl ");"
+Store invocation info on the current frame for
+.BR "info level" .
+Pointers are borrowed; must outlive the frame.
+.TP
+.BI "int Th8_GetFrameLevel(Th8_Interp *" interp ");"
+Returns the current procedure nesting level (0\ =\ global).
+.SS "Parsing"
+.TP
+.BI "int Th8_ParseCommand(Th8_Interp *" interp ", const char *" zScript ", size_t " nScript ", int " iLine ", Th8_Parse *" pParse ");"
+Parse the first command in
+.IR zScript .
+.I nScript
+is the byte length (or
+.B TH8_NOLEN
+for NUL-terminated).
+.I iLine
+is the starting line number (for error reporting).
+On success, the
+.I pParse
+structure is populated with token information.
+Returns
+.B TH8_OK
+or
+.BR TH8_ERROR .
+The caller must call
+.B Th8_FreeParse
+when finished with the parse result.
+.TP
+.BI "int Th8_ParseVarName(Th8_Interp *" interp ", const char *" zStr ", size_t " nStr ", Th8_Value *" pValue ");"
+Parse a variable reference starting with
+.BR $ .
+.I zStr
+points to the
+.B $
+character;
+.I nStr
+is the length of the remaining string.
+On success,
+.I pValue
+is populated with the parsed variable name.
+Returns
+.B TH8_OK
+or
+.BR TH8_ERROR .
+.TP
+.BI "int Th8_ParseExpr(Th8_Interp *" interp ", const char *" zExpr ", size_t " nExpr ", Th8_Parse *" pParse ");"
+Parse an expression string into tokens without evaluating it.
+.I nExpr
+is the byte length (or
+.B TH8_NOLEN
+for NUL-terminated).
+On success, the
+.I pParse
+structure is populated with the expression's token tree.
+Returns
+.B TH8_OK
+or
+.BR TH8_ERROR .
+The caller must call
+.B Th8_FreeParse
+when finished with the parse result.
+.TP
+.BI "void Th8_FreeParse(Th8_Interp *" interp ", Th8_Parse *" pParse ");"
+Free the token arrays in a
+.B Th8_Parse
+structure previously filled by
+.B Th8_ParseCommand
+or
+.BR Th8_ParseExpr .
+Does not free the
+.B Th8_Parse
+struct itself; only its internal allocations are released.
+.TP
+.BI "int Th8_ByteToUtf16Col(const char *" zLine ", size_t " nLine ", size_t " iByte ");"
+Convert a UTF-8 byte offset to a UTF-16 column index.
+.I zLine
+is the line text,
+.I nLine
+is the line length in bytes, and
+.I iByte
+is the zero-based byte offset within the line.
+Returns the zero-based UTF-16 column index.
+Uses
+.B ConvertUTF_v2
+for the conversion.
+.SS "Namespaces"
+.TP
+.BI "int Th8_FindNamespace(Th8_Interp *" interp ", const char *" zName ", size_t " nName ", int " bCreate ");"
+Check/create a namespace.  Returns 1 if found (or created).
+.TP
+.BI "int Th8_DeleteNamespace(Th8_Interp *" interp ", const char *" zName ", size_t " nName ");"
+Delete a namespace and all its contents.
+.TP
+.BI "int Th8_NsEval(Th8_Interp *" interp ", const char *" zNs ", size_t " nNs ", const char *" zScript ", size_t " nScript ");"
+Evaluate \fIzScript\fR in the context of the namespace named
+by \fIzNs\fR (creating it if it does not exist).  A new call
+frame is pushed for the duration so that \fBuplevel\fR can
+correctly identify the namespace context.
+.TP
+.BI "int Th8_NsExport(Th8_Interp *" interp ", const char *" zNs ", size_t " nNs ", const char *" zPattern ", size_t " nPattern ");"
+Add export patterns to a namespace.
+.TP
+.BI "int Th8_NsImport(Th8_Interp *" interp ", const char *" zPattern ", size_t " nPattern ", int " bForce ");"
+Import exported commands matching \fIzPattern\fR (a fully
+qualified glob, e.g., \fB::foo::*\fR) into the current
+namespace.  Imported commands are deep-copied if the source
+command has a copy callback (see \fBTh8_SetCommandCopy\fR);
+otherwise the context pointer is shared.  Imported commands
+retain the defining namespace of the source command, so
+\fBnamespace current\fR and the \fBvariable\fR command within
+an imported proc operate on the original namespace.
+.RS
+.PP
+If \fIbForce\fR is non-zero, existing commands in the target
+namespace are silently overwritten.  If \fIbForce\fR is zero,
+commands that already exist in the target namespace are
+skipped.
+.RE
+.TP
+.BI "void *Th8_GetCurrentNsPtr(Th8_Interp *" interp ");"
+Return an opaque pointer to the interpreter's current namespace.
+This is used by extension code that needs to save and later
+restore the namespace context (e.g., when dispatching a proc
+defined in a different namespace).
+.TP
+.BI "void Th8_SetCurrentNsPtr(Th8_Interp *" interp ", void *" pNs ");"
+Set the interpreter's current namespace to \fIpNs\fR, which
+must be a pointer previously obtained from
+.BR Th8_GetCurrentNsPtr .
+.TP
+.BI "void Th8_SetFrameNsPtr(Th8_Interp *" interp ", void *" pNs ");"
+Set the namespace recorded in the current call frame to
+\fIpNs\fR.  This is used in conjunction with
+.B Th8_SetCurrentNsPtr
+to ensure that \fBuplevel\fR correctly identifies the
+namespace context of the frame.
+.SS "Memory"
+.TP
+.BI "void *Th8_Malloc(Th8_Interp *" interp ", size_t " nByte ");"
+Allocate zero-filled memory via the platform.
+Calls
+.B xPanic
+on failure.
+.TP
+.BI "void *Th8_Realloc(Th8_Interp *" interp ", void *" p ", size_t " nByte ");"
+Resize a block.
+.TP
+.BI "void Th8_Free(Th8_Interp *" interp ", void *" p ");"
+Free a block allocated by
+.B Th8_Malloc
+or
+.BR Th8_Realloc .
+.SS "Hash Table"
+.TP
+.BI "Th8_Hash *Th8_HashNew(Th8_Interp *" interp ");"
+Create a new hash table.
+.TP
+.BI "void Th8_HashDelete(Th8_Interp *" interp ", Th8_Hash *" pHash ");"
+Delete an entire hash table and all its entries.
+.TP
+.BI "Th8_HashEntry *Th8_HashFind(Th8_Interp *" interp ", Th8_Hash *" pHash ", const char *" zKey ", size_t " nKey ", int " op ");"
+Find, create, or delete a hash entry.
+.I op
+< 0 deletes, 0 finds, > 0 creates.
+.TP
+.BI "void Th8_HashRemove(Th8_Interp *" interp ", Th8_Hash *" pHash ", const char *" zKey ", size_t " nKey ");"
+Remove a single entry by key.  Does NOT free
+.BR pData .
+.TP
+.BI "void Th8_HashIterate(Th8_Interp *" interp ", Th8_Hash *" pHash ", int (*" xCallback ")(Th8_HashEntry*, void*), void *" pCtx ");"
+Call
+.I xCallback
+for each entry.
+.TP
+.BI "void Th8_HashIterateOrdered(Th8_Interp *" interp ", Th8_Hash *" pHash ", Th8_HashIterProc " xProc ", void *" pCtx ");"
+Iterate hash entries in insertion order
+(complementing
+.BR Th8_HashIterate ,
+which visits entries in undefined/hash-bucket order).
+.SS "Language Registration"
+.TP
+.BI "int Th8_RegisterLanguage(Th8_Interp *" interp ");"
+Register all built-in commands.
+.TP
+.BI "int Th8_RegisterRegex(Th8_Interp *" interp ");"
+Register
+.B regexp
+and
+.B regsub
+commands.  Only available when compiled with
+.BR TH8_ENABLE_REGEXP .
+.SS "Exit Flag"
+.TP
+.BI "void Th8_Exit(Th8_Interp *" interp ");"
+Set the interpreter's exit flag.  Once set,
+.B Th8_Ready
+returns
+.B TH8_ERROR
+on every call, unwinding the entire call stack.
+.TP
+.BI "int Th8_IsExited(Th8_Interp *" interp ");"
+Return non-zero if the exit flag is set.
+.TP
+.BI "void Th8_ResetExit(Th8_Interp *" interp ");"
+Clear the exit flag so the interpreter can resume execution.
+This is the only way to clear the exit state.
+.SS "Suspension (Freeze / Thaw)"
+.TP
+.BI "int Th8_Freeze(Th8_Interp *" interp ");"
+Suspend the interpreter.  The current NRE callback chain is detached
+and saved so that evaluation can be resumed later via
+.BR Th8_Thaw .
+Returns
+.BR TH8_SUSPEND .
+.TP
+.BI "int Th8_Thaw(Th8_Interp *" interp ");"
+Resume a previously frozen interpreter by draining the saved
+callback chain.
+.TP
+.BI "int Th8_IsSuspended(Th8_Interp *" interp ");"
+Return non-zero if the interpreter is currently suspended.
+.SS "File Evaluation"
+.TP
+.BI "int Th8_EvalFile(Th8_Interp *" interp ", const char *" zPath ", size_t " nPath ");"
+Read the named file via the platform
+.B xGetData
+callback and evaluate its contents.  Equivalent to the script-level
+.B source
+command.
+.TP
+.BI "int Th8_EvalFileAsData(Th8_Interp *" interp ", const char *" zName ", size_t " nName ", const unsigned char **" pzData ", size_t *" pnData ", void *" pCtx ");"
+Load binary data by evaluating a signed script in an isolated child
+interpreter.  Creates a temporary child that inherits the parent's
+platform callbacks and signed\-only policy (if active).  The named file
+is evaluated in the child via
+.BR Th8_EvalFile ;
+on success the child's result is base64\-decoded and returned via
+.I pzData
+and
+.IR pnData .
+The child is always deleted.  The caller must free
+.I *pzData
+with
+.BR Th8_Free .
+.I pCtx
+is reserved and must be NULL.
+Primary use case: loading additional RSA public keys (as base64\-encoded
+SNK blobs) into the signed\-script policy context, where the
+key\-delivery script itself must pass signature verification.
+.TP
+.BI "int Th8_EvalFileAndRsaKeyLoad(Th8_Interp *" interp ", const char *" zName ", size_t " nName ", void *" pCtx ", int " bPreload ");"
+Convenience function that combines
+.B Th8_EvalFileAsData
+(evaluate a signed script in a child interpreter and base64\-decode the
+result) with
+.B Th8_RsaKeyLoad
+(parse the decoded data as an SNK/CAPI RSA key).
+If
+.I bPreload
+is non\-zero, the key is preloaded into the signed\-only policy cache
+via
+.BR Th8_PolicyPreloadKey ;
+.I pCtx
+must be the opaque policy context in that case.
+Returns
+.B TH8_OK
+on success.
+Gated by
+.BR TH8_ENABLE_CRYPTOGRAPHY .
+.SS "Base Path"
+.TP
+.BI "int Th8_SetBasePath(const char *" zPath ", int " bNormalize ");"
+Set or override the base directory used by the file system security
+model.  If
+.I bNormalize
+is non-zero, the path is resolved via the platform's
+.B xNormalizePath
+callback.
+.SS "UTF-8 Utilities"
+.TP
+.BI "int Th8_Utf8Decode(const char *" z ", size_t " n ", int *" pnByte ");"
+Decode one Unicode code point from the UTF-8 string
+.IR z .
+Stores the byte count consumed in
+.IR *pnByte .
+Returns the code point value.
+.TP
+.BI "int Th8_Utf8Encode(int " codepoint ", char *" z ");"
+Encode a single Unicode code point as UTF-8 into
+.IR z .
+Returns the number of bytes written (1\(en4).
+.TP
+.BI "int Th8_Utf8Len(const char *" z ", size_t " n ");"
+Return the number of Unicode characters in the UTF-8 string.
+.TP
+.BI "const char *Th8_Utf8Advance(const char *" z ", size_t " n ", int " nChar ");"
+Advance
+.I nChar
+characters into the UTF-8 string.  Returns a pointer to that position.
+.TP
+.BI "const char *Th8_Utf8Index(const char *" z ", size_t " n ", int " iChar ");"
+Return a pointer to character
+.I iChar
+in the UTF-8 string.
+.TP
+.BI "int Th8_Utf8Validate(const char *" z ", size_t " n ", int *" piOffset ");"
+Validate that
+.I z
+is well-formed UTF-8.  If invalid, stores the byte offset of the
+first bad byte in
+.IR *piOffset .
+Returns non-zero if valid.
+.SS "Character Classification"
+.TP
+.BI "int Th8_IsDigit(int " c ");"
+.TQ
+.BI "int Th8_IsSpace(int " c ");"
+.TQ
+.BI "int Th8_IsAlnum(int " c ");"
+.TQ
+.BI "int Th8_IsAlpha(int " c ");"
+.TQ
+.BI "int Th8_IsSpecial(int " c ");"
+.TQ
+.BI "int Th8_IsHexDig(int " c ");"
+.TQ
+.BI "int Th8_IsOctDig(int " c ");"
+.TQ
+.BI "int Th8_IsBinDig(int " c ");"
+ASCII character classification functions.  These do not depend on the
+C locale and are safe to call from any thread.
+.SS "String Utilities"
+.TP
+.BI "size_t Th8_Strlen(const char *" z ");"
+Return the length of a NUL-terminated string.
+.TP
+.BI "char *Th8_Strdup(Th8_Interp *" interp ", const char *" z ", size_t " n ");"
+Allocate a copy of
+.I n
+bytes of
+.I z
+via
+.BR Th8_Malloc .
+The copy is NUL-terminated.
+.SS "Platform-Routed Utility Wrappers"
+These functions route through the corresponding
+.B Th8_Platform
+callbacks.  They return sensible defaults (0, NULL, no-op)
+when the callback is NULL.
+.TP
+.BI "void *Th8_Memmove(Th8_Interp *" interp ", void *" dst ", const void *" src ", size_t " n ");"
+Move
+.I n
+bytes from
+.I src
+to
+.I dst
+(overlapping regions permitted) via
+.BR xMemmove .
+Returns
+.IR dst .
+.TP
+.BI "int Th8_Strcmp(Th8_Interp *" interp ", const char *" s1 ", const char *" s2 ");"
+Compare two NUL-terminated strings via
+.BR xStrcmp .
+.TP
+.BI "char *Th8_Strchr(Th8_Interp *" interp ", const char *" s ", int " c ");"
+Locate the first occurrence of byte
+.I c
+in string
+.I s
+via
+.BR xStrchr .
+.TP
+.BI "int Th8_Atoi(Th8_Interp *" interp ", const char *" s ");"
+Convert a NUL-terminated decimal string to int via
+.BR xAtoi .
+.TP
+.BI "void Th8_Qsort(Th8_Interp *" interp ", void *" base ", size_t " nmemb ", size_t " size ", int (*" cmp ")(const void *, const void *));"
+Sort an array in place via
+.BR xQsort .
+.TP
+.BI "int Th8_Vsnprintf(Th8_Interp *" interp ", char *" buf ", size_t " size ", const char *" fmt ", va_list " ap ");"
+Formatted output into a buffer via
+.BR xVsnprintf .
+.TP
+.BI "int Th8_Snprintf(Th8_Interp *" interp ", char *" buf ", size_t " size ", const char *" fmt ", ...);"
+Variadic convenience wrapper around
+.BR Th8_Vsnprintf .
+.SS "Types and Macros"
+.TP
+\fBTh8_Mutex\fR
+Platform-specific mutex type defined in \fBth8_plat.h\fR.
+On Windows, this is \fBCRITICAL_SECTION\fR.  On POSIX, this is
+\fBpthread_mutex_t\fR.  Used by the \fBxMutexInit\fR,
+\fBxMutexFinal\fR, \fBxMutexEnter\fR, and \fBxMutexLeave\fR
+platform callbacks.
+.TP
+\fBTH8_API\fR
+Decoration macro for public API functions.  On Windows, expands to
+\fB__declspec(dllexport)\fR when building the TH8 DLL
+(\fBTH8_BUILD_DLL\fR defined) and to \fB__declspec(dllimport)\fR
+when consuming it.  On GCC/Clang, uses
+\fB__attribute__((visibility("default")))\fR.
+.SS "String Substitution"
+.TP
+.BI "int Th8_Subst(Th8_Interp *" interp ", const char *" z ", size_t " n ", int " flags ");"
+Perform Tcl-style substitutions on the string
+.IR z .
+The
+.I flags
+argument is a bitmask of
+.BR TH8_SUBST_BACKSLASHES " (1), "
+.BR TH8_SUBST_COMMANDS " (2), "
+.BR TH8_SUBST_VARIABLES " (4)."
+.B TH8_SUBST_ALL
+(7) enables all three.
+The result is stored in the interpreter result.
+Command substitutions that return
+.B TH8_BREAK
+stop processing;
+.B TH8_CONTINUE
+replaces the command with the empty string;
+.B TH8_RETURN
+uses the return value.
+.SS "Internal-Representation Cache"
+A per-interpreter hash table that caches the result of
+string-to-value conversions.  Protected by a per-interpreter mutex.
+.TP
+.BI "Th8_Value *Th8_FindInCache(Th8_Interp *" interp ", int " cacheType ", const char *" z ", size_t " n ");"
+Look up or create a cache entry keyed by
+.RI ( cacheType ", " z ).
+Returns a cache-owned
+.B Th8_Value
+pointer; the caller should check the type-specific union
+.B iValid
+flag and populate on miss.  Cache types:
+.BR TH8_CACHE_INT " (1), "
+.BR TH8_CACHE_WIDE " (2), "
+.BR TH8_CACHE_DOUBLE " (3), "
+.BR TH8_CACHE_BIGINT " (4), "
+.BR TH8_CACHE_BOOL " (5), "
+.BR TH8_CACHE_STRING " (7), "
+.BR TH8_CACHE_LIST " (8), "
+.BR TH8_CACHE_COMMAND " (9)."
+.TP
+.BI "Th8_Value *Th8_FindListInCache(Th8_Interp *" interp ", int " cacheType ", int " nElem ", const char **" azElem ", const size_t *" anElem ");"
+List-keyed variant.  Hash is computed from element count XOR'd
+with each element hash (order-sensitive).
+.TP
+.BI "void Th8_ClearCache(Th8_Interp *" interp ");"
+Discard all cache entries and free all associated memory.
+.TP
+.BI "void Th8_RemoveFromCache(Th8_Interp *" interp ", int " cacheType ", const char *" z ", size_t " n ");"
+Remove a single cache entry.
+.TP
+.BI "void Th8_SetCacheString(Th8_Interp *" interp ", Th8_Value *" pVal ", const char *" z ", size_t " n ");"
+Set the string representation on a list-keyed cache entry
+(returned by
+.BR Th8_FindListInCache )
+whose
+.B zData
+was initially NULL.
+.TP
+.BI "Th8_Value *Th8_CopyValue(Th8_Interp *" interp ", const Th8_Value *" pSrc ");"
+Deep-copy a cache-borrowed
+.BR Th8_Value .
+The caller owns the result and must free it with
+.BR Th8_FreeValue .
+.TP
+.BI "void Th8_FreeValue(Th8_Interp *" interp ", Th8_Value *" pVal ");"
+Free a value returned by
+.BR Th8_CopyValue .
+.SS "Platform: Executable Path"
+.TP
+.BI "char *(*xGetExePath)(void *" interp ", void *" pCtx ");"
+Platform callback returning the fully qualified path to the
+running executable.  The result is allocated via
+.BR Th8_Malloc ;
+the caller frees it.
+Used by
+.B "info nameofexecutable"
+when the
+.B ::th8_nameofexecutable
+variable is not set.
+Linux uses
+.IR /proc/self/exe ;
+macOS uses
+.IR _NSGetExecutablePath ;
+Win32 uses
+.IR GetModuleFileNameA .
+.SS "Platform Wrapper Functions"
+.TP
+.BI "int Th8_RandomBytes(Th8_Interp *" interp ", void *" pBuf ", size_t " nByte ");"
+Fill
+.I pBuf
+with
+.I nByte
+random bytes from the platform's
+.B xRandomBytes
+entropy source.
+Returns
+.B TH8_OK
+on success, or
+.B TH8_ERROR
+if the platform does not provide an entropy source.
+.TP
+.BI "char *Th8_GetExePath(Th8_Interp *" interp ");"
+Return the fully qualified path to the current executable via the
+platform's
+.B xGetExePath
+callback.  The returned string is allocated via
+.BR Th8_Malloc ;
+the caller must free it with
+.BR Th8_Free .
+Returns NULL if the platform does not provide
+.BR xGetExePath .
+.TP
+.BI "int Th8_GetParentPid(Th8_Interp *" interp ");"
+Return the parent process ID via the platform's
+.B xGetParentPid
+callback.  Returns 0 if the callback is not available.
+.TP
+.BI "th8_uint64_t Th8_GetThreadId(Th8_Interp *" interp ");"
+Return the current thread ID as a 64-bit unsigned integer via the
+platform's
+.B xGetThreadId
+callback.  Returns 0 if the callback is not available.
+.TP
+.BI "int Th8_GetRootPath(Th8_Interp *" interp ", const char *" zPath ", size_t " nPath ", char *" zOut ", size_t " nOut ");"
+Resolve the filesystem root or mount point for
+.I zPath
+via the platform's
+.B xGetRootPath
+callback.  The result is written to
+.IR zOut .
+On POSIX, this is typically
+.BR / .
+On Windows, this is the volume root (e.g.,
+.BR C:\e ).
+Returns
+.B TH8_OK
+on success, or
+.B TH8_ERROR
+if the callback is not available.
+.TP
+.BI "int Th8_SameFile(Th8_Interp *" interp ", const char *" zPath1 ", size_t " nPath1 ", const char *" zPath2 ", size_t " nPath2 ");"
+Compare two paths for physical file identity via the platform's
+.B xSameFile
+callback.  Returns non-zero if both paths refer to the same file
+(inode/device on POSIX, file identity on Windows).  Returns 0 if
+the files are different or the callback is not available.
+.TP
+.BI "int Th8_ListAppendVarLinks(Th8_Interp *" interp ", char **" pz ", size_t *" pn ");"
+Append the names of all linked variables in the current call frame
+to the list at
+.IR *pz .
+A linked variable is one created by
+.BR upvar ", " global ", or " variable .
+Returns
+.B TH8_OK
+on success.
+.TP
+.BI "int Th8_GetEvalDepth(Th8_Interp *" interp ");"
+Return the current script evaluation nesting depth.
+0 means no evaluation is active, 1 means the outermost
+.B Th8_Eval
+call is running, and values greater than 1 indicate nested
+evaluation (e.g., from
+.B [eval]
+or
+.B [source]
+within a running script).
+.TP
+.BI "int Th8_TranslateLineEndings(char *" zBuf ", size_t *" pnBuf ");"
+Verify that all newline characters in
+.I zBuf
+are preceded by carriage return (i.e., all line endings are
+.BR \er\en ),
+then translate each
+.B \er\en
+pair to a single
+.B \en
+in-place.
+.I *pnBuf
+is updated to reflect the new length.
+Returns
+.B TH8_OK
+on success, or
+.B TH8_ERROR
+if a bare
+.B \en
+(not preceded by
+.BR \er )
+is found.
+.TP
+.BI "int Th8_ResetSecurityArray(Th8_Interp *" interp ");"
+Set all elements of the
+.B ::th8_security
+array to the string
+.BR none .
+This is typically called before script signature verification
+to ensure a clean baseline.
+Returns
+.B TH8_OK
+on success.
+.TP
+.BI "void Th8_NotifyDeleteInterp(Th8_Interp *" interp ", void *" pCtx ");"
+Invoke the platform's
+.B xDeleteInterp
+callback, passing
+.I interp
+and
+.IR pCtx .
+This notifies the host application that the interpreter is being
+destroyed, allowing it to clean up any associated resources.
+.SS "Platform Callback: xCloseTemporaryData"
+The
+.B xCloseTemporaryData
+callback is called before explicitly closing a temporary channel.
+It receives the channel handle and may return
+.B TH8_OK
+to allow the close or
+.B TH8_ERROR
+to veto it (the channel remains open).
+If the callback is NULL, the close is always allowed.
+This callback sits in
+.B Th8_Platform
+after
+.BR xSetTemporaryData .
+.SH "SCRIPT SIGNATURE VERIFICATION"
+When compiled with
+.BR TH8_ENABLE_CRYPTOGRAPHY ,
+TH8 supports a signed-only evaluation mode in which every script
+must be accompanied by a valid RSA signature before it is executed.
+This provides code provenance and tamper detection for deployments
+that require strong script integrity guarantees.
+.SS "Enabling signed-only mode"
+.TP
+.BI "int Th8_EnableSignedOnly(Th8_Interp *" interp ", int " bEnable ");"
+Enable or disable the signed-only script evaluation gate.  Uses
+the same random-token security pattern as
+.BR Th8_EnableLoad .
+Returns
+.B TH8_ERROR
+if no entropy source is available.
+.TP
+.BI "int Th8_IsSignedOnlyEnabled(Th8_Interp *" interp ");"
+Returns non-zero if signed-only mode is currently enabled.
+.SS "Installing and removing the policy"
+.TP
+.BI "int Th8_InstallSignedPolicy(Th8_Interp *" interp ");"
+Install the signed-only pre-eval callback.  When signed-only mode
+is enabled (via
+.BR Th8_EnableSignedOnly ),
+the callback is invoked before each script evaluation.  For every
+script whose origin name is known (i.e., the
+.I zName
+parameter passed to
+.BR Th8_Eval ,
+.BR Th8_EvalFile ,
+etc.\& is non-NULL), the callback:
+.RS
+.IP 1. 4
+Resets the
+.B ::th8_security
+array to
+.BR none .
+.IP 2. 4
+Reads the companion signature file
+.IB name .b64sig
+via the platform's
+.B xGetData
+callback.  The signature file contains a Harpy-format header
+(algorithm, public key token) followed by the base64-encoded RSA
+signature.
+.IP 3. 4
+Resolves the public key by matching the token from the signature
+header against the key registry.
+.IP 4. 4
+Verifies the RSA PKCS#1 v1.5 SHA-512 signature over the script
+data using the resolved public key.
+.IP 5. 4
+On success, populates the
+.B ::th8_security
+array with the verified details and allows evaluation to proceed.
+On failure, returns
+.B TH8_ERROR
+with a diagnostic message.
+.RE
+.TP
+.BI "void Th8_RemoveSignedPolicy(Th8_Interp *" interp ", void *" pCtx ");"
+Remove the signed-only pre-eval callback and free its context.
+.I pCtx
+is the opaque context pointer obtained from the interpreter's
+pre-eval state; pass NULL for a no-op.
+.SS "The ::th8_security array"
+When a signed script is successfully verified, the following
+elements are set:
+.TP
+.B ::th8_security(algorithmName)
+The signature algorithm, e.g.,
+.BR RSA-2048 .
+Set to
+.B none
+before verification and on failure.
+.TP
+.B ::th8_security(policy)
+The verification policy status.  Set to
+.B signed
+on success, or
+.B none
+before verification and on failure.
+.TP
+.B ::th8_security(publicKeyToken)
+The 16-character hexadecimal public key token that identifies
+which key was used to sign the script.  Set to
+.B none
+before verification and on failure.
+.SS "RSA verification"
+.TP
+.BI "int Th8_RsaVerify(Th8_Interp *" interp ", const Th8_RsaKey *" pKey ", const unsigned char *" zData ", size_t " nData ", const unsigned char *" zSig ", size_t " nSig ");"
+Verify an RSA PKCS#1 v1.5 SHA-512 signature.
+.I pKey
+is the public key,
+.I zData / nData
+is the data that was signed, and
+.I zSig / nSig
+is the raw signature bytes.
+Returns
+.B TH8_OK
+if the signature is valid,
+.B TH8_ERROR
+otherwise.
+.TP
+.BI "int Th8_RsaExtractHash(Th8_Interp *" interp ", const Th8_RsaKey *" pKey ", const unsigned char *" zSig ", size_t " nSig ", unsigned char *" zOut ");"
+Recover the SHA-512 hash from an RSA PKCS#1 v1.5 signature.
+.I pKey
+is the public key used to decrypt the signature block.
+.I zSig / nSig
+is the raw signature bytes.  The recovered 64-byte SHA-512 hash
+is written to
+.IR zOut ,
+which must be at least 64 bytes.
+Returns
+.B TH8_OK
+on success, or
+.B TH8_ERROR
+if the signature padding is invalid or the key cannot decrypt
+the block.
+.SS "SHA-512"
+.TP
+.BI "int Th8_Sha512Hex(Th8_Interp *" interp ", const unsigned char *" zData ", size_t " nData ", char *" zOut ");"
+Compute the SHA-512 digest of
+.I zData
+.RI ( nData
+bytes) and write the 128-character hexadecimal representation to
+.IR zOut ,
+which must be at least 129 bytes (128 hex digits plus NUL
+terminator).
+Returns
+.B TH8_OK
+on success.
+.SS "RSA key management"
+.TP
+.B "typedef struct Th8_RsaKey Th8_RsaKey;"
+Opaque type representing a parsed RSA key (public or private).
+.TP
+.BI "int Th8_RsaKeyLoad(Th8_Interp *" interp ", const unsigned char *" zData ", size_t " nData ", Th8_RsaKey **" ppKey ");"
+Parse a binary key blob (SNK format) into an
+.B Th8_RsaKey
+structure.  The caller must free with
+.BR Th8_RsaKeyFree .
+.TP
+.BI "void Th8_RsaKeyFree(Th8_Interp *" interp ", Th8_RsaKey *" pKey ");"
+Free a key returned by
+.BR Th8_RsaKeyLoad .
+.TP
+.BI "int Th8_RsaKeyBitLen(const Th8_RsaKey *" pKey ");"
+Return the key length in bits (e.g., 2048).
+.TP
+.BI "int Th8_RsaKeyToken(Th8_Interp *" interp ", const Th8_RsaKey *" pKey ", unsigned char " zOut "[8]);"
+Compute the 8-byte binary public key token for
+.IR pKey .
+.TP
+.BI "int Th8_RsaKeyTokenHex(Th8_Interp *" interp ", const Th8_RsaKey *" pKey ", char " zOut "[17]);"
+Compute the 16-character hexadecimal public key token for
+.IR pKey .
+The output buffer must be at least 17 bytes (16 hex digits plus
+NUL terminator).
+.SS "Policy key pre-loading"
+.TP
+.BI "int Th8_PolicyPreloadKey(Th8_Interp *" interp ", void *" pCtx ", Th8_RsaKey *" pKey ");"
+Pre-load an RSA key into the signed-only policy cache so that
+signature verification can proceed without fetching the key from
+the network.  The policy takes ownership of
+.IR pKey ;
+the caller must not free it after this call.
+.I pCtx
+is the opaque context pointer from
+.BR Th8_InstallSignedPolicy .
+Returns
+.B TH8_OK
+on success.
+.SS "Signed-only gate save/restore"
+.TP
+.BI "void Th8_SaveSignedOnly(Th8_Interp *" interp ", void *" pSaved ");"
+Save the current signed-only gate state into the caller-provided
+buffer
+.IR pSaved ,
+which must be at least
+.B TH8_SIGNED_SAVE_SIZE
+(16) bytes.  This allows the host to temporarily bypass policy
+enforcement (e.g., when reading auxiliary files that are not
+themselves signed).
+.TP
+.BI "void Th8_RestoreSignedOnly(Th8_Interp *" interp ", const void *" pSaved ");"
+Restore the signed-only gate state from
+.IR pSaved ,
+which was previously filled by
+.BR Th8_SaveSignedOnly .
+.TP
+.B "TH8_SIGNED_SAVE_SIZE (16)"
+Minimum size in bytes of the buffer passed to
+.B Th8_SaveSignedOnly
+and
+.BR Th8_RestoreSignedOnly .
+.SS "Convenience policy setup"
+.TP
+.BI "int Th8_EnableSignedPolicy(Th8_Interp *" interp ", void **" ppCtx ", int " bEnable ");"
+One-call convenience to install or remove the signed-only policy.
+When
+.I bEnable
+is 1: installs the signed-only pre-eval callback via
+.BR Th8_InstallSignedPolicy ,
+preloads all embedded keys (both
+.B keyRoot
+and
+.BR key0 )
+into the policy cache, enables the signed-only gate, and writes
+the opaque policy context pointer to
+.IR *ppCtx .
+When
+.I bEnable
+is 0: disables the signed-only gate, removes the policy via
+.BR Th8_RemoveSignedPolicy ,
+and cleans up the context.
+Returns
+.B TH8_OK
+on success, or
+.B TH8_ERROR
+on failure (e.g., if no entropy source is available or key
+loading fails).
+.SH "EMBEDDED PUBLIC KEYS"
+TH8 supports embedding public keys directly into the compiled
+binary so that signature verification can proceed without
+external key files.  Keys are generated from binary SNK
+(Strong Name Key) files using the
+.B tools/mkkey.tcl
+utility.
+.SS "Key embedding tool"
+.TP
+.B "tclsh tools/mkkey.tcl" \fIkeyFile.snk\fR
+Reads a binary SNK file and produces a C source file at
+.BI src/crypto/th8_ baseName .c
+containing the key data as a
+.B "static const unsigned char"
+array with an accessor function.  The generated file is compiled
+into the TH8 library and provides the raw key bytes at runtime.
+.SS "Accessing embedded keys"
+.TP
+.BI "const unsigned char *Th8_GetEmbeddedKeyRoot(size_t *" pnData ");"
+Returns a pointer to the embedded root key data.  If
+.I pnData
+is non-NULL, the size in bytes is stored there.  The root key
+is the trust anchor for the key hierarchy.
+.TP
+.BI "const unsigned char *Th8_GetEmbeddedKey0(size_t *" pnData ");"
+Returns a pointer to the embedded key0 data (the built-in public
+key used for script signature verification).  If
+.I pnData
+is non-NULL, the size in bytes is stored there.
+.TP
+.BI "Th8_RsaKey *Th8_GetPublicKeyZero(Th8_Interp *" interp ");"
+Load the embedded key0 as a parsed
+.B Th8_RsaKey
+structure.  The returned key is cached internally by the policy
+context and must NOT be freed by the caller.  Returns NULL on
+parse failure.
+.TP
+.BI "int Th8_GetPublicKeyZeroToken(Th8_Interp *" interp ", char " zOut "[17]);"
+Compute the 16-character hexadecimal public key token for the
+embedded key0.  The output buffer must be at least 17 bytes.
+Returns
+.B TH8_OK
+on success.
+.TP
+.BI "Th8_RsaKey *Th8_GetPublicKeyRoot(Th8_Interp *" interp ");"
+Load the embedded root key as a parsed
+.B Th8_RsaKey
+structure.  The returned key is cached internally and must NOT be
+freed by the caller.  Returns NULL on parse failure.  The root key
+is the trust anchor for the key hierarchy.
+.TP
+.BI "int Th8_GetPublicKeyRootToken(Th8_Interp *" interp ", char " zOut "[17]);"
+Compute the 16-character hexadecimal public key token for the
+embedded root key.  The output buffer must be at least 17 bytes
+(16 hex digits plus NUL terminator).
+Returns
+.B TH8_OK
+on success.
+.SS "Test key APIs"
+The following functions are available when compiled with
+.BR ENABLE_TEST_KEY=1 .
+They provide access to an embedded test key for development and
+testing purposes.
+.TP
+.BI "const unsigned char *Th8_GetEmbeddedKeyTest(size_t *" pnData ");"
+Returns a pointer to the embedded test key data.  If
+.I pnData
+is non-NULL, the size in bytes is stored there.
+.TP
+.BI "Th8_RsaKey *Th8_GetPublicKeyTest(Th8_Interp *" interp ");"
+Load the embedded test key as a parsed
+.B Th8_RsaKey
+structure.  The returned key is cached internally and must NOT be
+freed by the caller.  Returns NULL on parse failure.
+.TP
+.BI "int Th8_GetPublicKeyTestToken(Th8_Interp *" interp ", char " zOut "[17]);"
+Compute the 16-character hexadecimal public key token for the
+embedded test key.  The output buffer must be at least 17 bytes.
+Returns
+.B TH8_OK
+on success.
+.PP
+The test key is preloaded into the policy in debug builds and
+when the
+.B TH8SH_YES_TESTLIB
+environment variable is set.
+.SS "Memory: Overflow-Safe Allocation"
+.TP
+.BI "void *Th8_SafeAlloc(Th8_Interp *" interp ", size_t " nByte ", const char *" zFile ", int " nLine ");"
+Allocate
+.I nByte
+bytes of zero-filled memory.  Panics on allocation failure.
+.I zFile
+and
+.I nLine
+are for diagnostic tracing (typically supplied via the
+.B TH8_ALLOC
+macro).
+.TP
+.BI "void *Th8_SafeAllocStr(Th8_Interp *" interp ", size_t " nLen ", const char *" zFile ", int " nLine ");"
+Allocate
+.I nLen+1
+bytes (overflow-safe) for a NUL-terminated string.
+.TP
+.BI "void *Th8_SafeAllocMul(Th8_Interp *" interp ", size_t " a ", size_t " b ", const char *" zFile ", int " nLine ");"
+Allocate
+.I a*b
+bytes.  Returns NULL if the multiplication overflows.
+.TP
+.BI "void *Th8_SafeAllocAdd(Th8_Interp *" interp ", size_t " a ", size_t " b ", const char *" zFile ", int " nLine ");"
+Allocate
+.I a+b
+bytes.  Returns NULL if the addition overflows.
+.TP
+.BI "void *Th8_SafeAllocMulAdd(Th8_Interp *" interp ", size_t " a ", size_t " b ", size_t " c ", const char *" zFile ", int " nLine ");"
+Allocate
+.I a*b+c
+bytes.  Returns NULL if either computation overflows.
+.TP
+.BI "void *Th8_SafeAllocStrAdd(Th8_Interp *" interp ", size_t " k ", size_t " n ", const char *" zFile ", int " nLine ");"
+Allocate
+.I k+n+1
+bytes (overflow-safe at every step).  Used for the "prefix + tail + NUL"
+string-buffer pattern.  Backing function for the
+.B TH8_ALLOC_STR_ADD
+macro.  Returns NULL on overflow at either internal addition.
+.TP
+.BI "void *Th8_SafeAllocStrMul(Th8_Interp *" interp ", size_t " n ", size_t " sz ", const char *" zFile ", int " nLine ");"
+Allocate
+.I (n+1)*sz
+bytes (overflow-safe at every step).  Used for "wide-string buffer with
+NUL slot" patterns.  Backing function for the
+.B TH8_ALLOC_STR_MUL
+macro.  Returns NULL on overflow at either internal step.
+.TP
+.BI "void *Th8_SafeAllocMulAdd2(Th8_Interp *" interp ", size_t " a ", size_t " b ", size_t " c ", size_t " d ", size_t " e ", const char *" zFile ", int " nLine ");"
+Allocate
+.I (a*b)+(c*d)+e
+bytes with four sequential overflow checks.  Used for packed-record
+allocation patterns.  Backing function for the
+.B TH8_ALLOC_MUL_ADD2
+macro.  Returns NULL on overflow at any of the four steps.
+.TP
+.BI "int Th8_SafeMul(Th8_Interp *" interp ", size_t " a ", size_t " b ", size_t *" pOut ");"
+Compute
+.I a*b
+into
+.IR *pOut .
+Returns
+.B TH8_OK
+on success or
+.B TH8_ERROR
+on overflow (leaving
+.I *pOut
+unchanged).  No allocation.  Public primitive for callers that need
+overflow-checked size math independent of allocation.
+.I interp
+MAY be NULL.
+.TP
+.BI "int Th8_SafeAdd(Th8_Interp *" interp ", size_t " a ", size_t " b ", size_t *" pOut ");"
+Compute
+.I a+b
+into
+.IR *pOut .
+Same semantics as
+.BR Th8_SafeMul .
+.TP
+.BI "void *Th8_AttemptMalloc(Th8_Interp *" interp ", size_t " nByte ");"
+Allocate without panicking.  Returns NULL on failure.
+.TP
+.BI "void *Th8_AttemptRealloc(Th8_Interp *" interp ", void *" p ", size_t " nByte ");"
+Resize without panicking.  Returns NULL on failure.
+.TP
+.BI "void Th8_SecureZero(Th8_Interp *" interp ", void *" p ", size_t " n ");"
+Securely zero
+.I n
+bytes at
+.IR p .
+Uses volatile writes to prevent compiler optimization.
+.TP
+.BI "int Th8_Memcmp(Th8_Interp *" interp ", const void *" a ", const void *" b ", size_t " n ");"
+Compare
+.I n
+bytes.  Returns 0 if equal, nonzero otherwise.
+.TP
+.BI "void Th8_Memcpy(Th8_Interp *" interp ", void *" dst ", const void *" src ", size_t " n ");"
+Copy
+.I n
+bytes from
+.I src
+to
+.IR dst .
+.TP
+.BI "void Th8_Memset(Th8_Interp *" interp ", void *" p ", int " c ", size_t " n ");"
+Fill
+.I n
+bytes at
+.I p
+with byte
+.IR c .
+.SS "Result: Extended"
+.TP
+.BI "void Th8_ClearResult(Th8_Interp *" interp ");"
+Set the interpreter result to the empty string.
+.TP
+.BI "int Th8_SetResultDouble(Th8_Interp *" interp ", double " rVal ");"
+Set the result to a formatted floating-point number.  Uses
+the shortest decimal representation that round-trips
+exactly to the original IEEE 754 value, honoring
+.B ::tcl_precision
+when non-zero.  Special values
+.RB ( NaN ", " Inf ", " \-Inf )
+are emitted as the corresponding case-preserving string.
+.TP
+.BI "int Th8_SetResultStatic(Th8_Interp *" interp ", const char *" z ", size_t " n ");"
+Set the result to a static string.  No copy is made; the pointer
+must remain valid for the interpreter's lifetime.
+.TP
+.BI "int Th8_ErrorMessage(Th8_Interp *" interp ", const char *" zPrefix ", const char *" z ", size_t " n ");"
+Set the result to
+.I zPrefix
+followed by
+.IR z .
+Used for building error messages.
+.TP
+.BI "int Th8_WrongNumArgs(Th8_Interp *" interp ", const char *" zMsg ");"
+Set the result to "wrong # args: should be \e"
+.IR zMsg \e""
+and return
+.BR TH8_ERROR .
+.TP
+.BI "void Th8_ReportTaint(Th8_Interp *" interp ", size_t " n ");"
+Report a tainted string length (high bit set) for diagnostics.
+.SS "Coroutines"
+.TP
+.BI "int Th8_CoroCreate(Th8_Interp *" interp ", const char *" zName ", size_t " nName ", const char *" zBody ", size_t " nBody ");"
+Create a coroutine command
+.I zName
+whose body is
+.IR zBody .
+The first invocation begins evaluation; subsequent invocations
+resume after the most recent
+.BR yield .
+.TP
+.BI "int Th8_CoroYield(Th8_Interp *" interp ", const char *" z ", size_t " n ");"
+Suspend the current coroutine, returning
+.I z
+to the caller.
+.SS "Expansion Operators"
+.TP
+.BI "int Th8_RegisterExpansion(Th8_Interp *" interp ", const char *" zTag ", size_t " nTag ", Th8_ExpansionProc " xProc ", void *" pCtx ");"
+Register an expansion operator for the given
+.I zTag
+in the current namespace.  The built-in
+.B {*}
+operator is registered automatically.
+.TP
+.BI "int Th8_UnregisterExpansion(Th8_Interp *" interp ", const char *" zTag ", size_t " nTag ");"
+Remove the expansion operator for
+.IR zTag .
+.TP
+.BI "int Th8_FindExpansion(Th8_Interp *" interp ", const char *" zTag ", size_t " nTag ", Th8_ExpansionProc *" pxProc ", void **" ppCtx ");"
+Look up an expansion operator.  Searches the namespace hierarchy.
+.TP
+.BI "void Th8_ListAppendExpansions(Th8_Interp *" interp ", char **" pzList ", size_t *" pnList ", const char *" zPat ", size_t " nPat ");"
+Append expansion operator tag names to a list, with optional glob filtering.
+.SS "Debug API"
+.TP
+.BI "int Th8_SetDebugCallback(Th8_Interp *" interp ", Th8_DebugProc " xDebug ", void *" pCtx ");"
+Install a debug callback.  The callback is invoked before each
+command dispatch when stepping is active or a breakpoint is hit.
+Pass NULL to disable.
+.TP
+.BI "int Th8_SetBreakpoint(Th8_Interp *" interp ", const char *" zScript ", size_t " nScript ", int " nLine ", int *" pId ");"
+Set a breakpoint at the given script name and line number.
+.TP
+.BI "int Th8_ClearBreakpoint(Th8_Interp *" interp ", int " id ");"
+Remove a breakpoint by its ID.
+.TP
+.BI "int Th8_ClearAllBreakpoints(Th8_Interp *" interp ");"
+Remove all breakpoints.
+.TP
+.BI "void Th8_ListAppendBreakpoints(Th8_Interp *" interp ", char **" pzList ", size_t *" pnList ");"
+Append breakpoint descriptions (id, scriptName, lineNumber triples) to a list.
+.TP
+.BI "int Th8_SetStepMode(Th8_Interp *" interp ", int " mode ");"
+Set the debugger step mode:
+.BR TH8_STEP_NONE ", " TH8_STEP_INTO ", or " TH8_STEP_OVER .
+.TP
+.BI "int Th8_GetStepMode(Th8_Interp *" interp ");"
+Return the current step mode.
+.TP
+.BI "int Th8_EvalAtFrame(Th8_Interp *" interp ", int " nFrame ", const char *" z ", size_t " n ");"
+Evaluate a script in the variable context of call frame
+.IR nFrame .
+Used for debugger watch expressions.
+.TP
+.BI "int Th8_NREvalInFrame(Th8_Interp *" interp ", int " nFrame ", const char *" z ", size_t " n ");"
+NRE variant of
+.BR Th8_EvalAtFrame .
+.TP
+.BI "int Th8_GetFrameCount(Th8_Interp *" interp ");"
+Return the current call frame depth.
+.TP
+.BI "int Th8_GetFrameInfo(Th8_Interp *" interp ", int " nFrame ", const char **" pzName ", size_t *" pnName ");"
+Get the name of call frame
+.IR nFrame .
+.TP
+.BI "int Th8_GetFrameObjv(Th8_Interp *" interp ", int " nFrame ", int *" pArgc ", const char ***" pArgv ", size_t **" pArgl ");"
+Get the argument vector of call frame
+.IR nFrame .
+.SS "Secure Variable Persistence"
+.TP
+.BI "int Th8_SecureSetMasterKey(Th8_Interp *" interp ", const unsigned char *" pKey ", size_t " nKey ");"
+Set the master key (32 bytes, AES-256) for secure variable persistence.
+Copies
+.I pKey
+into the locked key page (slot 1).
+.TP
+.BI "void Th8_SecureClearMasterKey(Th8_Interp *" interp ");"
+Securely zero the master key in slot 1.
+.TP
+.BI "int Th8_EnableSecurePersist(Th8_Interp *" interp ", int " bEnable ");"
+Enable or disable the secure persistence security gate.
+.TP
+.BI "int Th8_IsSecurePersistEnabled(Th8_Interp *" interp ");"
+Return non-zero if the secure persistence gate is enabled.
+.SS "Fault Injection"
+.TP
+.BI "int Th8_FaultInstall(Th8_Interp *" interp ", Th8_FaultConfig *" pConfig ");"
+Install the fault injection wrapper around the platform callbacks.
+All allocation calls are intercepted and can be made to fail
+after a configured count.
+.TP
+.BI "int Th8_FaultUninstall(Th8_Interp *" interp ");"
+Remove the fault injection wrapper, restoring the original platform.
+.TP
+.BI "void Th8_FaultConfigInit(Th8_FaultConfig *" pConfig ");"
+Initialize a fault configuration struct to defaults.
+.TP
+.BI "size_t Th8_FaultCtxSize(void);"
+Return the size of the fault injection context struct.
+.SS "Platform Providers"
+.TP
+.BI "const Th8_Platform *Th8_GetPlatform(Th8_Interp *" interp ");"
+Return the interpreter's platform struct pointer.
+.TP
+.BI "Th8_Platform *Th8_ClonePlatform(const Th8_Platform *" pSrc ");"
+Heap-allocate a copy of
+.IR pSrc .
+.TP
+.BI "void Th8_FreePlatform(Th8_Platform *" p ");"
+Free a platform struct allocated by
+.BR Th8_ClonePlatform .
+.TP
+.BI "int Th8_MergePlatformInterp(Th8_Interp *" interp ", const Th8_Platform *" pSrc ");"
+Merge
+.I pSrc
+into the interpreter's platform, filling NULL slots.
+.TP
+.BI "int Th8_UseDefaultPlatform(Th8_Interp *" interp ");"
+Reset the interpreter's platform to the process-global default.
+.TP
+.BI "const Th8_Platform *Th8_GetPosixPlatform(void);"
+.TP
+.BI "const Th8_Platform *Th8_GetLibcPlatform(void);"
+.TP
+.BI "const Th8_Platform *Th8_GetWin32Platform(void);"
+.TP
+.BI "const Th8_Platform *Th8_GetMacOSPlatform(void);"
+.TP
+.BI "const Th8_Platform *Th8_GetMimallocPlatform(void);"
+.TP
+.BI "const Th8_Platform *Th8_GetCosmopolitanPlatform(void);"
+.TP
+.BI "const Th8_Platform *Th8_GetCurlPlatform(void);"
+.TP
+.BI "const Th8_Platform *Th8_GetEnvPlatform(void);"
+.TP
+.BI "const Th8_Platform *Th8_GetNullIoPlatform(void);"
+.TP
+.BI "const Th8_Platform *Th8_GetMemPlatform(void);"
+Return the static platform struct for each platform layer.
+.B Th8_GetMemPlatform
+provides only
+.BR xNeedMemory :
+on allocation failure it clears the IR cache, validates the size,
+and retries via the interpreter's
+.BR xMalloc .
+.SS "Platform Per-Callback Context"
+.TP
+.BI "int Th8_SetPlatformContext(Th8_Interp *" interp ", Th8_PlatformFunc " xCallback ", void *" pCtx ");"
+Override the context pointer for a specific platform callback.
+The
+.I xCallback
+argument is the platform callback function pointer cast to
+.B Th8_PlatformFunc
+(a generic function pointer type) to avoid ISO C function-pointer
+to object-pointer conversion warnings.
+.TP
+.BI "int Th8_GetPlatformContext(Th8_Interp *" interp ", Th8_PlatformFunc " xCallback ", void **" ppCtx ");"
+Return the per-callback context override through
+.IR ppCtx ,
+or the platform default if not set.
+.SS "Ensemble Support"
+.TP
+.BI "int Th8_CallSubCommand(Th8_Interp *" interp ", void *" ctx ", int " argc ", const char **" argv ", size_t *" argl ", const Th8_SubCommand *" aSub ");"
+Dispatch to a sub-command by matching
+.I argv[1]
+against the
+.I aSub
+table.  Reports an error listing valid sub-commands on mismatch.
+.SS "Attribute Flags (Harpy)"
+.TP
+.BI "int Th8_AttrFlagsParse(Th8_Interp *" interp ", const char *" z ", size_t " n ", int " bComplex ", int " bSpace ", Th8_AfMap *" pMap ");"
+Parse a Harpy-compatible attribute flag string into a map.
+.TP
+.BI "int Th8_AttrFlagsHave(const Th8_AfMap *" pMap ", th8_int64_t " key ", const char *" z ", size_t " n ", int " bAll ", int " bStrict ");"
+Test whether the parsed map contains the specified flags.
+.TP
+.BI "int Th8_AttrFlagsChange(Th8_Interp *" interp ", Th8_AfMap *" pMap ", const char *" z ", size_t " n ", th8_int64_t " key ");"
+Apply +add, -remove, and =set operators to the flag map.
+.TP
+.BI "int Th8_AttrFlagsFormat(Th8_Interp *" interp ", const Th8_AfMap *" pMap ", int " bLegacy ", int " bCompact ", int " bSpace ", int " bSort ", char **" pz ", size_t *" pn ");"
+Format the flag map back to a string.
+.TP
+.BI "int Th8_HarpySigLoad(Th8_Interp *" interp ", const char *" zSig ", size_t " nSig ", unsigned char **" ppSig ", size_t *" pnSig ", char **" pzToken ");"
+Parse a .b64sig Harpy signature file.
+.SS "Miscellaneous Accessors"
+.TP
+.BI "int Th8_GlobMatch(Th8_Interp *" interp ", const char *" zPat ", size_t " nPat ", const char *" z ", size_t " n ");"
+Test whether
+.I z
+matches the glob pattern
+.IR zPat .
+.TP
+.BI "int Th8_GetEvalDepth(Th8_Interp *" interp ");"
+Return the current script evaluation nesting depth.
+.TP
+.BI "int Th8_GetLine(Th8_Interp *" interp ");"
+Return the current source line number.
+.TP
+.BI "int Th8_GetErrorLine(Th8_Interp *" interp ");"
+Return the line where the most recent error occurred.
+.TP
+.BI "void Th8_SetErrorLine(Th8_Interp *" interp ", int " nLine ");"
+Set the error line number.
+.TP
+.BI "int Th8_GetAllocLimit(Th8_Interp *" interp ");"
+Return the memory allocation limit in bytes.
+.TP
+.BI "int Th8_GetResultLimit(Th8_Interp *" interp ");"
+Return the result size limit in bytes.
+.TP
+.BI "int Th8_GetOverflowCheck(Th8_Interp *" interp ");"
+Return non-zero if integer overflow checking is enabled.
+.TP
+.BI "const char *Th8_GetSourceName(Th8_Interp *" interp ");"
+Return the name of the current source script.
+.TP
+.BI "void Th8_PushSourceName(Th8_Interp *" interp ", const char *" z ", size_t " n ");"
+Push a source name onto the [info script] stack.
+.TP
+.BI "void Th8_PopSourceName(Th8_Interp *" interp ");"
+Pop the current source name from the stack.
+.TP
+.BI "th8_int64_t Th8_GetStepCount(Th8_Interp *" interp ");"
+Return the current step counter value.
+.TP
+.BI "void Th8_ResetStepCount(Th8_Interp *" interp ");"
+Reset the step counter to zero.
+.TP
+.BI "th8_int64_t Th8_GetStepLimit(Th8_Interp *" interp ");"
+Return the step limit.
+.TP
+.BI "th8_int64_t Th8_GetTimeMs(Th8_Interp *" interp ");"
+Return the current time in milliseconds since the epoch.
+.TP
+.BI "th8_int64_t Th8_GetTimeUs(Th8_Interp *" interp ");"
+Return the current time in microseconds since the epoch.
+.TP
+.BI "int Th8_GetPid(Th8_Interp *" interp ");"
+Return the current process ID.
+.TP
+.BI "int Th8_GetParentPid(Th8_Interp *" interp ");"
+Return the parent process ID.
+.TP
+.BI "int Th8_GetThreadId(Th8_Interp *" interp ");"
+Return the current thread ID.
+.TP
+.BI "const char *Th8_GetBasePath(Th8_Interp *" interp ");"
+Return the base directory path.
+.TP
+.BI "char *Th8_GetEnv(Th8_Interp *" interp ", const char *" zName ");"
+Return the value of environment variable
+.IR zName .
+The returned string is owned by the caller and must be freed.
+.TP
+.BI "int Th8_DoesEnvExist(Th8_Interp *" interp ", const char *" zName ");"
+Return non-zero if the environment variable exists.
+.TP
+.BI "int Th8_KeyValue(Th8_Interp *" interp ", int " op ", const char *" zName ", size_t " nName ", const char *" zValue ", size_t " nValue ");"
+Dispatch a key-value operation (TH8_KV_*) to the platform's
+.B xKeyValue
+callback.
+.TP
+.BI "int Th8_Sleep(Th8_Interp *" interp ", int " ms ");"
+Sleep for
+.I ms
+milliseconds with cancellation checks every 50ms.
+.TP
+.BI "int Th8_DeclareSystemVar(Th8_Interp *" interp ", const char *" z ", size_t " n ");"
+Register a variable name as read-only from scripts.
+.TP
+.BI "int Th8_IsSystemVar(Th8_Interp *" interp ", const char *" z ", size_t " n ");"
+Return non-zero if the variable is declared as a system variable.
+.TP
+.BI "int Th8_ExistsArrayVar(Th8_Interp *" interp ", const char *" z ", size_t " n ");"
+Return non-zero if the variable is an array.
+.TP
+.BI "int Th8_DeleteCommand(Th8_Interp *" interp ", th8_uint64_t " token ");"
+Delete a command by its token.
+.TP
+.BI "int Th8_GetCommandInfo(Th8_Interp *" interp ", const char *" z ", size_t " n ", Th8_CommandProc *" pxProc ", void **" ppCtx ");"
+Look up a command's callback and context by name.
+.TP
+.BI "int Th8_EvalTrusted(Th8_Interp *" interp ", const char *" z ", size_t " n ");"
+Evaluate a script with the TH8_EVAL_TRUSTED flag,
+bypassing signed-only checks.
+.TP
+.BI "int Th8_EnableBigint(Th8_Interp *" interp ", int " bEnable ");"
+Enable or disable arbitrary precision integer support.
+.TP
+.BI "int Th8_IsBigintEnabled(Th8_Interp *" interp ");"
+Return non-zero if bigint support is enabled.
+.TP
+.BI "int Th8_IntCmpXchg(volatile int *" p ", int " oldVal ", int " newVal ");"
+Atomic compare-and-exchange.  Returns non-zero if
+.I *p
+was
+.I oldVal
+and was set to
+.IR newVal .
+.TP
+.BI "void Th8_GetCacheStats(Th8_Interp *" interp ", th8_uint64_t *" pnHit ", th8_uint64_t *" pnMiss ", th8_uint64_t *" pnEvict ");"
+Return the IR cache hit/miss/evict counters (requires TH8_BENCHMARKING).
+.TP
+.BI "void Th8_ResetCacheStats(Th8_Interp *" interp ");"
+Reset the cache counters to zero.
+.TP
+.BI "void Th8_SetPolicyCallback(Th8_Interp *" interp ", Th8_PolicyProc " xPolicy ", void *" pCtx ");"
+Install or remove the policy callback.
+.TP
+.BI "void Th8_GetPolicyCallback(Th8_Interp *" interp ", Th8_PolicyProc *" pxPolicy ", void **" ppCtx ");"
+Retrieve the current policy callback and context.
+.TP
+.BI "int Th8_SaveSystemVar(Th8_Interp *" interp ", const char *" z ", size_t " n ", void **" ppSaved ");"
+Save all elements of a system array variable for later restore.
+.TP
+.BI "int Th8_RestoreSystemVar(Th8_Interp *" interp ", const char *" z ", size_t " n ", void *" pSaved ");"
+Restore a system variable from a previous
+.BR Th8_SaveSystemVar .
+.TP
+.BI "void Th8_SetPackageUnknown(Th8_Interp *" interp ", const char *" z ", size_t " n ");"
+Set the script invoked when
+.B "package require"
+cannot find a package.
+.TP
+.BI "const char *Th8_GetPackageUnknown(Th8_Interp *" interp ");"
+Return the current package unknown handler script.
+.TP
+.BI "int Th8_Pledge(Th8_Interp *" interp ", const char *" z ");"
+Call the OpenBSD
+.BR pledge (2)
+system call with the given promise string.
+.TP
+.BI "int Th8_Unveil(Th8_Interp *" interp ", const char *" zPath ", const char *" zPerms ");"
+Call the OpenBSD
+.BR unveil (2)
+system call.
+.TP
+.BI "int Th8_OutputError(Th8_Interp *" interp ", const char *" z ", size_t " n ");"
+Write to the error output channel.
+.TP
+.BI "void Th8_EmitTrace(Th8_Interp *" interp ", const char *" zFmt ", ...);"
+Emit a formatted trace message via the platform's xEmitTrace callback.
+.SS "I/O Redirection"
+.TP
+.BI "int Th8_RedirectInput(Th8_Interp *" interp ", const char *" zPath ", size_t " nPath ");"
+Redirect stdin to a file.
+.TP
+.BI "int Th8_RedirectOutput(Th8_Interp *" interp ", const char *" zPath ", size_t " nPath ");"
+Redirect stdout to a file.
+.TP
+.BI "int Th8_RedirectErrorOutput(Th8_Interp *" interp ", const char *" zPath ", size_t " nPath ");"
+Redirect stderr to a file.
+.TP
+.BI "int Th8_GetInput(Th8_Interp *" interp ", const char **" ppPath ");"
+Get the current stdin path.
+.TP
+.BI "int Th8_GetOutput(Th8_Interp *" interp ", const char **" ppPath ");"
+Get the current stdout path.
+.TP
+.BI "int Th8_GetErrorOutput(Th8_Interp *" interp ", const char **" ppPath ");"
+Get the current stderr path.
+.SS "Math Functions"
+.TP
+.BI "int Th8_CreateMathFunc(Th8_Interp *" interp ", const char *" zName ", int " nArg ", Th8_MathFuncProc " xProc ", void *" pCtx ");"
+Register a math function for use in
+.BR [expr] .
+.TP
+.BI "int Th8_DeleteMathFunc(Th8_Interp *" interp ", const char *" zName ");"
+Remove a registered math function.
+.TP
+.BI "int Th8_FindMathFunc(Th8_Interp *" interp ", const char *" zName ", size_t " nName ", int *" pnArg ", Th8_MathFuncProc *" pxProc ", void **" ppCtx ");"
+Look up a math function by name.
+.TP
+.BI "void Th8_ListAppendMathFunctions(Th8_Interp *" interp ", char **" pzList ", size_t *" pnList ", const char *" zPat ", size_t " nPat ");"
+Append math function names to a list with optional glob filtering.
+.SS "List Enumeration"
+.TP
+.BI "void Th8_ListAppendCommands(Th8_Interp *" interp ", char **" pzList ", size_t *" pnList ", const char *" zPat ", size_t " nPat ");"
+Append command names, filtered by glob pattern.
+.TP
+.BI "void Th8_ListAppendCommandsMatching(Th8_Interp *" interp ", char **" pzList ", size_t *" pnList ", Th8_CommandProc " xMatch1 ", Th8_CommandProc " xMatch2 ");"
+Append commands whose dispatch function matches one of the given
+function pointers.
+.TP
+.BI "void Th8_ListAppendGlobalVariables(Th8_Interp *" interp ", char **" pzList ", size_t *" pnList ", const char *" zPat ", size_t " nPat ");"
+Append global variable names with optional glob filtering.
+.TP
+.BI "void Th8_ListAppendVariables(Th8_Interp *" interp ", char **" pzList ", size_t *" pnList ", const char *" zPat ", size_t " nPat ");"
+Append current-scope variable names.
+.TP
+.BI "void Th8_ListAppendNsVariables(Th8_Interp *" interp ", const char *" zNs ", size_t " nNs ", char **" pzList ", size_t *" pnList ", const char *" zPat ", size_t " nPat ");"
+Append namespace-scoped variable names.
+.TP
+.BI "void Th8_ListAppendNsChildren(Th8_Interp *" interp ", const char *" zNs ", size_t " nNs ", char **" pzList ", size_t *" pnList ");"
+Append child namespace names.
+.TP
+.BI "void Th8_ListAppendVarLinks(Th8_Interp *" interp ", char **" pzList ", size_t *" pnList ");"
+Append linked variable names (upvar/global) in the current frame.
+.TP
+.BI "void Th8_ListAppendLoaded(Th8_Interp *" interp ", char **" pzList ", size_t *" pnList ");"
+Append names of loaded shared libraries.
+.TP
+.BI "void Th8_ListAppendArray(Th8_Interp *" interp ", const char *" zArr ", size_t " nArr ", char **" pzList ", size_t *" pnList ");"
+Append element names of an array variable.
+.SS "RSA Key Internals"
+.TP
+.BI "int Th8_RsaKeyHasPrivate(Th8_Interp *" interp ", Th8_RsaKey *" pKey ");"
+Return non-zero if the RSA key contains a private key.
+.TP
+.BI "int Th8_RsaKeyModulus(Th8_Interp *" interp ", Th8_RsaKey *" pKey ", const unsigned char **" pp ", size_t *" pn ");"
+Return a pointer to the RSA modulus bytes.
+.TP
+.BI "int Th8_RsaKeyPubExp(Th8_Interp *" interp ", Th8_RsaKey *" pKey ", const unsigned char **" pp ", size_t *" pn ");"
+Return a pointer to the RSA public exponent bytes.
+.TP
+.BI "int Th8_RsaKeyPrivExp(Th8_Interp *" interp ", Th8_RsaKey *" pKey ", const unsigned char **" pp ", size_t *" pn ");"
+Return a pointer to the RSA private exponent bytes.
+.TP
+.BI "int Th8_RsaKeyPrime1(Th8_Interp *" interp ", Th8_RsaKey *" pKey ", const unsigned char **" pp ", size_t *" pn ");"
+Return a pointer to the first RSA prime factor.
+.TP
+.BI "int Th8_RsaKeyPrime2(Th8_Interp *" interp ", Th8_RsaKey *" pKey ", const unsigned char **" pp ", size_t *" pn ");"
+Return a pointer to the second RSA prime factor.
+.TP
+.BI "int Th8_RsaSign(Th8_Interp *" interp ", Th8_RsaKey *" pKey ", const unsigned char *" zData ", size_t " nData ", unsigned char **" ppSig ", size_t *" pnSig ");"
+Sign data with an RSA private key using PKCS#1 v1.5 + SHA-512.
+.SS "Namespace Helpers"
+.TP
+.BI "Th8_Namespace *Th8_GetCurrentNamespace(Th8_Interp *" interp ");"
+Return the current namespace.
+.TP
+.BI "Th8_Namespace *Th8_FindNamespace(Th8_Interp *" interp ", const char *" z ", size_t " n ", int " bCreate ");"
+Find or create a namespace by qualified name.
+.SS "Policy Key Management"
+.TP
+.BI "int Th8_PolicyFindKey(Th8_Interp *" interp ", const char *" zToken ", Th8_RsaKey **" ppKey ");"
+Look up an RSA public key in the policy cache by hex token.
+.TP
+.BI "int Th8_PolicyGetKeyTokens(Th8_Interp *" interp ", char **" pzList ", size_t *" pnList ");"
+Append all cached key tokens to a list.
+.TP
+.BI "int Th8_PolicyPreloadKey(Th8_Interp *" interp ", Th8_RsaKey *" pKey ", const char *" zToken ");"
+Insert a key into the policy cache.
+.SS "Additional Accessors"
+.TP
+.BI "const char **Th8_GetCompileOptions(void);"
+Return a NULL-terminated array of compile-time option strings.
+.TP
+.BI "int Th8_GetLastError(Th8_Interp *" interp ");"
+Return the platform's last OS error code.
+.TP
+.BI "char *Th8_GetRealPath(Th8_Interp *" interp ", const char *" z ", size_t " n ");"
+Return the resolved real path of a file.  Caller must free.
+.TP
+.BI "Th8_Hash *Th8_GetMathFuncHash(Th8_Interp *" interp ");"
+Return the internal hash table of registered math functions.
+.TP
+.BI "Th8_Hash *Th8_GetPackageHash(Th8_Interp *" interp ");"
+Return the internal hash table of registered packages.
+.TP
+.BI "int Th8_GetEmbeddedKeyTime(Th8_Interp *" interp ", const unsigned char **" ppKey ", size_t *" pnKey ", const char **" ppToken ");"
+Access the embedded time key.
+.SH "SEE ALSO"
+.BR th8 (1),
+.BR th8_re_syntax (1)
+.SH "COPYRIGHT"
+Copyright \(co 2026 Joe Mistachkin.  All rights reserved.
