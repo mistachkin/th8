@@ -8,7 +8,7 @@
 .\"
 .\" Dedicated to the memory of Miguel Sofer (d. 2016).
 .\"
-.TH TH8 1 "June 22, 2026" "TH8" "TH8 Language Reference"
+.TH TH8 1 "July 3, 2026" "TH8" "TH8 Language Reference"
 .SH NAME
 th8 \- TH8 scripting language reference
 .SH SYNOPSIS
@@ -339,6 +339,14 @@ Equivalent to
 for each argument.
 Outside a procedure, has no effect.
 .TP
+\fBvariable\fR \fIname\fR ?\fIvalue\fR? ?\fIname value ...\fR?
+Within a namespace body, declares each \fIname\fR as a
+namespace-scoped variable and optionally initializes it to
+\fIvalue\fR.  Inside a procedure, links each \fIname\fR to the
+same-named variable in the enclosing namespace (create-on-read
+if it does not exist).  Returns the empty string.  See
+.BR namespace .
+.TP
 \fBincr\fR \fIvarname\fR ?\fIincrement\fR?
 Adds \fIincrement\fR (default 1) to the integer value of
 \fIvarname\fR.
@@ -440,6 +448,21 @@ Classification (TIP #521):
 .BR fpclassify ", " isfinite ", " isinf ", " isnan ", "
 .BR isnormal ", " issubnormal ", " isunordered .
 .RE
+.TP
+\fBfpclassify\fR \fInumber\fR
+Classifies the floating-point
+.I number
+and returns one of
+.BR zero ,
+.BR subnormal ,
+.BR normal ,
+.BR infinite ,
+or
+.BR nan .
+The command form is equivalent to the
+.B fpclassify(x)
+expression math function and matches its result exactly (see
+.BR expr ).
 .SS "LISTS"
 .TP
 \fBjoin\fR \fIlist\fR ?\fIseparator\fR?

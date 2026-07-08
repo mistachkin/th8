@@ -643,9 +643,9 @@ pt_xSetTemporaryData(
 
 PT_3(xCloseTemporaryData, int, const char *, size_t, void *)
 
-/* Filesystem */
+/* Filesystem -- xGetCwd is handled by the fi_xGetCwd wrapper below,
+ * so no PT_0 passthrough is generated for it. */
 PT_2(xNormalizePath, char *, const char *, size_t)
-PT_0(xGetCwd, char *)
 PT_2(xSetCwd, int, const char *, size_t)
 PT_0(xGetExePath, char *)
 PT_4(xGetRealPath, int, const char *, size_t, char *, size_t)
@@ -658,8 +658,8 @@ PT_4(xSameFile, int, const char *, size_t, const char *, size_t)
 PT_4(xLoad, int, const char *, size_t, const char *, size_t)
 PT_5(xUnload, int, const char *, size_t, const char *, size_t, int)
 
-/* Time */
-PT_1(xTimeMs, int, th8_int64_t *)
+/* Time -- xTimeMs is handled by the fi_xTimeMs wrapper below, so no
+ * PT_1 passthrough is generated for it. */
 PT_1(xTimeUs, int, th8_int64_t *)
 PT_V1(xSleep, int)
 
@@ -667,7 +667,8 @@ PT_V1(xSleep, int)
 PT_0(xGetPid, int)
 PT_2(xGetUserName, int, char *, size_t)
 PT_2(xGetHostName, int, char *, size_t)
-PT_1(xGetEnv, char *, const char *)
+/* xGetEnv is handled by the fi_xGetEnv wrapper below, so no PT_1
+ * passthrough is generated for it. */
 PT_5(xKeyValue, int, int, const char *, size_t, const char *, size_t)
 PT_2(xGetStackBounds, int, void **, size_t *)
 PT_0(xGetParentPid, int)

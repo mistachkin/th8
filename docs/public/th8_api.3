@@ -1,4 +1,4 @@
-.TH TH8_API 3 "June 22, 2026" "TH8" "TH8 Library Functions"
+.TH TH8_API 3 "July 3, 2026" "TH8" "TH8 Library Functions"
 .SH NAME
 th8_api \- TH8 interpreter C programming interface
 .SH SYNOPSIS
@@ -2137,6 +2137,122 @@ Return the internal hash table of registered packages.
 .TP
 .BI "int Th8_GetEmbeddedKeyTime(Th8_Interp *" interp ", const unsigned char **" ppKey ", size_t *" pnKey ", const char **" ppToken ");"
 Access the embedded time key.
+.SS "Async State and Event Queue"
+.TP
+.B "void *Th8_CreateAsyncState(Th8_Interp *interp, void *pCtx);"
+Allocate an opaque async-state object that an embedder passes to
+.B Th8_QueueEvent
+to schedule a callback for later delivery.
+.TP
+.B "int Th8_FinalizeAsyncState(void *pState);"
+Free an async-state object previously returned by
+.BR Th8_CreateAsyncState .
+.TP
+.B "int Th8_QueueEvent(void *pState, int (*xCallback)(Th8_Interp *, void *));"
+Enqueue an event for later drain by
+.B [update]
+or
+.BR [vwait] .
+.TP
+.B "int Th8_DrainQueueEvents(Th8_Interp *interp);"
+Drain and invoke all pending events across every event state
+associated with the interpreter.
+.SS "DNS Resolution"
+.TP
+.B "int Th8_DnsResolve(Th8_Interp *interp, const char *zName, size_t nName, int eType, Th8_DnsResult **ppResult);"
+DNSSEC-validating DNS lookup via the platform's
+.B xDnsResolve
+callback.
+.TP
+.B "void Th8_DnsResolveFree(Th8_Interp *interp, Th8_DnsResult *pResult);"
+Release a
+.B Th8_DnsResult
+returned by
+.BR Th8_DnsResolve .
+.SS "Additional Platform Providers"
+.TP
+.B "const Th8_Platform *Th8_GetAndroidPlatform(void);"
+Return a
+.B Th8_Platform
+with Android-specific overrides layered on the POSIX platform.
+.TP
+.B "const Th8_Platform *Th8_GetIosPlatform(void);"
+Return a
+.B Th8_Platform
+with iOS-specific overrides layered on the POSIX platform.
+.SS "Additional Filesystem and I/O"
+.TP
+.B "char *Th8_GetCwd(Th8_Interp *interp);"
+Return the current working directory via the platform's
+.B xGetCwd
+callback.  Caller must free.
+.TP
+.B "int Th8_GetData(Th8_Interp *interp, const char *zName, size_t nName, char **pzOut, size_t *pnOut, int flags);"
+Retrieve named data via the platform's
+.B xGetData
+callback.
+.TP
+.B "int Th8_Input(Th8_Interp *interp, char **pzOut, size_t *pnOut, int flags);"
+Read input via the platform's
+.B xInput
+callback.
+.TP
+.B "int Th8_Output(Th8_Interp *interp, const char *z, size_t n, int flags);"
+Write
+.I z
+(n bytes) to the standard output channel via the platform's
+.B xOutput
+callback.
+.SS "Additional Expression, Signing, and Introspection"
+.TP
+.B "int Th8_GetExprFeatures(Th8_Interp *interp);"
+Return the current expression-feature flag set for the interpreter
+(bitwise-OR of TH8_EXPR_* flags).
+.TP
+.B "int Th8_SetExprFeatures(Th8_Interp *interp, int flags);"
+Set the expression-feature flag set for the interpreter.  Returns
+the previous flag set.
+.TP
+.B "const Th8_KeyringEntry *Th8_GetEmbeddedKeyring(size_t *pnEntries);"
+Return the array of trusted-root keys embedded in this build; the
+count is written to
+.IR *pnEntries .
+.TP
+.B "const void *Th8_GetInternalStubs(void);"
+Return an opaque pointer to the TH8 internal stubs table used by
+the test library.
+.TP
+.B "int Th8_IterateArraySearches(Th8_Interp *interp, int (*xCallback)(const char *, size_t, const char *, size_t, void *), void *pCtx);"
+Diagnostic enumeration of pending
+.B [array startsearch]
+state, one callback per array/search-id pair.
+.SS "Additional Safe-Alloc and Step-Counter Helpers"
+.TP
+.B "void *Th8_SafeRealloc(Th8_Interp *interp, void *p, size_t nByte, const char *zFile, int nLine);"
+Overflow-safe
+.B realloc
+wrapper that panics on failure.  See
+.B Th8_SafeMalloc
+for the family contract.
+.TP
+.B "void *Th8_SafeAttemptRealloc(Th8_Interp *interp, void *p, size_t nByte, const char *zFile, int nLine);"
+Overflow-safe
+.B realloc
+that returns NULL on failure instead of panicking.
+.TP
+.B "void Th8_SetStepCount(Th8_Interp *interp, th8_int64_t nCount);"
+Set the interpreter's step counter to an explicit value without
+changing the step limit.
+.SS "Thread Lifecycle"
+.TP
+.B "void Th8_ThreadInit(void);"
+One-time per-thread initialization for a thread that intends to
+create or drive a TH8 interpreter (initializes thread-local caches
+and per-thread math-function state).
+.TP
+.B "void Th8_ThreadDone(void);"
+Per-thread teardown; releases thread-local storage allocated by
+.BR Th8_ThreadInit .
 .SH "SEE ALSO"
 .BR th8 (1),
 .BR th8_re_syntax (1)

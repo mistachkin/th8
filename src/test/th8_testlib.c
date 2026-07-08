@@ -5994,41 +5994,45 @@ th8test_plat_wrappers_cmd(
 	     * extends to position 277 followed by '/' so the host
 	     * scanner at L325 stops there.  Built statically so the
 	     * trailing '/' is fixed and the buffer is properly NUL-
-	     * terminated. */
-	    static const char zLongHost[] =
-	        "http://"
-	        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	        "aaaaaaaaaa/"; /* 5*52 + 10 = 270 host chars */
-	    static const char *azUrl[] = {
-	        "http://127.0.0.1:1/", /* nHost=9: L336 (T,T) */
-	        "http:///x", /* nHost=0: L336 (F,-) */
-	        zLongHost /* nHost=270: L336 (T,F) */
-	    };
-	    static const size_t anUrl[] = {19, 9, sizeof(zLongHost) - 1};
-	    int mode, ui;
-	    for (mode = 0; mode <= 7; mode++) {
-		for (ui = 0; ui < 3; ui++) {
-		    Th8_Platform cp = *pP;
-		    Th8_Interp *pChild;
-		    dnsCtx.mode = mode;
-		    cp.xPanic = 0;
-		    cp.xDnsResolve = th8test_stub_xDnsResolve;
-		    cp.xDnsResolveFree = th8test_stub_xDnsResolveFree;
-		    cp.pCtx = &dnsCtx;
-		    pChild = Th8_CreateInterp(&cp);
-		    if (pChild) {
-			char *zOut = NULL;
-			size_t nOut = 0;
-			Th8_RegisterLanguage(pChild);
-			(void)pCurl->xGetData(
-			    pChild, pCurl->pCtx, azUrl[ui], anUrl[ui], &zOut,
-			    &nOut);
-			if (zOut) Th8_Free(pChild, zOut);
-			Th8_DeleteInterp(pChild);
+	     * terminated.  Wrapped in its own block so the static
+	     * decl sits at the top of a scope (-Wdeclaration-after-
+	     * statement is clean under c99-pedantic). */
+	    {
+		static const char zLongHost[] =
+		    "http://"
+		    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		    "aaaaaaaaaa/"; /* 5*52 + 10 = 270 host chars */
+		static const char *azUrl[] = {
+		    "http://127.0.0.1:1/", /* nHost=9: L336 (T,T) */
+		    "http:///x", /* nHost=0: L336 (F,-) */
+		    zLongHost /* nHost=270: L336 (T,F) */
+		};
+		static const size_t anUrl[] = {19, 9, sizeof(zLongHost) - 1};
+		int mode, ui;
+		for (mode = 0; mode <= 7; mode++) {
+		    for (ui = 0; ui < 3; ui++) {
+			Th8_Platform cp = *pP;
+			Th8_Interp *pChild;
+			dnsCtx.mode = mode;
+			cp.xPanic = 0;
+			cp.xDnsResolve = th8test_stub_xDnsResolve;
+			cp.xDnsResolveFree = th8test_stub_xDnsResolveFree;
+			cp.pCtx = &dnsCtx;
+			pChild = Th8_CreateInterp(&cp);
+			if (pChild) {
+			    char *zOut = NULL;
+			    size_t nOut = 0;
+			    Th8_RegisterLanguage(pChild);
+			    (void)pCurl->xGetData(
+			        pChild, pCurl->pCtx, azUrl[ui], anUrl[ui],
+			        &zOut, &nOut);
+			    if (zOut) Th8_Free(pChild, zOut);
+			    Th8_DeleteInterp(pChild);
+			}
 		    }
 		}
 	    }
@@ -18182,7 +18186,8 @@ th8test_policyverifydata_cmd(
 	return TH8_ERROR;
     }
 
-    pChild = Th8_CreateInterp(Th8_GetPlatform(interp));
+    pChild = Th8_CreateInterp((Th8_Platform *)(void *)
+                                  Th8_GetPlatform(interp));
     if (!pChild) {
 	Th8_SetResultStatic(interp, "cannot create child interp", TH8_NOLEN);
 	return TH8_ERROR;
@@ -18375,7 +18380,8 @@ th8test_policyfindkey_nopaeys_cmd(
     if (argc != 1) {
 	return Th8_WrongNumArgs(interp, "th8testlib::policyfindkey_nopaeys");
     }
-    pChild = Th8_CreateInterp(Th8_GetPlatform(interp));
+    pChild = Th8_CreateInterp((Th8_Platform *)(void *)
+                                  Th8_GetPlatform(interp));
     if (!pChild) {
 	Th8_SetResultStatic(interp, "cannot create child interp", TH8_NOLEN);
 	return TH8_ERROR;
@@ -18477,7 +18483,8 @@ th8test_policyevalpre_cmd(
 	return TH8_ERROR;
     }
 
-    pChild = Th8_CreateInterp(Th8_GetPlatform(interp));
+    pChild = Th8_CreateInterp((Th8_Platform *)(void *)
+                                  Th8_GetPlatform(interp));
     if (!pChild) {
 	Th8_SetResultStatic(interp, "cannot create child interp", TH8_NOLEN);
 	return TH8_ERROR;

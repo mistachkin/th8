@@ -142,8 +142,11 @@ Th8_EvalFile(
 		 * the (n != 4, Memcmp == 0) C-pair is intrinsic-
 		 * dead.  Match flag explicitly. */
 		int isNone = 0;
-		if (n == 4)
-		    if (Th8_Memcmp(interp, z, "none", 4) == 0) isNone = 1;
+		if (n == 4) {
+		    if (Th8_Memcmp(interp, z, "none", 4) == 0) {
+			isNone = 1;
+		    }
+		}
 		if (!isNone) {
 		    zSavedNotBefore = (char *)TH8_ALLOC_STR(interp, n);
 		    if (zSavedNotBefore) {
@@ -167,8 +170,11 @@ Th8_EvalFile(
 		 * the (n != 4, Memcmp == 0) C-pair is intrinsic-
 		 * dead.  Match flag explicitly. */
 		int isNone = 0;
-		if (n == 4)
-		    if (Th8_Memcmp(interp, z, "none", 4) == 0) isNone = 1;
+		if (n == 4) {
+		    if (Th8_Memcmp(interp, z, "none", 4) == 0) {
+			isNone = 1;
+		    }
+		}
 		if (!isNone) {
 		    zSavedNotAfter = (char *)TH8_ALLOC_STR(interp, n);
 		    if (zSavedNotAfter) {

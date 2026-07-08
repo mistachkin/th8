@@ -2424,17 +2424,14 @@ runTest {test wrongargs-plat-nversion-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-nversion-narr-1.1 {
-  R-12332-53658:The Th8_Platform struct nVersion
-  field shall be 2, reflecting the rationalized
-  callback ordering into 16 logical groups:
-  lifecycle, memory, byte operations, string/
-  utility, threading, I/O core, I/O redirection,
-  channel/temporary I/O, filesystem, data/loading,
-  time, process/host, error/diagnostics, math/
-  entropy, and host context.  Narrative duplicate
-  from the public C API spec.  Exercised via
-  `null_guard plat`, same evidence as the SHALL
-  form above.
+  R-16823-25281:The Th8_Platform struct nVersion
+  field shall be 4, reflecting the addition of the
+  xKeyValue callback (version 3 delta) and the
+  manual-reset event callbacks xEventCreate,
+  xEventDestroy, xEventSet, xEventReset, xEventWait
+  (version 4 delta).  Narrative duplicate from the
+  public C API spec.  Exercised via `null_guard plat`,
+  same evidence as the SHALL form above.
 } -constraints {
     th8 fault_injection
 } -body {
@@ -3553,7 +3550,7 @@ runTest {test wrongargs-is-secure-persist-enabled-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-platform-version-3-1.1 {
-  R-47609-23951:The Th8_Platform struct version
+  R-16823-25281:The Th8_Platform struct nVersion field
   SHALL be 3 to reflect the addition of the
   xKeyValue callback field.  All platform static
   initializers SHALL use version 3.

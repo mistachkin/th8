@@ -276,8 +276,8 @@ th8LoadNameMatch(
  *	`info loaded` and the tracking list are stable regardless of
  *	which alias the caller used).  On any failure (no
  *	xGetRealPath, file missing, or buffer too small) the original
- *	name is used unchanged.  Sets *pzOut/*pnOut to either zBuf or
- *	the original zName.
+ *	name is used unchanged.  Sets *pzOut and *pnOut to either zBuf
+ *	or the original zName.
  *
  *----------------------------------------------------------------------
  */

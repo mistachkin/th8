@@ -4367,8 +4367,8 @@ dict_with_command(
 		/* Nested per Finding 005 sec. 5b: all three OOM
 		 * guard arms are intrinsic-dead without fault
 		 * injection (TH8_ALLOC_MUL only fails under OOM). */
-		if (aazLevel)
-		    if (aanLevel)
+		if (aazLevel) {
+		    if (aanLevel) {
 			if (anCountLvl) {
 			    aazLevel[0] = azOuter;
 			    aanLevel[0] = anOuter;
@@ -4439,6 +4439,8 @@ dict_with_command(
 			} else {
 			    Th8_Free(interp, azOuter);
 			}
+		    }
+		}
 		Th8_Free(interp, aazLevel);
 		Th8_Free(interp, aanLevel);
 		Th8_Free(interp, anCountLvl);
