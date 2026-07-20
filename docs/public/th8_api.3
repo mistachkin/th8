@@ -239,8 +239,11 @@ bytes to the buffer at
 The buffer is grown as needed.
 .TP
 .BI "int Th8_SplitList(Th8_Interp *" interp ", const char *" zList ", size_t " nList ", char ***" paz ", size_t **" pan ", int *" pn ");"
-Parse a Tcl list into element arrays.  Caller frees with
-.BR Th8_Free .
+Parse a Tcl list into element arrays.  On success \fI*paz\fR, \fI*pan\fR
+and the element bytes are ONE allocation; free it with a single
+.BI Th8_Free( *paz )
+and do not free \fI*pan\fR or the individual elements separately (they
+are interior pointers).  \fI*paz\fR/\fI*pan\fR are NULL for zero elements.
 .TP
 .BI "int Th8_ListAppend(Th8_Interp *" interp ", char **" pz ", size_t *" pn ", const char *" zElem ", size_t " nElem ");"
 Append a properly quoted element to a list string.

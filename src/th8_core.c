@@ -15039,7 +15039,11 @@ th8EvalLocal(
  *	TH8_OK on success; TH8_ERROR on malformed list.
  *
  * Side effects:
- *	Allocates element arrays if pazElem is non-NULL.
+ *	Allocates one combined block (pointer array + length array +
+ *	element bytes) when pazElem is non-NULL; *panElem points INTO
+ *	it.  The caller frees the whole result with Th8_Free(*pazElem)
+ *	only -- never *panElem or the individual strings.  See the
+ *	public contract in th8.h.
  *
  *----------------------------------------------------------------------
  */

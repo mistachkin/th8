@@ -82,6 +82,14 @@ typedef struct Th8_UnboundResultImpl {
  *	`aggressive-nsec`) would break embedders even though
  *	the security posture is still solid.
  *
+ *	First disables libunbound's own stderr logging via
+ *	`ub_ctx_debugout(ctx, NULL)` -- an embedded library must not
+ *	write to the host's stderr, and this silences the benign
+ *	"can't bind socket" noise when a sandbox denies the
+ *	outgoing-query sockets (the resolve then fails via its return
+ *	code).  Validation status still reaches the caller through the
+ *	resolve RESULT, so nothing security-relevant is hidden.
+ *
  *	Settings applied (every key has the libunbound trailing
  *	colon convention):
  *
@@ -190,6 +198,23 @@ th8UnboundHardenCtx(struct ub_ctx *ubctx)
         {"edns-buffer-size:", "1232"},
     };
     size_t i;
+
+    /*
+     * Silence libunbound's own logging (default destination: stderr).
+     * TH8 is an embedded library and must not spew to the host
+     * application's stderr.  DNSSEC validation status is reported to the
+     * caller through the resolve RESULT (secure / bogus / insecure), not
+     * via stderr, so nothing security-relevant is lost.  This also
+     * suppresses the benign "can't bind socket: Operation not permitted"
+     * noise emitted when the process runs in a sandbox that denies the
+     * outgoing-query sockets libunbound opens for a recursive lookup --
+     * the resolve then fails cleanly through its return code, which the
+     * caller already handles.  ub_ctx_debugout(ctx, NULL) disables both
+     * debug and error output.
+     */
+    if (ub_ctx_debugout(ubctx, NULL) != 0) {
+	TH8_TRACE_ERR(NULL, "ub_ctx_debugout");
+    }
 
     for (i = 0; i < sizeof(aOpt) / sizeof(aOpt[0]); i++) {
 	if (ub_ctx_set_option(
