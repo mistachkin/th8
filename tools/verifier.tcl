@@ -22,6 +22,7 @@
 #     -shell    Path to the TH8 shell binary (default: bin/th8sh).
 #     -skip     Glob pattern for directories to skip (may be repeated).
 #     -fix      Automatically re-sign test key files with production key.
+#     -force    Re-sign test key files when they are not correctly signed.
 #
 # Exit code:
 #     0   All signed files verified successfully.
@@ -56,6 +57,42 @@ proc findScriptFiles {dir skipPatterns} {
     }
     if {!$skip} then {
       foreach f [findScriptFiles $child $skipPatterns] {
+        lappend results $f
+      }
+    }
+  }
+  return $results
+}
+
+proc findSignatureFiles {dir skipPatterns} {
+  set results [list]
+  foreach pattern {*.b64sig} {
+    foreach f [glob -nocomplain -directory $dir $pattern] {
+      set skip 0
+      foreach sp $skipPatterns {
+        if {[string match $sp $f]} then {
+          set skip 1
+          break
+        }
+      }
+      if {!$skip} then {
+        set f [string range $f 0 end-7]; # remove ".b64sig"
+        lappend results $f
+      }
+    }
+  }
+  foreach child [glob -nocomplain -directory $dir -types d *] {
+    set tail [file tail $child]
+    if {$tail eq "." || $tail eq ".."} then { continue }
+    set skip 0
+    foreach sp $skipPatterns {
+      if {[string match $sp $child] || [string match $sp $tail]} then {
+        set skip 1
+        break
+      }
+    }
+    if {!$skip} then {
+      foreach f [findSignatureFiles $child $skipPatterns] {
         lappend results $f
       }
     }
@@ -157,6 +194,7 @@ proc verifyFile {shell projectDir scriptPath} {
 ###############################################################################
 
 set fix 0
+set force 0
 set quiet 0
 set projectDir [file normalize [file join [file dirname [info script]] ..]]
 set shell ""
@@ -167,6 +205,7 @@ for {set i 0} {$i < $argc} {incr i} {
   set arg [lindex $argv $i]
   switch -- $arg {
     -fix    { set fix 1 }
+    -force  { set force  1 }
     -quiet  { set quiet 1 }
     -dir    { incr i; set projectDir [file normalize [lindex $argv $i]] }
     -shell  { incr i; set shell [lindex $argv $i] }
@@ -174,7 +213,7 @@ for {set i 0} {$i < $argc} {incr i} {
     default {
       puts stderr "Unknown option: $arg"
       puts stderr "Usage: tclsh tools/verifier.tcl ?-quiet? ?-dir PATH?\
-                    ?-shell PATH? ?-skip PATTERN?"
+                   ?-shell PATH? ?-skip PATTERN? -fix"
           exit 1
     }
   }
@@ -195,7 +234,12 @@ if {![file executable $shell]} then {
 
 lappend skipPatterns "*/fuzz/*" "*/bin/*"
 
-set allFiles [lsort [findScriptFiles $projectDir $skipPatterns]]
+set allFiles [list]
+
+eval lappend allFiles [findScriptFiles $projectDir $skipPatterns]
+eval lappend allFiles [findSignatureFiles $projectDir $skipPatterns]
+
+set allFiles [lsort -unique $allFiles]
 
 set nTotal    0
 set nSigned   0
@@ -244,18 +288,21 @@ foreach f $allFiles {
         puts "OK        $rel"
       }
     }
-    mismatch {
-      incr nFail
-      puts "FAIL      $rel  ($detail)"
-    }
+    mismatch -
     error {
-      incr nError
-      puts "ERROR     $rel  ($detail)"
+      if {$status eq "error"} then {
+        incr nError
+        puts "ERROR     $rel  ($detail)"
+      } elseif {$status eq "mismatch"} then {
+        incr nFail
+        puts "FAIL      $rel  ($detail)"
+      }
 
-      if {$fix && $detail eq "no matching key" && \
-          $tcl_platform(platform) eq "windows"} then {
-        exec -- $signTool [file nativename [file join $projectDir $rel]]
-        puts "RE-SIGNED $rel"
+      if {$tcl_platform(platform) eq "windows"} then {
+        if {$fix && ($force || $detail eq "no matching key")} then {
+          exec -- $signTool [file nativename [file join $projectDir $rel]]
+          puts "RE-SIGNED $rel"
+        }
       }
     }
   }

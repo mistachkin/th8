@@ -102,6 +102,7 @@ runAllTests {
   coverage/coverage_expr_logical.tcl
   coverage/coverage_expr_partial.tcl
   coverage/coverage_expr_strict.tcl
+  coverage/coverage_expr_sweep.tcl
   coverage/coverage_expr_top_comma.tcl
   coverage/coverage_expr_var_assign.tcl
   coverage/coverage_embedded_key_faults_mcdc.tcl
@@ -168,9 +169,11 @@ runAllTests {
   coverage/coverage_namespace_short.tcl
   coverage/coverage_ns_eval_multi.tcl
   coverage/coverage_nspat_resolve.tcl
+  coverage/coverage_ntp_validate.tcl
   coverage/coverage_null_guards.tcl
   coverage/coverage_oom_dual_pointer.tcl
   coverage/coverage_oom_filtered.tcl
+  coverage/coverage_ossl_fault.tcl
   coverage/coverage_package_states.tcl
   coverage/coverage_package_versions.tcl
   coverage/coverage_parse_command_internal.tcl
@@ -184,6 +187,7 @@ runAllTests {
   coverage/coverage_policy_eval_pre_mcdc.tcl
   coverage/coverage_policy_find_key_mcdc.tcl
   coverage/coverage_policy_verify_data_mcdc.tcl
+  coverage/coverage_posix_fault.tcl
   coverage/coverage_posix_path_mcdc.tcl
   coverage/coverage_proc_args.tcl
   coverage/coverage_proc_lambda.tcl
@@ -233,6 +237,7 @@ runAllTests {
   event.tcl
   exprformat.tcl
   expr.tcl
+  exproverflow.tcl
   fault/fault1.tcl
   file.tcl
   filetail.tcl
@@ -295,6 +300,7 @@ runAllTests {
   subst.tcl
   suspend.tcl
   switch.tcl
+  taint.tcl
   try.tcl
   unset.tcl
   variable.tcl

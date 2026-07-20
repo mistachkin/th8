@@ -23,6 +23,7 @@ const Th8StubsTable th8StubsTableData = {
     Th8_MergePlatform,
     Th8_ClonePlatform,
     Th8_FreePlatform,
+    Th8_MergePlatformInterp,
     Th8_Initialize,
     Th8_Finalize,
     Th8_GetInternalStubs,
@@ -31,6 +32,7 @@ const Th8StubsTable th8StubsTableData = {
     Th8_RestoreInterp,
     Th8_DeleteInterp,
     Th8_Ready,
+    Th8_CancelEval,
     Th8_ThreadInit,
     Th8_ThreadDone,
     Th8_CreateAsyncState,
@@ -46,6 +48,7 @@ const Th8StubsTable th8StubsTableData = {
     Th8_Freeze,
     Th8_Thaw,
     Th8_IsSuspended,
+    Th8_SetDebugCallback,
     Th8_SetBreakpoint,
     Th8_ClearBreakpoint,
     Th8_ClearAllBreakpoints,
@@ -55,6 +58,7 @@ const Th8StubsTable th8StubsTableData = {
     Th8_GetFrameInfo,
     Th8_EvalAtFrame,
     Th8_CoroCreate,
+    Th8_CoroYield,
     Th8_Eval,
     Th8_EvalTrusted,
     Th8_EvalDownlevel,
@@ -71,6 +75,11 @@ const Th8StubsTable th8StubsTableData = {
     Th8_NREvalInFrame,
 #if defined(TH8_ENABLE_VARIABLES)
     Th8_ExistsVar,
+#else
+    0,
+#endif
+#if defined(TH8_ENABLE_VARIABLES)
+    Th8_ExistsArrayVar,
 #else
     0,
 #endif
@@ -100,10 +109,17 @@ const Th8StubsTable th8StubsTableData = {
     Th8_SetCommandCopy,
     Th8_RenameCommand,
     Th8_RegisterExpansion,
+    Th8_UnregisterExpansion,
     Th8_FindExpansion,
     Th8_ListAppendExpansions,
+    Th8_ListAppendBreakpoints,
 #if defined(TH8_ENABLE_EXPRESSIONS)
     Th8_CreateMathFunc,
+#else
+    0,
+#endif
+#if defined(TH8_ENABLE_EXPRESSIONS)
+    Th8_DeleteMathFunc,
 #else
     0,
 #endif
@@ -145,7 +161,32 @@ const Th8StubsTable th8StubsTableData = {
     0,
 #endif
 #if defined(TH8_ENABLE_CRYPTOGRAPHY)
+    Th8_RsaKeyModulus,
+#else
+    0,
+#endif
+#if defined(TH8_ENABLE_CRYPTOGRAPHY)
+    Th8_RsaKeyPrivExp,
+#else
+    0,
+#endif
+#if defined(TH8_ENABLE_CRYPTOGRAPHY)
+    Th8_RsaKeyPrime1,
+#else
+    0,
+#endif
+#if defined(TH8_ENABLE_CRYPTOGRAPHY)
+    Th8_RsaKeyPrime2,
+#else
+    0,
+#endif
+#if defined(TH8_ENABLE_CRYPTOGRAPHY)
     Th8_RsaKeyToken,
+#else
+    0,
+#endif
+#if defined(TH8_ENABLE_CRYPTOGRAPHY)
+    Th8_RsaKeyTokenHex,
 #else
     0,
 #endif
@@ -185,12 +226,22 @@ const Th8StubsTable th8StubsTableData = {
     0,
 #endif
 #if defined(TH8_ENABLE_CRYPTOGRAPHY)
+    Th8_PolicyPreloadKey,
+#else
+    0,
+#endif
+#if defined(TH8_ENABLE_CRYPTOGRAPHY)
     Th8_PolicyGetKeyTokens,
 #else
     0,
 #endif
 #if defined(TH8_ENABLE_CRYPTOGRAPHY)
     Th8_PolicyFindKey,
+#else
+    0,
+#endif
+#if defined(TH8_ENABLE_CRYPTOGRAPHY)
+    Th8_EnableSignedPolicy,
 #else
     0,
 #endif
@@ -251,6 +302,7 @@ const Th8StubsTable th8StubsTableData = {
     0,
 #endif
     Th8_Pledge,
+    Th8_Unveil,
     Th8_SetResult,
     Th8_SetResultStatic,
     Th8_ClearResult,
@@ -259,6 +311,11 @@ const Th8StubsTable th8StubsTableData = {
     Th8_IsResultSensitive,
 #if defined(TH8_ENABLE_VARIABLES) && defined(TH8_ENABLE_CRYPTOGRAPHY)
     Th8_MarkResultSensitive,
+#else
+    0,
+#endif
+#if defined(TH8_ENABLE_CRYPTOGRAPHY)
+    Th8_SetResultSensitive,
 #else
     0,
 #endif
@@ -316,6 +373,16 @@ const Th8StubsTable th8StubsTableData = {
 #else
     0,
 #endif
+#if defined(TH8_ENABLE_VARIABLES)
+    Th8_DeclareSystemVar,
+#else
+    0,
+#endif
+#if defined(TH8_ENABLE_VARIABLES)
+    Th8_IsSystemVar,
+#else
+    0,
+#endif
 #if defined(TH8_ENABLE_LOAD)
     Th8_Load,
 #else
@@ -331,16 +398,35 @@ const Th8StubsTable th8StubsTableData = {
 #else
     0,
 #endif
+    Th8_SetPolicyCallback,
+#if defined(TH8_ENABLE_LOAD)
+    Th8_SetPreLoadCallback,
+#else
+    0,
+#endif
     Th8_GetPolicyCallback,
     Th8_GetFrameObjv,
     Th8_StringAppend,
     Th8_ListAppend,
     Th8_SplitList,
+    Th8_ToInt,
+    Th8_ToBoolean,
     Th8_ToWideInt,
+    Th8_ToDouble,
     Th8_ListAppendCommands,
     Th8_ListAppendCommandsMatching,
 #if defined(TH8_ENABLE_VARIABLES)
+    Th8_ListAppendVariables,
+#else
+    0,
+#endif
+#if defined(TH8_ENABLE_VARIABLES)
     Th8_ListAppendNsVariables,
+#else
+    0,
+#endif
+#if defined(TH8_ENABLE_VARIABLES)
+    Th8_ListAppendGlobalVariables,
 #else
     0,
 #endif
@@ -357,6 +443,8 @@ const Th8StubsTable th8StubsTableData = {
     Th8_WrongNumArgs,
     Th8_CallSubCommand,
     Th8_ReportTaint,
+    Th8_Input,
+    Th8_Output,
     Th8_OutputError,
 #if defined(TH8_PLUGIN_IO)
     Th8_GetInput,
@@ -390,6 +478,7 @@ const Th8StubsTable th8StubsTableData = {
 #endif
     Th8_GetData,
     Th8_DataExists,
+    Th8_NormalizePath,
     Th8_GetCwd,
     Th8_SetCwd,
     Th8_GetRealPath,
@@ -408,13 +497,16 @@ const Th8StubsTable th8StubsTableData = {
     Th8_GetMathFuncHash,
     Th8_IterateArraySearches,
     Th8_GetPackageUnknown,
+    Th8_SetPackageUnknown,
     Th8_AutoPathSearch,
     Th8_GetCurrentNamespace,
     Th8_FindNamespace,
+    Th8_DeleteNamespace,
     Th8_NsEval,
     Th8_ListAppendNsChildren,
     Th8_NsExport,
     Th8_NsImport,
+    Th8_PushSourceName,
     Th8_PopSourceName,
     Th8_GetSourceName,
     Th8_GetTimeMs,
@@ -434,6 +526,8 @@ const Th8StubsTable th8StubsTableData = {
     Th8_GetPlatform,
     Th8_Strlen,
     Th8_Strdup,
+    Th8_Memcmp,
+    Th8_Memcpy,
     Th8_Memset,
     Th8_Utf8Decode,
     Th8_Utf8Encode,
@@ -570,6 +664,7 @@ const Th8StubsTable th8StubsTableData = {
     Th8_Realloc,
     Th8_AttemptMalloc,
     Th8_AttemptRealloc,
+    Th8_SafeAlloc,
     Th8_SafeAllocStr,
     Th8_SafeAllocMul,
     Th8_SafeAllocAdd,
@@ -596,7 +691,11 @@ const Th8StubsTable th8StubsTableData = {
 #else
     0,
 #endif
+    Th8_FindInCache,
     Th8_GetLastError,
     Th8_EmitTrace,
     Th8_DoesEnvExist,
+    Th8_RegisterPlugin,
+    Th8_UnregisterPlugin,
+    Th8_ListAppendPlugins,
 };

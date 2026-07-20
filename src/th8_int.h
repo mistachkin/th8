@@ -1241,6 +1241,17 @@ TH8_INTERNAL int th8NtpQuery(
     int timeoutMs,
     int maxDisagreeSec,
     th8_int64_t *pEpochSec);
+/*
+ * Validate a received NTP packet (const void * = 48-byte
+ * Th8_NtpPacket wire buffer) against the request and derive epoch
+ * seconds.  Factored out of th8NtpQueryOne for direct MC/DC
+ * driving with crafted packets; see th8_time.c.
+ */
+TH8_INTERNAL int th8NtpValidateResponse(
+    Th8_Interp *interp,
+    const void *respv,
+    const void *reqv,
+    th8_int64_t *pEpochSec);
 TH8_INTERNAL int th8HttpsTimeQuery(
     Th8_Interp *interp,
     const char *zUrl,

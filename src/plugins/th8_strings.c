@@ -452,7 +452,11 @@ string_range_command(
     zEnd = Th8_Utf8Index(argv[2], nStr, iLast + 1);
     if (!zStart) zStart = argv[2] + nStr;
     if (!zEnd) zEnd = argv[2] + nStr;
-    Th8_SetResult(interp, zStart, (size_t)(zEnd - zStart));
+    /* The substring retains bytes of the input, so it inherits the
+     * input's taint. */
+    Th8_SetResult(
+        interp, zStart,
+        (size_t)(zEnd - zStart) | (argl[2] & TH8_TAINT_BIT));
     return TH8_OK;
 }
 
@@ -1825,7 +1829,9 @@ string_case_command(
 	    }
 	}
     }
-    Th8_SetResult(interp, zOut, nStr);
+    /* Case conversion retains the input's bytes, so the result
+     * inherits the input's taint. */
+    Th8_SetResult(interp, zOut, nStr | (argl[2] & TH8_TAINT_BIT));
     Th8_Free(interp, zOut);
     return TH8_OK;
 }

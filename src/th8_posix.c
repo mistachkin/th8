@@ -43,6 +43,50 @@ extern Th8_Platform th8GlobalPlatform;
 /*
  *----------------------------------------------------------------------
  *
+ * POSIX syscall fault-injection wrappers (platform MC/DC).
+ *
+ *	Raw syscalls here (open, fstat, read, ...) essentially never
+ *	fail in the test corpus, so their error arms are uncovered.
+ *	POSIX_CALL(op, expr) forces the wrapped syscall to report
+ *	failure (-1) when op's bit is armed in
+ *	th8FaultActiveCfg->nFailPosixMask, WITHOUT invoking it, so the
+ *	error arm runs.  POSIX_CALL_PTR is the NULL-returning variant.
+ *	The wrapper forces the syscall's VALUE, not the surrounding
+ *	decision's structure, so MC/DC counts stay honest, and both
+ *	compile to the bare call when TH8_ENABLE_FAULT_INJECTION is
+ *	off.
+ *
+ *----------------------------------------------------------------------
+ */
+
+#  if defined(TH8_ENABLE_FAULT_INJECTION)
+extern struct Th8_FaultConfig *th8FaultActiveCfg;
+
+static int
+th8PosixSyscallTrip(int op)
+{
+    return th8FaultActiveCfg != NULL &&
+           (th8FaultActiveCfg->nFailPosixMask & ((th8_uint64_t)1 << op)) != 0;
+}
+
+/*
+ * On a forced failure, set errno to a deterministic NON-EINTR
+ * value (EIO).  This both mimics a real syscall error and avoids
+ * a stale errno accidentally reading as EINTR, which would send a
+ * retry loop (`nRead < 0 && errno == EINTR`) spinning forever.
+ */
+#    define POSIX_CALL(op, expr)                                             \
+	(th8PosixSyscallTrip(op) ? (errno = EIO, -1) : (expr))
+#    define POSIX_CALL_PTR(op, expr)                                         \
+	(th8PosixSyscallTrip(op) ? (errno = EIO, (void *)0) : (expr))
+#  else
+#    define POSIX_CALL(op, expr)     (expr)
+#    define POSIX_CALL_PTR(op, expr) (expr)
+#  endif
+
+/*
+ *----------------------------------------------------------------------
+ *
  * Data retrieval -- reads files from the filesystem.
  *
  *	The "name" is interpreted as a filesystem path.
@@ -276,7 +320,9 @@ th8PosixGetData(
 	return TH8_ERROR;
     }
 
-    fd = open(zPath, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    fd = POSIX_CALL(
+        TH8_POSIX_OP_GETDATA_OPEN,
+        open(zPath, O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
     if (zPath != zPathBuf) {
 	Th8_Free(interp, zPath);
     }
@@ -288,7 +334,8 @@ th8PosixGetData(
 	return TH8_ERROR;
     }
 
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+    if (POSIX_CALL(TH8_POSIX_OP_GETDATA_FSTAT, fstat(fd, &st)) != 0 ||
+        !S_ISREG(st.st_mode)) {
 	TH8_TRACE_ERR(NULL, "fstat failed");
 	close(fd);
 	*pzOut = 0;
@@ -325,7 +372,8 @@ th8PosixGetData(
 	size_t nLeft = (size_t)nSize;
 
 	while (nLeft > 0) {
-	    nRead = read(fd, pRd, nLeft);
+	    nRead =
+	        POSIX_CALL(TH8_POSIX_OP_GETDATA_READ, read(fd, pRd, nLeft));
 	    if (nRead > 0) {
 		pRd += nRead;
 		nLeft -= (size_t)nRead;

@@ -553,8 +553,11 @@ proc_command(
     if (argv[3]) {
 	Th8_Memcpy(interp, p->zProgram, argv[3], TH8_LEN(argl[3]));
     }
-    p->nProgram = TH8_LEN(argl[3]);
-    zSpace = &p->zProgram[p->nProgram];
+    /* Store the tagged body length: a tainted body is rejected when the
+     * proc runs (Th8_NREval -> the evaluation gate).  Pointer/space
+     * arithmetic below uses the raw length. */
+    p->nProgram = TH8_LEN(argl[3]) | (argl[3] & TH8_TAINT_BIT);
+    zSpace = &p->zProgram[TH8_LEN(p->nProgram)];
 
     /*
      * Parse parameter list: each is either "name" or
@@ -779,7 +782,9 @@ apply_command(
 	p->anDefault = (size_t *)&p->azDefault[nParam];
 	p->zProgram = (char *)&p->anDefault[nParam];
 	Th8_Memcpy(interp, p->zProgram, azLambda[1], TH8_LEN(anLambda[1]));
-	p->nProgram = TH8_LEN(anLambda[1]);
+	/* Tagged body length -- a tainted lambda body is rejected at
+	 * evaluation; raw length is used for pointer arithmetic. */
+	p->nProgram = TH8_LEN(anLambda[1]) | (anLambda[1] & TH8_TAINT_BIT);
 
 	/*
 	 * Check for "args" as last parameter.
@@ -797,7 +802,7 @@ apply_command(
 	 */
 
 	{
-	    char *zSpace = &p->zProgram[p->nProgram];
+	    char *zSpace = &p->zProgram[TH8_LEN(p->nProgram)];
 
 	    for (i = 0; i < nParam && ALWAYS(azParam); i++) {
 		size_t len = TH8_LEN(anParam[i]);
@@ -1221,8 +1226,10 @@ nproc_command(
     p->anDefault = (size_t *)&p->azDefault[nParam];
     p->zProgram = (char *)&p->anDefault[nParam];
     Th8_Memcpy(interp, p->zProgram, argv[3], TH8_LEN(argl[3]));
-    p->nProgram = TH8_LEN(argl[3]);
-    zSpace = &p->zProgram[p->nProgram];
+    /* Tagged body length (rejected at evaluation if tainted); raw
+     * length for pointer arithmetic. */
+    p->nProgram = TH8_LEN(argl[3]) | (argl[3] & TH8_TAINT_BIT);
+    zSpace = &p->zProgram[TH8_LEN(p->nProgram)];
 
     for (i = 0; i < nParam && ALWAYS(azParam); i++) {
 	char **az = 0;
@@ -1377,7 +1384,8 @@ napply_command(
 	p->anDefault = (size_t *)&p->azDefault[nParam];
 	p->zProgram = (char *)&p->anDefault[nParam];
 	Th8_Memcpy(interp, p->zProgram, azLambda[1], TH8_LEN(anLambda[1]));
-	p->nProgram = TH8_LEN(anLambda[1]);
+	/* Tagged body length (rejected at evaluation if tainted). */
+	p->nProgram = TH8_LEN(anLambda[1]) | (anLambda[1] & TH8_TAINT_BIT);
 
 	if (nParam > 0 && ALWAYS(azParam) &&
 	    TH8_LEN(anParam[nParam - 1]) == 4 &&
@@ -1387,7 +1395,7 @@ napply_command(
 	}
 
 	{
-	    char *zSpace = &p->zProgram[p->nProgram];
+	    char *zSpace = &p->zProgram[TH8_LEN(p->nProgram)];
 
 	    for (i = 0; i < nParam && ALWAYS(azParam); i++) {
 		size_t len = TH8_LEN(anParam[i]);

@@ -40,6 +40,46 @@
 
 #  include <openssl/sha.h>
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * OpenSSL fault-injection wrappers (crypto MC/DC).
+ *
+ *	Many OpenSSL calls here have a failure-handling arm that
+ *	never executes in normal runs (the calls succeed on valid
+ *	keys), leaving those arms uncovered.  OSSL_CALL(op, expr)
+ *	forces the wrapped call to report failure (0) when op's bit
+ *	is armed in th8FaultActiveCfg->nFailOsslMask, WITHOUT
+ *	invoking OpenSSL, so the call's error arm runs.
+ *	OSSL_CALL_PTR is the NULL-returning variant for
+ *	pointer-returning calls (e.g. OSSL_PARAM_BLD_new).
+ *
+ *	The wrapper does NOT alter the surrounding decision's
+ *	condition text (it forces the VALUE, not the structure), so
+ *	MC/DC coverage counts stay honest.  When
+ *	TH8_ENABLE_FAULT_INJECTION is compiled out, both macros
+ *	expand to the bare call with zero overhead.
+ *
+ *----------------------------------------------------------------------
+ */
+
+#  if defined(TH8_ENABLE_FAULT_INJECTION)
+extern struct Th8_FaultConfig *th8FaultActiveCfg;
+
+static int
+th8SnkOsslFaultTrip(int op)
+{
+    return th8FaultActiveCfg != NULL &&
+           (th8FaultActiveCfg->nFailOsslMask & ((th8_uint64_t)1 << op)) != 0;
+}
+
+#    define OSSL_CALL(op, expr)     (th8SnkOsslFaultTrip(op) ? 0 : (expr))
+#    define OSSL_CALL_PTR(op, expr) (th8SnkOsslFaultTrip(op) ? NULL : (expr))
+#  else
+#    define OSSL_CALL(op, expr)     (expr)
+#    define OSSL_CALL_PTR(op, expr) (expr)
+#  endif
+
 
 /*
  *----------------------------------------------------------------------
@@ -1274,29 +1314,40 @@ Th8_RsaVerify(
      * (OpenSSL 3.x non-deprecated API).
      */
 
-    bn_n = BN_bin2bn(zModulus, (int)nModulus, NULL);
+    bn_n = OSSL_CALL_PTR(
+        TH8_OSSL_OP_V_BN_N, BN_bin2bn(zModulus, (int)nModulus, NULL));
     if (!bn_n) goto oom;
 
-    bn_e = BN_new();
+    bn_e = OSSL_CALL_PTR(TH8_OSSL_OP_V_BN_E, BN_new());
     if (!bn_e) goto oom;
     BN_set_word(bn_e, (unsigned long)Th8_RsaKeyPubExp(pKey));
 
-    bld = OSSL_PARAM_BLD_new();
+    bld = OSSL_CALL_PTR(TH8_OSSL_OP_V_BLD, OSSL_PARAM_BLD_new());
     if (!bld) goto oom;
 
-    if (!OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_N, bn_n) ||
-        !OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_E, bn_e)) {
+    if (!OSSL_CALL(
+            TH8_OSSL_OP_V_PUSH_N,
+            OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_N, bn_n)) ||
+        !OSSL_CALL(
+            TH8_OSSL_OP_V_PUSH_E,
+            OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_E, bn_e))) {
 	goto oom;
     }
 
-    params = OSSL_PARAM_BLD_to_param(bld);
+    params =
+        OSSL_CALL_PTR(TH8_OSSL_OP_V_TOPARAM, OSSL_PARAM_BLD_to_param(bld));
     if (!params) goto oom;
 
-    kctx = EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL);
+    kctx = OSSL_CALL_PTR(
+        TH8_OSSL_OP_V_CTX, EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL));
     if (!kctx) goto oom;
 
-    if (EVP_PKEY_fromdata_init(kctx) != 1 ||
-        EVP_PKEY_fromdata(kctx, &pkey, EVP_PKEY_PUBLIC_KEY, params) != 1) {
+    if (OSSL_CALL(TH8_OSSL_OP_FROMDATA_INIT, EVP_PKEY_fromdata_init(kctx)) !=
+            1 ||
+        OSSL_CALL(
+            TH8_OSSL_OP_FROMDATA,
+            EVP_PKEY_fromdata(kctx, &pkey, EVP_PKEY_PUBLIC_KEY, params)) !=
+            1) {
 	Th8_SetResultStatic(
 	    interp, "RSA verify: key construction failed", TH8_NOLEN);
 	goto cleanup;
@@ -1306,14 +1357,19 @@ Th8_RsaVerify(
      * Verify: SHA-512 digest + PKCS#1 v1.5 padding.
      */
 
-    mdctx = EVP_MD_CTX_new();
+    mdctx = OSSL_CALL_PTR(TH8_OSSL_OP_V_MDCTX, EVP_MD_CTX_new());
     if (!mdctx) goto oom;
 
-    if (EVP_DigestVerifyInit(mdctx, NULL, EVP_sha512(), NULL, pkey) != 1) {
+    if (OSSL_CALL(
+            TH8_OSSL_OP_V_DVINIT,
+            EVP_DigestVerifyInit(mdctx, NULL, EVP_sha512(), NULL, pkey)) !=
+        1) {
 	Th8_SetResultStatic(interp, "RSA verify: init failed", TH8_NOLEN);
 	goto cleanup;
     }
-    if (EVP_DigestVerifyUpdate(mdctx, zData, nData) != 1) {
+    if (OSSL_CALL(
+            TH8_OSSL_OP_V_DVUPDATE,
+            EVP_DigestVerifyUpdate(mdctx, zData, nData)) != 1) {
 	Th8_SetResultStatic(interp, "RSA verify: update failed", TH8_NOLEN);
 	goto cleanup;
     }
@@ -1467,20 +1523,24 @@ Th8_RsaSign(
      * Include n, e, d, p, q for full CRT optimization.
      */
 
-    bn_n = BN_bin2bn(zModulus, (int)nModulus, NULL);
+    bn_n = OSSL_CALL_PTR(
+        TH8_OSSL_OP_S_BN_N, BN_bin2bn(zModulus, (int)nModulus, NULL));
     if (!bn_n) goto oom;
 
-    bn_e = BN_new();
+    bn_e = OSSL_CALL_PTR(TH8_OSSL_OP_S_BN_E, BN_new());
     if (!bn_e) goto oom;
     BN_set_word(bn_e, (unsigned long)Th8_RsaKeyPubExp(pKey));
 
-    bn_d = BN_bin2bn(zPrivExp, (int)nPrivExp, NULL);
+    bn_d = OSSL_CALL_PTR(
+        TH8_OSSL_OP_S_BN_D, BN_bin2bn(zPrivExp, (int)nPrivExp, NULL));
     if (!bn_d) goto oom;
 
-    bn_p = BN_bin2bn(zPrime1, (int)nPrime1, NULL);
+    bn_p = OSSL_CALL_PTR(
+        TH8_OSSL_OP_S_BN_P, BN_bin2bn(zPrime1, (int)nPrime1, NULL));
     if (!bn_p) goto oom;
 
-    bn_q = BN_bin2bn(zPrime2, (int)nPrime2, NULL);
+    bn_q = OSSL_CALL_PTR(
+        TH8_OSSL_OP_S_BN_Q, BN_bin2bn(zPrime2, (int)nPrime2, NULL));
     if (!bn_q) goto oom;
 
     /*
@@ -1528,31 +1588,52 @@ Th8_RsaSign(
 	BN_CTX_free(bnctx);
     }
 
-    bld = OSSL_PARAM_BLD_new();
+    bld = OSSL_CALL_PTR(TH8_OSSL_OP_S_BLD, OSSL_PARAM_BLD_new());
     if (!bld) goto oom;
 
-    if (!OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_N, bn_n) ||
-        !OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_E, bn_e) ||
-        !OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_D, bn_d) ||
-        !OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_FACTOR1, bn_p) ||
-        !OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_FACTOR2, bn_q) ||
-        !OSSL_PARAM_BLD_push_BN(
-            bld, OSSL_PKEY_PARAM_RSA_EXPONENT1, bn_dmp1) ||
-        !OSSL_PARAM_BLD_push_BN(
-            bld, OSSL_PKEY_PARAM_RSA_EXPONENT2, bn_dmq1) ||
-        !OSSL_PARAM_BLD_push_BN(
-            bld, OSSL_PKEY_PARAM_RSA_COEFFICIENT1, bn_iqmp)) {
+    if (!OSSL_CALL(
+            TH8_OSSL_OP_S_PUSH_N,
+            OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_N, bn_n)) ||
+        !OSSL_CALL(
+            TH8_OSSL_OP_S_PUSH_E,
+            OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_E, bn_e)) ||
+        !OSSL_CALL(
+            TH8_OSSL_OP_S_PUSH_D,
+            OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_D, bn_d)) ||
+        !OSSL_CALL(
+            TH8_OSSL_OP_S_PUSH_P,
+            OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_FACTOR1, bn_p)) ||
+        !OSSL_CALL(
+            TH8_OSSL_OP_S_PUSH_Q,
+            OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_FACTOR2, bn_q)) ||
+        !OSSL_CALL(
+            TH8_OSSL_OP_S_PUSH_DP,
+            OSSL_PARAM_BLD_push_BN(
+                bld, OSSL_PKEY_PARAM_RSA_EXPONENT1, bn_dmp1)) ||
+        !OSSL_CALL(
+            TH8_OSSL_OP_S_PUSH_DQ,
+            OSSL_PARAM_BLD_push_BN(
+                bld, OSSL_PKEY_PARAM_RSA_EXPONENT2, bn_dmq1)) ||
+        !OSSL_CALL(
+            TH8_OSSL_OP_S_PUSH_QI,
+            OSSL_PARAM_BLD_push_BN(
+                bld, OSSL_PKEY_PARAM_RSA_COEFFICIENT1, bn_iqmp))) {
 	goto oom;
     }
 
-    params = OSSL_PARAM_BLD_to_param(bld);
+    params =
+        OSSL_CALL_PTR(TH8_OSSL_OP_S_TOPARAM, OSSL_PARAM_BLD_to_param(bld));
     if (!params) goto oom;
 
-    kctx = EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL);
+    kctx = OSSL_CALL_PTR(
+        TH8_OSSL_OP_S_CTX, EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL));
     if (!kctx) goto oom;
 
-    if (EVP_PKEY_fromdata_init(kctx) != 1 ||
-        EVP_PKEY_fromdata(kctx, &pkey, EVP_PKEY_KEYPAIR, params) != 1) {
+    if (OSSL_CALL(
+            TH8_OSSL_OP_S_FROMDATA_INIT, EVP_PKEY_fromdata_init(kctx)) != 1 ||
+        OSSL_CALL(
+            TH8_OSSL_OP_S_FROMDATA,
+            EVP_PKEY_fromdata(kctx, &pkey, EVP_PKEY_KEYPAIR, params)) != 1) {
 	Th8_SetResultStatic(
 	    interp, "RSA sign: private key construction failed", TH8_NOLEN);
 	goto cleanup;
@@ -1565,15 +1646,19 @@ Th8_RsaSign(
      * signature length, then allocate and sign.
      */
 
-    mdctx = EVP_MD_CTX_new();
+    mdctx = OSSL_CALL_PTR(TH8_OSSL_OP_S_MDCTX, EVP_MD_CTX_new());
     if (!mdctx) goto oom;
 
-    if (EVP_DigestSignInit(mdctx, NULL, EVP_sha512(), NULL, pkey) != 1) {
+    if (OSSL_CALL(
+            TH8_OSSL_OP_S_DSINIT,
+            EVP_DigestSignInit(mdctx, NULL, EVP_sha512(), NULL, pkey)) != 1) {
 	Th8_SetResultStatic(
 	    interp, "RSA sign: DigestSignInit failed", TH8_NOLEN);
 	goto cleanup;
     }
-    if (EVP_DigestSignUpdate(mdctx, zData, nData) != 1) {
+    if (OSSL_CALL(
+            TH8_OSSL_OP_S_DSUPDATE,
+            EVP_DigestSignUpdate(mdctx, zData, nData)) != 1) {
 	Th8_SetResultStatic(
 	    interp, "RSA sign: DigestSignUpdate failed", TH8_NOLEN);
 	goto cleanup;
@@ -1583,7 +1668,10 @@ Th8_RsaSign(
      * Query required signature length.
      */
 
-    if (EVP_DigestSignFinal(mdctx, NULL, &nSig) != 1 || nSig == 0) {
+    if (OSSL_CALL(
+            TH8_OSSL_OP_S_DSFINAL1,
+            EVP_DigestSignFinal(mdctx, NULL, &nSig)) != 1 ||
+        nSig == 0) {
 	Th8_SetResultStatic(
 	    interp, "RSA sign: cannot determine signature size", TH8_NOLEN);
 	goto cleanup;
@@ -1603,7 +1691,9 @@ Th8_RsaSign(
     zSig = (unsigned char *)TH8_ALLOC(interp, nSig);
     if (!zSig) goto oom;
 
-    if (EVP_DigestSignFinal(mdctx, zSig, &nSig) != 1) {
+    if (OSSL_CALL(
+            TH8_OSSL_OP_S_DSFINAL2,
+            EVP_DigestSignFinal(mdctx, zSig, &nSig)) != 1) {
 	Th8_SetResultStatic(
 	    interp, "RSA sign: DigestSignFinal failed", TH8_NOLEN);
 	goto cleanup;

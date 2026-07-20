@@ -365,8 +365,10 @@ lindex_command(
 		Th8_Free(interp, zCopy);
 		zCopy = 0;
 		if (iIndex >= 0 && iIndex < nCount && ALWAYS(azElem)) {
+		    /* Keep the taint bit for the result; raw length for
+		     * allocation/copy/index. */
 		    nList = anElem[iIndex];
-		    zCopy = (char *)TH8_ALLOC_STR(interp, nList);
+		    zCopy = (char *)TH8_ALLOC_STR(interp, TH8_LEN(nList));
 		    if (!zCopy) {
 			Th8_Free(interp, azElem);
 			Th8_Free(interp, azIdx);
@@ -374,8 +376,8 @@ lindex_command(
 			    interp, "out of memory", TH8_NOLEN);
 			return TH8_ERROR;
 		    }
-		    Th8_Memcpy(interp, zCopy, azElem[iIndex], nList);
-		    zCopy[nList] = 0;
+		    Th8_Memcpy(interp, zCopy, azElem[iIndex], TH8_LEN(nList));
+		    zCopy[TH8_LEN(nList)] = 0;
 		    zList = zCopy;
 		} else {
 		    zList = "";
@@ -419,15 +421,17 @@ lindex_command(
 	    Th8_Free(interp, zCopy);
 	    zCopy = 0;
 	    if (iIndex >= 0 && iIndex < nCount && ALWAYS(azElem)) {
+		/* Keep the element's taint bit for the result; use the
+		 * raw length for allocation/copy/index. */
 		nList = anElem[iIndex];
-		zCopy = (char *)TH8_ALLOC_STR(interp, nList);
+		zCopy = (char *)TH8_ALLOC_STR(interp, TH8_LEN(nList));
 		if (!zCopy) {
 		    Th8_Free(interp, azElem);
 		    Th8_SetResultStatic(interp, "out of memory", TH8_NOLEN);
 		    return TH8_ERROR;
 		}
-		Th8_Memcpy(interp, zCopy, azElem[iIndex], nList);
-		zCopy[nList] = 0;
+		Th8_Memcpy(interp, zCopy, azElem[iIndex], TH8_LEN(nList));
+		zCopy[TH8_LEN(nList)] = 0;
 		zList = zCopy;
 	    } else {
 		zList = "";
@@ -2331,10 +2335,15 @@ dict_filter_command(
 	}
 	for (i = 0; i < nDict; i += 2) {
 	    int bKeep;
+	    size_t nTag = argl[2] & TH8_TAINT_BIT;
 
-	    Th8_SetVar(interp, azVars[0], anVars[0], azDict[i], anDict[i]);
+	    /* Raw split arrays; the key/value the filter script sees carry
+	     * the source dict's taint. */
 	    Th8_SetVar(
-	        interp, azVars[1], anVars[1], azDict[i + 1], anDict[i + 1]);
+	        interp, azVars[0], anVars[0], azDict[i], anDict[i] | nTag);
+	    Th8_SetVar(
+	        interp, azVars[1], anVars[1], azDict[i + 1],
+	        anDict[i + 1] | nTag);
 	    rc = Th8_Eval(interp, 0, argv[5], argl[5], NULL, 0);
 	    if (rc != TH8_OK) {
 		Th8_Free(interp, azVars);
@@ -2370,7 +2379,9 @@ dict_filter_command(
     }
 
     Th8_Free(interp, azDict);
-    Th8_SetResult(interp, zOut ? zOut : "", nOut);
+    /* Output is built from the raw split arrays; a filtered subset of a
+     * tainted dict stays tainted. */
+    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAINT_BIT));
     Th8_Free(interp, zOut);
     return TH8_OK;
 }
@@ -2440,7 +2451,11 @@ dict_get_command(
 	return TH8_ERROR;
     }
 
-    Th8_SetResult(interp, azElem[iKey], anElem[iKey]);
+    /* Split arrays hold raw lengths so the internal key comparison and
+     * copies work byte-exactly; re-apply the source dict's taint to the
+     * value handed back to the script. */
+    Th8_SetResult(
+        interp, azElem[iKey], anElem[iKey] | (argl[2] & TH8_TAINT_BIT));
     Th8_Free(interp, azElem);
     return TH8_OK;
 }
@@ -2567,7 +2582,9 @@ dict_keys_command(
 	}
     }
 
-    Th8_SetResult(interp, zOut ? zOut : "", nOut);
+    /* Keys are copied from raw split arrays; re-apply the source dict's
+     * taint to the returned list. */
+    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAINT_BIT));
     Th8_Free(interp, zOut);
     Th8_Free(interp, azElem);
     return TH8_OK;
@@ -2605,6 +2622,7 @@ dict_merge_command(
 {
     char *zOut = 0;
     size_t nOut = 0;
+    size_t nTag = 0; /* OR of every input dict's taint */
     int d;
 
     (void)ctx;
@@ -2621,6 +2639,10 @@ dict_merge_command(
 	int nD;
 	int rc;
 	int i;
+
+	/* The split arrays are raw; a tainted input dict must still
+	 * taint the merged result. */
+	nTag |= argl[d] & TH8_TAINT_BIT;
 
 	rc = th8DictSplit(interp, argv[d], argl[d], &azD, &anD, &nD);
 	if (rc != TH8_OK) {
@@ -2686,7 +2708,7 @@ dict_merge_command(
 	Th8_Free(interp, azD);
     }
 
-    Th8_SetResult(interp, zOut ? zOut : "", nOut);
+    Th8_SetResult(interp, zOut ? zOut : "", nOut | nTag);
     Th8_Free(interp, zOut);
     return TH8_OK;
 }
@@ -2753,7 +2775,9 @@ dict_remove_command(
 	}
     }
 
-    Th8_SetResult(interp, zOut ? zOut : "", nOut);
+    /* Retained pairs are copied from the raw split arrays; a tainted
+     * source dict stays tainted. */
+    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAINT_BIT));
     Th8_Free(interp, zOut);
     Th8_Free(interp, azElem);
     return TH8_OK;
@@ -2847,7 +2871,10 @@ dict_replace_command(
 	}
     }
 
-    Th8_SetResult(interp, zOut ? zOut : "", nOut);
+    /* Retained entries come from the raw split arrays (re-apply the
+     * source dict's taint); replacement keys/values are appended with
+     * their own tags, which Th8_ListAppend already propagates. */
+    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAINT_BIT));
     Th8_Free(interp, zOut);
     Th8_Free(interp, azElem);
     return TH8_OK;
@@ -2957,7 +2984,9 @@ dict_values_command(
 	}
     }
 
-    Th8_SetResult(interp, zOut ? zOut : "", nOut);
+    /* Values are copied from raw split arrays; re-apply the source
+     * dict's taint to the returned list. */
+    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAINT_BIT));
     Th8_Free(interp, zOut);
     Th8_Free(interp, azElem);
     return TH8_OK;
@@ -3001,8 +3030,15 @@ th8DictVarGet(
 	size_t nVal;
 	const char *zVal = Th8_GetResult(interp, &nVal);
 
+	/* Split on the RAW byte length so the returned arrays carry raw
+	 * element lengths: the dict machinery (th8DictFind, memcpy) must
+	 * compare them byte-exactly.  A tainted dict variable would
+	 * otherwise yield tainted element lengths that never match a raw
+	 * search key.  The variable's taint is re-applied at write-back
+	 * by th8DictVarPut. */
 	rc = Th8_SplitList(
-	    interp, zVal, nVal, pazElem, panElem, pnCount, TH8_LIST_NONE);
+	    interp, zVal, TH8_LEN(nVal), pazElem, panElem, pnCount,
+	    TH8_LIST_NONE);
     }
     if (rc != TH8_OK) return rc;
     if (*pnCount % 2 != 0) {
@@ -3028,8 +3064,23 @@ th8DictVarPut(
     const char *zDict,
     size_t nDict)
 {
-    Th8_SetVar(interp, zVar, nVar, zDict, nDict);
-    Th8_SetResult(interp, zDict, nDict);
+    size_t nTag = nDict & TH8_TAINT_BIT;
+
+    /* Capture the taint of the dict currently stored in the variable:
+     * an in-place mutation rebuilds from the RAW split arrays (see
+     * th8DictVarGet), so the source dict's taint is not otherwise
+     * carried into zDict.  New key/value arguments contribute their own
+     * taint through Th8_ListAppend / Th8_StringAppend, which is already
+     * present in nDict.  Reading before the Th8_SetVar below is safe --
+     * the variable still holds the pre-mutation value. */
+    if (Th8_GetVar(interp, zVar, nVar) == TH8_OK) {
+	size_t nOld;
+
+	(void)Th8_GetResult(interp, &nOld);
+	nTag |= nOld & TH8_TAINT_BIT;
+    }
+    Th8_SetVar(interp, zVar, nVar, zDict, TH8_LEN(nDict) | nTag);
+    Th8_SetResult(interp, zDict, TH8_LEN(nDict) | nTag);
     return TH8_OK;
 }
 
@@ -3192,9 +3243,13 @@ dict_for_command(
 
     rc = TH8_OK;
     for (i = 0; i < nDict; i += 2) {
-	Th8_SetVar(interp, azVars[0], anVars[0], azDict[i], anDict[i]);
+	size_t nTag = argl[3] & TH8_TAINT_BIT;
+
+	/* Split arrays are raw; the key/value the body sees are derived
+	 * from the source dict, so they carry its taint. */
+	Th8_SetVar(interp, azVars[0], anVars[0], azDict[i], anDict[i] | nTag);
 	Th8_SetVar(
-	    interp, azVars[1], anVars[1], azDict[i + 1], anDict[i + 1]);
+	    interp, azVars[1], anVars[1], azDict[i + 1], anDict[i + 1] | nTag);
 
 	rc = Th8_Eval(interp, 0, argv[4], argl[4], NULL, 0);
 	if (rc == TH8_BREAK) {
@@ -3472,10 +3527,13 @@ dict_map_command(
     for (i = 0; i < nDict; i += 2) {
 	size_t nRes;
 	const char *zRes;
+	size_t nTag = argl[3] & TH8_TAINT_BIT;
 
-	Th8_SetVar(interp, azVars[0], anVars[0], azDict[i], anDict[i]);
+	/* Split arrays are raw; the key/value the body sees are derived
+	 * from the source dict and carry its taint. */
+	Th8_SetVar(interp, azVars[0], anVars[0], azDict[i], anDict[i] | nTag);
 	Th8_SetVar(
-	    interp, azVars[1], anVars[1], azDict[i + 1], anDict[i + 1]);
+	    interp, azVars[1], anVars[1], azDict[i + 1], anDict[i + 1] | nTag);
 
 	rc = Th8_Eval(interp, 0, argv[4], argl[4], NULL, 0);
 	if (rc == TH8_BREAK) {
@@ -3497,7 +3555,11 @@ dict_map_command(
     Th8_Free(interp, azVars);
     Th8_Free(interp, azDict);
     if (rc == TH8_OK) {
-	Th8_SetResult(interp, zOut ? zOut : "", nOut);
+	/* Output keys come from the raw split arrays; the body's result
+	 * values carry their own taint via Th8_ListAppend.  Re-apply the
+	 * source dict's taint for the keys. */
+	Th8_SetResult(
+	    interp, zOut ? zOut : "", nOut | (argl[3] & TH8_TAINT_BIT));
     }
     Th8_Free(interp, zOut);
     return rc;
@@ -3996,6 +4058,7 @@ dict_update_command(
     int rc;
     int nPairs;
     int p;
+    size_t nSrcTag = 0;
 
     (void)ctx;
 
@@ -4015,8 +4078,17 @@ dict_update_command(
 
     /*
      * Step 1: Read the dict variable and extract keys into
-     * local variables.
+     * local variables.  th8DictVarGet masks the length, so capture the
+     * dict's taint here: the local vars are derived from a tainted dict
+     * and must be tainted so the body cannot launder them clean.
      */
+
+    if (Th8_GetVar(interp, argv[2], argl[2]) == TH8_OK) {
+	size_t nCur;
+
+	(void)Th8_GetResult(interp, &nCur);
+	nSrcTag = nCur & TH8_TAINT_BIT;
+    }
 
     rc = th8DictVarGet(interp, argv[2], argl[2], &azElem, &anElem, &nCount);
     if (rc != TH8_OK) return rc;
@@ -4030,7 +4102,7 @@ dict_update_command(
 	if (iKey >= 0) {
 	    Th8_SetVar(
 	        interp, argv[argVar], argl[argVar], azElem[iKey],
-	        anElem[iKey]);
+	        anElem[iKey] | nSrcTag);
 	} else {
 	    Th8_UnsetVar(interp, argv[argVar], argl[argVar]);
 	}
@@ -4057,9 +4129,21 @@ dict_update_command(
 	size_t nOut = 0;
 	int rcVar;
 
+	size_t nWbTag = 0;
+
 	/*
-	 * Re-read the variable (body may have modified it).
+	 * Re-read the variable (body may have modified it).  Capture its
+	 * taint for the rebuilt dict: retained pairs come from the raw
+	 * split arrays, while re-added values carry their own taint via
+	 * Th8_ListAppend.
 	 */
+	if (Th8_GetVar(interp, argv[2], argl[2]) == TH8_OK) {
+	    size_t nCur;
+
+	    (void)Th8_GetResult(interp, &nCur);
+	    nWbTag = nCur & TH8_TAINT_BIT;
+	}
+
 	rcVar = th8DictVarGet(
 	    interp, argv[2], argl[2], &azElem, &anElem, &nCount);
 	if (rcVar == TH8_OK) {
@@ -4112,7 +4196,8 @@ dict_update_command(
 
 	    Th8_Free(interp, azElem);
 	    Th8_SetVar(
-	        interp, argv[2], argl[2], zOut ? zOut : "", zOut ? nOut : 0);
+	        interp, argv[2], argl[2], zOut ? zOut : "",
+	        zOut ? (nOut | nWbTag) : 0);
 	    Th8_Free(interp, zOut);
 	}
     }
@@ -4174,6 +4259,7 @@ dict_with_command(
     int nNestedKeys;
     const char *zBody;
     size_t nBody;
+    size_t nSrcTag = 0;
 
     /*
      * Saved key names/lengths from the target dict, so we can
@@ -4192,6 +4278,20 @@ dict_with_command(
     zBody = argv[argc - 1];
     nBody = argl[argc - 1];
     nNestedKeys = argc - 4;  /* Number of nested key args. */
+
+    /*
+     * Capture the taint of the whole dict variable: the local vars
+     * bound below are derived from it (so the body must see them
+     * tainted), and the rebuilt dict written back keeps that taint.
+     * The split arrays are raw, so this is the only carrier.
+     */
+
+    if (Th8_GetVar(interp, argv[2], argl[2]) == TH8_OK) {
+	size_t nCur;
+
+	(void)Th8_GetResult(interp, &nCur);
+	nSrcTag = nCur & TH8_TAINT_BIT;
+    }
 
     /*
      * Step 1: Navigate to the target dict.  If there are
@@ -4287,7 +4387,8 @@ dict_with_command(
 
     for (i = 0; i < nCount; i += 2) {
 	Th8_SetVar(
-	    interp, azElem[i], anElem[i], azElem[i + 1], anElem[i + 1]);
+	    interp, azElem[i], anElem[i], azElem[i + 1],
+	    anElem[i + 1] | nSrcTag);
     }
 
     Th8_Free(interp, azElem);
@@ -4428,7 +4529,8 @@ dict_with_command(
 
 				Th8_SetVar(
 				    interp, argv[2], argl[2],
-				    zCur ? zCur : "", zCur ? nCur : 0);
+				    zCur ? zCur : "",
+				    zCur ? (nCur | nSrcTag) : 0);
 				Th8_Free(interp, zCur);
 			    }
 
@@ -4450,7 +4552,8 @@ dict_with_command(
 	     * No nested keys: write directly to variable.
 	     */
 	    Th8_SetVar(
-	        interp, argv[2], argl[2], zOut ? zOut : "", zOut ? nOut : 0);
+	        interp, argv[2], argl[2], zOut ? zOut : "",
+	        zOut ? (nOut | nSrcTag) : 0);
 	}
 
 	Th8_Free(interp, zOut);

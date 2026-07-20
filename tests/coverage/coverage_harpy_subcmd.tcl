@@ -160,4 +160,16 @@ runTest {test ha_sub-3.2 {
 
 ###############################################################################
 
+# NOTE: The former ha_sub-4.1/4.2 drove th8_policy.c L1184 (the
+# file-read token-length gate) via committed .b64sig fixtures with
+# a hand-tampered token.  They were removed because this
+# environment auto-re-signs every tests/**/*.tcl with the
+# production key on commit, replacing the tampered signature with
+# a valid one -- so the fixtures verify OK and the tests (which
+# expect the "missing public key token" error) break
+# intermittently.  Covering L1184's file-read arms robustly needs
+# a runtime-generated malformed .b64sig (never committed, so never
+# auto-signed), which requires a testlib file-writer helper.  See
+# FINDINGS Finding 021.
+
 source tests/epilogue.tcl

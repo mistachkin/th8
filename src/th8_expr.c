@@ -3201,6 +3201,19 @@ Th8_Expr(
     if (nExpr == TH8_NOLEN) {
 	nExpr = Th8_Strlen(interp, zExpr);
     }
+
+    /*
+     * Reject a tainted COMPLETE expression: expressions support command
+     * substitution and can have side effects, so evaluating one built
+     * from untrusted data is code execution.  (A clean expression may
+     * still consume a tainted operand -- that operand's value flows
+     * through without tainting the expression text itself.)
+     */
+
+    if (TH8_TAINTED(nExpr) &&
+        Th8_ReportTaint(interp, "expression", zExpr, nExpr)) {
+	return TH8_ERROR;
+    }
     nExpr = TH8_LEN(nExpr);
 
     /*

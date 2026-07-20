@@ -296,14 +296,18 @@ append_command(
 	size_t nCur = 0;
 	size_t nAppend = 0;
 	size_t nTotal;
+	size_t nTag = 0; /* OR of the existing value + all appended taints */
 	char *pBuf;
 
 	if (Th8_GetVar(interp, argv[1], argl[1]) == TH8_OK) {
 	    zCur = Th8_GetResult(interp, &nCur);
+	    nTag |= (nCur & TH8_TAINT_BIT);
+	    nCur = TH8_LEN(nCur);
 	}
 
 	for (i = 2; i < argc; i++) {
-	    nAppend += argl[i];
+	    nTag |= (argl[i] & TH8_TAINT_BIT);
+	    nAppend += TH8_LEN(argl[i]);
 	}
 	nTotal = nCur + nAppend;
 
@@ -335,15 +339,18 @@ append_command(
 		Th8_Memcpy(interp, pBuf, zCur, nCur);
 	    }
 	    for (i = 2; i < argc; i++) {
-		Th8_Memcpy(interp, pBuf + nCur, argv[i], argl[i]);
-		nCur += argl[i];
+		Th8_Memcpy(interp, pBuf + nCur, argv[i], TH8_LEN(argl[i]));
+		nCur += TH8_LEN(argl[i]);
 	    }
 	    pBuf[nCur] = '\0';
 
 	    {
 		Th8_Value val;
 		val.u.buffer.pBuffer = (void *)pBuf;
-		val.u.buffer.nUsed = nCur;
+		/* nUsed carries the accumulated taint; th8SetVarValue masks
+		 * it to the raw length for buffer arithmetic and stores the
+		 * tagged length in the variable. */
+		val.u.buffer.nUsed = nCur | nTag;
 		val.u.buffer.nCapacity = nAlloc;
 		if (th8SetVarValue(interp, argv[1], argl[1], &val) !=
 		    TH8_OK) {
@@ -351,7 +358,7 @@ append_command(
 		    goto fallback;
 		}
 	    }
-	    Th8_SetResult(interp, pBuf, nCur);
+	    Th8_SetResult(interp, pBuf, nCur | nTag);
 	    return TH8_OK;
 	}
     }

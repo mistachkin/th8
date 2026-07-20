@@ -554,7 +554,7 @@ runTest {test crypto-9.1 {
 } -cleanup {
   catch {namespace delete ::test_ns}
   unset -nocomplain msg
-} -result {1 {signed-only: script signature verification failed}}}
+} -result {1 {signed-only: script signature verification failed for "tests/helpers/tampered_clock_seconds.th8"}}}
 
 ###############################################################################
 

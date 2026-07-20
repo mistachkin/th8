@@ -18,8 +18,24 @@
 
 /*
  * NOTE: This header does not include other project headers.
- * Each .c file must include th8.h and th8_int.h before this.
+ * Each .c file must include th8.h (for TH8_API, Th8_Interp,
+ * th8_int64_t, Th8_CommandProc) before this.  Core translation
+ * units also include th8_int.h first, which defines TH8_INTERNAL
+ * with hidden visibility.
+ *
+ * The generated public stub table (th8Decls.h) pulls this header
+ * in for the plugin API types (Th8_CommandEntry,
+ * Th8_GetCommandsProc) WITHOUT th8_int.h, so provide a benign
+ * fallback for TH8_INTERNAL here -- mirroring th8_hash.h's TH8_API
+ * fallback.  The #ifndef guard (matching th8_int.h's own guard at
+ * line 43) means the core hidden-visibility definition always wins
+ * because th8_int.h is included first there; only stubs-consumer
+ * builds fall back to a plain `extern` for the internal helper
+ * declarations, which is harmless (they are declarations only).
  */
+#ifndef TH8_INTERNAL
+#  define TH8_INTERNAL extern
+#endif
 
 /*
  *----------------------------------------------------------------------

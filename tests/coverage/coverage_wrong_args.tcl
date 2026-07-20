@@ -1147,7 +1147,7 @@ runTest {test wrongargs-file-type-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-file-type-1.2 {
-  R-34971-35208:[file type name] (API spec mirror)
+  R-16710-28334:[file type name] (API spec mirror)
   shall return "file" for regular files,
   "directory" for directories, etc.
 } -constraints {
@@ -1181,7 +1181,7 @@ runTest {test wrongargs-file-under-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-file-under-1.2 {
-  R-08190-55440:[file under name1 name2] (API spec
+  R-24372-60291:[file under name1 name2] (API spec
   mirror) shall return non-zero if name1 resides
   within the directory hierarchy of name2.
 } -constraints {
@@ -1213,7 +1213,7 @@ runTest {test wrongargs-file-same-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-file-same-1.2 {
-  R-20284-57575:[file same name1 name2] (API spec
+  R-11676-50485:[file same name1 name2] (API spec
   mirror) shall return non-zero only if both
   names refer to the exact same physical file.
 } -constraints {
@@ -1242,7 +1242,7 @@ runTest {test wrongargs-file-nativename-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-file-nativename-1.2 {
-  R-14944-09704:[file nativename name] (API spec
+  R-48203-47216:[file nativename name] (API spec
   mirror) shall convert directory separators to
   the native form.
 } -constraints {
@@ -1272,7 +1272,7 @@ runTest {test wrongargs-file-channels-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-file-channels-1.2 {
-  R-26738-16696:[file channels] (API spec mirror)
+  R-62378-19050:[file channels] (API spec mirror)
   shall include "stdin" and "stdout" in its output.
 } -constraints {
     th8
@@ -1288,7 +1288,7 @@ runTest {test wrongargs-file-channels-1.2 {
 ###############################################################################
 
 runTest {test wrongargs-file-rootpath-1.1 {
-  R-59660-63639:[file rootpath name] shall return
+  R-54388-15254:[file rootpath name] shall return
   "." if the path resolves under the base
   directory, or the empty string if the path
   resolves outside the base directory.
@@ -1307,7 +1307,7 @@ runTest {test wrongargs-file-rootpath-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-file-rootname-2.1 {
-  R-60501-21318:[file rootname name] (API spec
+  R-29418-47253:[file rootname name] (API spec
   mirror) shall return the path with the file
   extension removed.
 } -constraints {
@@ -1322,7 +1322,7 @@ runTest {test wrongargs-file-rootname-2.1 {
 ###############################################################################
 
 runTest {test wrongargs-file-separator-2.1 {
-  R-54458-00758:[file separator] without arguments
+  R-41650-23802:[file separator] without arguments
   (API spec mirror) shall return the native
   directory separator character.
 } -constraints {
@@ -1337,7 +1337,7 @@ runTest {test wrongargs-file-separator-2.1 {
 ###############################################################################
 
 runTest {test wrongargs-file-pathtype-2.1 {
-  R-47617-30929:[file pathtype name] (API spec
+  R-25988-01568:[file pathtype name] (API spec
   mirror) shall return "absolute" for paths
   beginning with a root separator.
 } -constraints {
@@ -1352,7 +1352,7 @@ runTest {test wrongargs-file-pathtype-2.1 {
 ###############################################################################
 
 runTest {test wrongargs-info-context-2.1 {
-  R-23110-04034:[info context] (API spec mirror)
+  R-02028-09998:[info context] (API spec mirror)
   shall return a stable 128-character hexadecimal
   string computed once and cached per process.
 } -constraints {
@@ -1367,7 +1367,7 @@ runTest {test wrongargs-info-context-2.1 {
 ###############################################################################
 
 runTest {test wrongargs-info-varlinks-2.1 {
-  R-31760-36229:[info varlinks] (API spec mirror)
+  R-08542-47922:[info varlinks] (API spec mirror)
   shall return a list of all variable names in
   the current call frame that are linked via
   upvar, global, or variable.
@@ -1405,7 +1405,7 @@ runTest {test wrongargs-hash-normal-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-hash-normal-1.2 {
-  R-28734-23039:[hash normal algorithm string]
+  R-12269-46713:[hash normal algorithm string]
   (API spec mirror) shall compute a cryptographic
   digest and return the hexadecimal result.
 } -constraints {
@@ -1448,7 +1448,7 @@ runTest {test wrongargs-variable-qualified-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-variable-qualified-1.2 {
-  R-46585-01509:[variable] with a fully qualified
+  R-19756-08248:[variable] with a fully qualified
   namespace name (API spec mirror) shall create a
   local link using the tail portion of the name.
 } -constraints {
@@ -1472,7 +1472,7 @@ runTest {test wrongargs-variable-qualified-1.2 {
 ###############################################################################
 
 runTest {test wrongargs-file-extension-2.1 {
-  R-18801-40597:[file extension name] (API spec
+  R-16870-62748:[file extension name] (API spec
   mirror) shall return the file extension or empty.
 } -constraints {
     th8
@@ -1486,7 +1486,7 @@ runTest {test wrongargs-file-extension-2.1 {
 ###############################################################################
 
 runTest {test wrongargs-file-validname-2.1 {
-  R-42922-46677:[file validname path ?pathType?]
+  R-53536-14671:[file validname path ?pathType?]
   (API spec mirror) shall return non-zero only if
   the path is syntactically valid for the OS.
 } -constraints {
@@ -1521,7 +1521,7 @@ runTest {test wrongargs-close-no-args-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-close-no-args-1.2 {
-  R-29000-55241:[close] no-args (API spec mirror)
+  R-40336-27663:[close] no-args (API spec mirror)
   shall close all temporary file channels,
   skipping standard channels.
 } -constraints {
@@ -1717,7 +1717,7 @@ runTest {test wrongargs-array-nextelement-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-channel-write-2.1 {
-  R-42288-52837:Th8_ChannelWrite (API spec mirror)
+  R-53947-42705:Th8_ChannelWrite (API spec mirror)
   shall prefer the platform's xOutput callback
   when writing.  Same round-trip pattern.
 } -constraints {
@@ -1775,7 +1775,7 @@ runTest {test wrongargs-channel-write-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-channel-read-1.1 {
-  R-53618-33161:Th8_ChannelRead SHALL prefer the
+  R-10069-04039:Th8_ChannelRead SHALL prefer the
   platform's xInput callback.  Exercised by
   reading from a pre-populated temp file
   channel; a successful read implies the
@@ -2084,7 +2084,7 @@ runTest {test wrongargs-expr-features-not-scripted-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-snprintf-narr-1.1 {
-  R-41651-26317:Th8_Snprintf shall be a variadic
+  R-20586-05505:Th8_Snprintf shall be a variadic
   convenience wrapper that builds a va_list and
   delegates to Th8_Vsnprintf.  Narrative
   duplicate from the public C API spec; pinned
@@ -2100,7 +2100,7 @@ runTest {test wrongargs-plat-snprintf-narr-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-vsnprintf-narr-1.1 {
-  R-35096-64995:Th8_Vsnprintf shall format
+  R-36320-28522:Th8_Vsnprintf shall format
   output into a buffer via the platform's
   xVsnprintf callback.  Narrative duplicate from
   the public C API spec; pinned via
@@ -2334,7 +2334,7 @@ runTest {test wrongargs-plat-data-exists-attrs-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-data-exists-attrs-narr-1.1 {
-  R-40822-04564:The xDataExists platform callback
+  R-48709-07272:The xDataExists platform callback
   shall accept an optional int *pAttrs output
   parameter.  When non-NULL, the callback shall
   store file type attributes using the
@@ -2547,7 +2547,7 @@ runTest {test wrongargs-plat-getparentpid-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-getparentpid-narr-1.1 {
-  R-50144-41547:The xGetParentPid platform
+  R-32063-53221:The xGetParentPid platform
   callback shall return the parent process ID,
   or 0 if unavailable.  Narrative duplicate
   from the public C API spec; same dispatch as
@@ -2655,7 +2655,7 @@ runTest {test wrongargs-plat-getrootpath-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-getrootpath-narr-1.1 {
-  R-21241-60939:The xGetRootPath platform
+  R-58471-10958:The xGetRootPath platform
   callback shall resolve the filesystem root or
   mount point for a given path.  Narrative
   duplicate from the public C API spec.
@@ -2671,7 +2671,7 @@ runTest {test wrongargs-plat-getrootpath-narr-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-memmove-narr-1.1 {
-  R-29203-53260:Th8_Memmove shall move n bytes
+  R-14425-19594:Th8_Memmove shall move n bytes
   from src to dst (overlapping regions
   permitted) via the platform's xMemmove
   callback.  Narrative duplicate from the public
@@ -2753,7 +2753,7 @@ runTest {test wrongargs-plat-samefile-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-samefile-narr-1.1 {
-  R-51372-22324:The xSameFile platform callback
+  R-47728-37792:The xSameFile platform callback
   shall compare two paths and return non-zero
   only if they refer to the same physical file.
   Narrative duplicate in the public C API spec.
@@ -2769,7 +2769,7 @@ runTest {test wrongargs-plat-samefile-narr-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-atoi-1.1 {
-  R-22516-50875:Th8_Atoi shall convert a
+  R-51313-35869:Th8_Atoi shall convert a
   NUL-terminated decimal string to an integer
   via the platform's xAtoi callback.  Exercised
   via plat_wrappers; the helper calls th8Atoi("42")
@@ -2784,7 +2784,7 @@ runTest {test wrongargs-plat-atoi-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-strchr-narr-1.1 {
-  R-00274-41060:Th8_Strchr shall locate the first
+  R-05138-38482:Th8_Strchr shall locate the first
   occurrence of byte c in string s via the
   platform's xStrchr callback.  Narrative
   duplicate in the public C API spec, distinct
@@ -2802,7 +2802,7 @@ runTest {test wrongargs-plat-strchr-narr-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-strcmp-narr-1.1 {
-  R-02706-57198:Th8_Strcmp shall compare two
+  R-42312-03916:Th8_Strcmp shall compare two
   NUL-terminated strings via the platform's
   xStrcmp callback and return a value less than,
   equal to, or greater than zero.  Narrative
@@ -2820,7 +2820,7 @@ runTest {test wrongargs-plat-strcmp-narr-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-qsort-narr-1.1 {
-  R-15698-32340:Th8_Qsort shall sort an array in
+  R-39933-26635:Th8_Qsort shall sort an array in
   place via the platform's xQsort callback.
   Narrative duplicate in the public C API spec.
   Exercised via plat_wrappers; the helper calls
@@ -2891,7 +2891,7 @@ runTest {test wrongargs-annotation-extract-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-annotation-extract-narr-1.1 {
-  R-43315-16846:Script annotations shall be
+  R-62434-18753:Script annotations shall be
   extracted from all scripts when the policy
   callbacks are installed, regardless of
   whether the signed-only policy is enabled.
@@ -2938,7 +2938,7 @@ runTest {test wrongargs-annotation-notbefore-format-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-annotation-notbefore-format-narr-1.1 {
-  R-12995-33412:Script annotations in the
+  R-44468-02007:Script annotations in the
   format <<notBefore:YYYY_MM_DDThh_mm_ssZ>> and
   <<notAfter:YYYY_MM_DDThh_mm_ssZ>> shall be
   validated with strict ISO-8601 date-time rules
@@ -3267,7 +3267,7 @@ runTest {test wrongargs-posix-input-output-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-posix-input-output-narr-1.1 {
-  R-62999-59331:The POSIX platform's xInput,
+  R-37252-15077:The POSIX platform's xInput,
   xOutput, and xOutputError callbacks shall use
   native POSIX read() and write() system calls,
   interpreting a non-NULL pChannel as a POSIX
@@ -3324,7 +3324,7 @@ runTest {test wrongargs-chanctl-open-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-chanctl-open-narr-1.1 {
-  R-14875-33018:TH8_CHANCTL_OPEN (opcode 6) shall
+  R-55340-20582:TH8_CHANCTL_OPEN (opcode 6) shall
   open a file at path pBuf (nArg1 bytes long),
   with nArg2 selecting the mode (0 for
   read-only, 1 for write-create-truncate), and
@@ -3395,7 +3395,7 @@ runTest {test wrongargs-plat-getthreadid-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-getthreadid-narr-1.1 {
-  R-12419-23303:The xGetThreadId platform
+  R-31253-15832:The xGetThreadId platform
   callback shall return the current thread ID
   as a 64-bit unsigned integer.  Narrative
   duplicate from the public C API spec.
@@ -3742,7 +3742,7 @@ runTest {test wrongargs-yield-rc-reserved-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-close-stdin-1.1 {
-  R-43365-08120:The [close] command with a
+  R-40340-22859:The [close] command with a
   standard channel name (stdin, stdout, stderr)
   shall detach that channel, causing subsequent
   I/O to return EOF or error.  Driven in a

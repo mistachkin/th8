@@ -1343,7 +1343,7 @@ namespace eval ::th8test {
   }
 
   #
-  # sandboxRc / sandboxResult / sandboxSteps / sandboxAlloc --
+  # sandboxRc / sandboxResult / sandboxSteps / sandboxAllocCount --
   #
   #   Accessor procs that extract individual fields from the
   #   list returned by [::th8testlib::sandbox].  A sandbox result
@@ -1367,7 +1367,7 @@ namespace eval ::th8test {
     return [lindex $result 2]
   }
 
-  proc sandboxAlloc { result } {
+  proc sandboxAllocCount { result } {
     return [lindex $result 3]
   }
 
@@ -1411,7 +1411,7 @@ namespace eval ::th8test {
       setupFileConstraints setupCommandConstraints setupSubCommandConstraints \
       setupNamespaceConstraints setupCurlConstraints setupCommonConstraints
 
-  namespace export sandboxRc sandboxResult sandboxSteps sandboxAlloc \
+  namespace export sandboxRc sandboxResult sandboxSteps sandboxAllocCount \
       faultRc faultResult faultAllocCount faultTriggered
 
   namespace eval :: {namespace import -force ::th8test::*}

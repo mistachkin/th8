@@ -224,6 +224,81 @@ th8NtpWsaInit(void)
 /*
  *----------------------------------------------------------------------
  *
+ * th8NtpValidateResponse --
+ *
+ *	Validate a received NTP server packet against the request we
+ *	sent and, on success, derive the Unix epoch seconds from the
+ *	server's transmit timestamp.  Factored out of th8NtpQueryOne
+ *	so the protocol-validation logic (version/mode/stratum, the
+ *	origin-timestamp anti-spoof check, and the zero-timestamp
+ *	guard) can be exercised for MC/DC directly with crafted
+ *	packets via the internal stubs -- no live NTP exchange and no
+ *	network flakiness.
+ *
+ * Results:
+ *	TH8_OK with *pEpochSec set when the response is well-formed
+ *	and authentic; TH8_ERROR (with a specific interp result)
+ *	otherwise.
+ *
+ *----------------------------------------------------------------------
+ */
+
+int
+th8NtpValidateResponse(
+    Th8_Interp *interp,
+    const void *respv,
+    const void *reqv,
+    th8_int64_t *pEpochSec)
+{
+    const Th8_NtpPacket *resp = (const Th8_NtpPacket *)respv;
+    const Th8_NtpPacket *req = (const Th8_NtpPacket *)reqv;
+    int version = (resp->flags >> 3) & 0x07;
+    int mode = resp->flags & 0x07;
+    th8_uint64_t t3Sec;
+
+    if ((version != 3 && version != 4) || mode != NTP_MODE_SERVER) {
+	Th8_SetResultStatic(
+	    interp,
+	    "clock ntp: invalid response "
+	    "(bad version or mode)",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    if (resp->stratum == 0 || resp->stratum > 15) {
+	Th8_SetResultStatic(
+	    interp,
+	    "clock ntp: invalid stratum "
+	    "(kiss-of-death or out of range)",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /* Verify origTs matches our T1 (anti-spoof). */
+    if (Th8_Memcmp(interp, resp->origTs, req->txTs, 8) != 0) {
+	Th8_SetResultStatic(
+	    interp,
+	    "clock ntp: response origTs mismatch "
+	    "(possible spoof)",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /* txTs must be non-zero. */
+    t3Sec = th8NtpReadTs(resp->txTs);
+    if (t3Sec == 0) {
+	Th8_SetResultStatic(
+	    interp, "clock ntp: zero transmit timestamp", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    *pEpochSec = (th8_int64_t)(t3Sec - NTP_EPOCH_DELTA);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8NtpQueryOne --
  *
  *	Query a single NTP server.  Opens a UDP socket, sends a
@@ -260,7 +335,7 @@ th8NtpQueryOne(
     ntp_socket_t sock = NTP_INVALID_SOCKET;
     Th8_NtpPacket req, resp;
     th8_int64_t localMs = 0;
-    th8_uint64_t t1Sec, t3Sec;
+    th8_uint64_t t1Sec;
     int rc = TH8_ERROR;
 
     *pEpochSec = 0;
@@ -482,55 +557,14 @@ th8NtpQueryOne(
     }
 
     /*
-     * Validate the response.
+     * Validate the response and derive the epoch seconds.  The
+     * protocol-validation logic is factored into
+     * th8NtpValidateResponse so it can be MC/DC-driven directly
+     * with crafted packets (via the internal stubs) without a
+     * live NTP exchange.
      */
 
-    {
-	int version = (resp.flags >> 3) & 0x07;
-	int mode = resp.flags & 0x07;
-
-	if ((version != 3 && version != 4) || mode != NTP_MODE_SERVER) {
-	    Th8_SetResultStatic(
-	        interp,
-	        "clock ntp: invalid response "
-	        "(bad version or mode)",
-	        TH8_NOLEN);
-	    goto done;
-	}
-	if (resp.stratum == 0 || resp.stratum > 15) {
-	    Th8_SetResultStatic(
-	        interp,
-	        "clock ntp: invalid stratum "
-	        "(kiss-of-death or out of range)",
-	        TH8_NOLEN);
-	    goto done;
-	}
-    }
-
-    /* Verify origTs matches our T1 (anti-spoof). */
-    if (Th8_Memcmp(interp, resp.origTs, req.txTs, 8) != 0) {
-	Th8_SetResultStatic(
-	    interp,
-	    "clock ntp: response origTs mismatch "
-	    "(possible spoof)",
-	    TH8_NOLEN);
-	goto done;
-    }
-
-    /* txTs must be non-zero. */
-    t3Sec = th8NtpReadTs(resp.txTs);
-    if (t3Sec == 0) {
-	Th8_SetResultStatic(
-	    interp, "clock ntp: zero transmit timestamp", TH8_NOLEN);
-	goto done;
-    }
-
-    /*
-     * Convert NTP seconds to Unix epoch seconds.
-     */
-
-    *pEpochSec = (th8_int64_t)(t3Sec - NTP_EPOCH_DELTA);
-    rc = TH8_OK;
+    rc = th8NtpValidateResponse(interp, &resp, &req, pEpochSec);
 
 done:
     if (sock != NTP_INVALID_SOCKET) ntp_close(sock);

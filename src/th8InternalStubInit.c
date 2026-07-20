@@ -186,7 +186,11 @@ static const Th8InternalStubsTable th8InternalStubsTableData = {
     th8SignalAllStates,
     th8Step,
     th8BigintCacheStore,
+#if defined(TH8_PLUGIN_FILE_SYSTEMS)
     th8IsDeviceName,
+#else
+    NULL, /* th8IsDeviceName defined only with the file-systems plugin */
+#endif
     th8Vsnprintf,
     /* Phase 2 (2026-05-29) gated entries.  Order MUST match the
      * struct layout in th8InternalDecls.h. */
@@ -239,8 +243,13 @@ static const Th8InternalStubsTable th8InternalStubsTableData = {
     th8_bigint_calloc,
     th8BigintSetup,
     th8BigintTeardown,
+#if defined(TH8_ENABLE_FAULT_INJECTION)
     th8FaultStrEqAscii,
     th8FaultPathMatchesBaseName,
+#else
+    NULL, /* th8FaultStrEqAscii defined only with fault injection */
+    NULL, /* th8FaultPathMatchesBaseName defined only with fault injection */
+#endif
 #if defined(TH8_PLATFORM_POSIX)
     th8PosixIsUnderBase,
     th8PosixIsPathUnderBase,
@@ -267,7 +276,9 @@ static const Th8InternalStubsTable th8InternalStubsTableData = {
     th8AfMapGet,
     th8TestRsaKeyClearPubBlob,
     th8TestRsaKeyRestorePubBlob,
+    th8NtpValidateResponse,
 #else
+    0,
     0,
     0,
     0,

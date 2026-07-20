@@ -30,6 +30,11 @@
 #       known prefix so nContent is long enough but the
 #       memcmp comparisons fire and miss
 #       (closes the C2=F vector at both).
+#   ann_lone_gt       -- `<<x>y>>` content contains a lone `>`
+#       (not followed by `>`) before the real closing `>>`,
+#       driving the L566 marker-scan loop C2=F vector
+#       (z[j]=='>' T but z[j+1]=='>' F).  The `x>y` content
+#       matches no known prefix and is ignored.
 #
 # Coverage-driven; not pinned to specific R-markers.
 #
@@ -72,6 +77,24 @@ runTest {test harpy_uann-1.2 {
 } -setup {
 } -body {
   source tests/helpers/ann_long_unknown.tcl
+  expr {[string length $result] > 0}
+} -cleanup {
+  unset -nocomplain r result
+} -result {1}}
+
+###############################################################################
+
+runTest {test harpy_uann-1.3 {
+  Annotation content with a lone `>` (`<<x>y>>`) drives the
+  th8_policy.c L566 marker-scan loop C2=F vector -- z[j]=='>'
+  is T but z[j+1]=='>' is F, so the loop does not break at the
+  lone `>` and continues to the real closing `>>`.  The `x>y`
+  content matches no known prefix and is silently ignored.
+} -constraints {
+    th8 harpy_sign crypto_enabled
+} -setup {
+} -body {
+  source tests/helpers/ann_lone_gt.tcl
   expr {[string length $result] > 0}
 } -cleanup {
   unset -nocomplain r result

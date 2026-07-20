@@ -1147,6 +1147,8 @@ Th8_FaultConfigInit(Th8_FaultConfig *pCfg)
     pCfg->nFailCacheLookupMask = 0;
     pCfg->nCacheHookFires = 0;
     pCfg->nCacheLookupSkip = 0;
+    pCfg->nFailOsslMask = 0;
+    pCfg->nFailPosixMask = 0;
     {
 	int j;
 	for (j = 0; j < (int)sizeof(pCfg->aForceRandomBytes); j++) {

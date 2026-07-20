@@ -372,4 +372,75 @@ runTest {test info_complete_backslash-1.2 {
 
 ###############################################################################
 
+runTest {test cmdinfo_nolen-1.1 {
+  R-30207-53705: command lookup by name.
+
+  Regression + MC/DC T vector for the TH8_NOLEN length-sentinel
+  guard in Th8_GetCommandInfo (th8_core.c).  The public entry
+  point documents nName == TH8_NOLEN as "NUL-terminated, compute
+  the length", but it previously ran nName = TH8_LEN(nName)
+  unconditionally; TH8_LEN(TH8_NOLEN) is TH8_LEN_MASK
+  (0x0fffffff, ~256 MiB), so th8SplitQualName scanned far past
+  the name and faulted (SIGBUS on macOS).  The new
+  `if (nName == TH8_NOLEN)` decision must resolve the real
+  length instead.  This drives the T vector (sentinel supplied)
+  with an existing simple command, which must be found without a
+  fault.  ::th8testlib::getcmdinfo reaches the C-only TH8_NOLEN
+  path that ordinary script callers -- always given an explicit
+  argument length -- cannot.
+} -constraints {
+    th8
+} -body {
+  ::th8testlib::getcmdinfo -nolen set
+} -result {1}}
+
+###############################################################################
+
+runTest {test cmdinfo_nolen-1.2 {
+  R-30207-53705: command lookup by name.
+
+  MC/DC F vector for the same guard: an EXPLICIT length is passed
+  (nName != TH8_NOLEN), so the else-branch nName = TH8_LEN(nName)
+  runs and the command is still found.  Pairs with cmdinfo_nolen
+  -1.1 to give the (T,F) decision coverage.
+} -constraints {
+    th8
+} -body {
+  ::th8testlib::getcmdinfo set
+} -result {1}}
+
+###############################################################################
+
+runTest {test cmdinfo_nolen-1.3 {
+  R-30207-53705: an unknown command name reports not-found.
+
+  TH8_NOLEN with a name that does not exist: the length is
+  computed correctly, the current- and global-namespace hash
+  lookups both miss, and the entry point returns not-found (0)
+  -- confirming the sentinel path does not over-read even when
+  the command is absent.
+} -constraints {
+    th8
+} -body {
+  ::th8testlib::getcmdinfo -nolen no_such_command_zzz
+} -result {0}}
+
+###############################################################################
+
+runTest {test cmdinfo_nolen-1.4 {
+  R-30207-53705: a qualified command name is resolved in its
+  named namespace.
+
+  TH8_NOLEN with a fully-qualified name exercises the sentinel
+  guard together with th8SplitQualName's zNs (qualified) branch
+  and the per-namespace hash lookup.  ::th8testlib::nop is a
+  stable, always-registered qualified command.
+} -constraints {
+    th8
+} -body {
+  ::th8testlib::getcmdinfo -nolen ::th8testlib::nop
+} -result {1}}
+
+###############################################################################
+
 source tests/epilogue.tcl

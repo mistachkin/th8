@@ -753,6 +753,7 @@ th8AppendInPlace(
     size_t nCur;
     size_t nAppend = 0;
     size_t nNeeded = 0;
+    size_t nTag = 0; /* OR of existing value + appended taints */
     int i;
 
     /* Bug 26 (2026-06-07): plain check rather than NEVER -- borrowed
@@ -766,8 +767,10 @@ th8AppendInPlace(
     if (pVar->nAlloc == 0) return TH8_ERROR;
 
     nCur = TH8_LEN(pVar->nData);
+    nTag = pVar->nData & TH8_TAINT_BIT;
     for (i = 0; i < nArgs; i++) {
-	nAppend += anArg[i];
+	nTag |= (anArg[i] & TH8_TAINT_BIT);
+	nAppend += TH8_LEN(anArg[i]);
     }
 
     /* Split per Finding 005 sec. 5b: C1 (TH8_SAFE_ADD_SIZE
@@ -777,12 +780,14 @@ th8AppendInPlace(
     if (nNeeded >= pVar->nAlloc) return TH8_ERROR;
 
     for (i = 0; i < nArgs; i++) {
-	Th8_Memcpy(interp, pVar->zData + nCur, azArg[i], anArg[i]);
-	nCur += anArg[i];
+	Th8_Memcpy(interp, pVar->zData + nCur, azArg[i], TH8_LEN(anArg[i]));
+	nCur += TH8_LEN(anArg[i]);
     }
     pVar->zData[nCur] = '\0';
-    pVar->nData = TH8_LEN(nCur);
-    Th8_SetResult(interp, pVar->zData, nCur);
+    /* nCur is the raw total; the stored/returned length carries the
+     * accumulated taint. */
+    pVar->nData = nCur | nTag;
+    Th8_SetResult(interp, pVar->zData, nCur | nTag);
     return TH8_OK;
 }
 
@@ -819,6 +824,7 @@ Th8_SetVar(
     size_t nVal)  /* Value length (TH8_NOLEN = NUL). */
 {
     Th8_Variable *pVar;
+    size_t nTag = 0; /* taint bit of the incoming value, if any */
 
     if (!interp) return TH8_ERROR;
 
@@ -846,8 +852,10 @@ Th8_SetVar(
 
     if (nVal == TH8_NOLEN) {
 	nVal = Th8_Strlen(interp, zVal);
+    } else {
+	nTag = nVal & TH8_TAINT_BIT;
+	nVal = TH8_LEN(nVal);
     }
-    nVal = TH8_LEN(nVal);
 
     /*
      * Always invalidate any append buffer cache entry when a
@@ -867,7 +875,9 @@ Th8_SetVar(
     }
     pVar->bBorrowed = 0;
     pVar->nAlloc = 0;
-    pVar->nData = nVal;
+    /* nData carries the taint bit; allocation/copy/index below use the
+     * raw length nVal so the buffer size stays correct. */
+    pVar->nData = nVal | nTag;
     pVar->zData = (char *)TH8_ALLOC_STR(interp, nVal);
     if (!pVar->zData) {
 	Th8_SetResultStatic(interp, "out of memory", TH8_NOLEN);
@@ -892,11 +902,12 @@ Th8_SetVar(
      */
 
     if (th8IsSecureVar(interp, zVar, nVar)) {
-	int rcSec =
-	    th8SecureSetVar(interp, zVar, nVar, pVar->zData, pVar->nData);
+	int rcSec = th8SecureSetVar(
+	    interp, zVar, nVar, pVar->zData, TH8_LEN(pVar->nData));
 
-	/* Zero plaintext before freeing. */
-	Th8_SecureZero(interp, pVar->zData, pVar->nData + 1);
+	/* Zero plaintext before freeing (raw length; nData may be
+	 * tainted). */
+	Th8_SecureZero(interp, pVar->zData, TH8_LEN(pVar->nData) + 1);
 	Th8_Free(interp, pVar->zData);
 	pVar->zData = (char *)TH8_ALLOC(interp, 1);
 	if (!pVar->zData) {
@@ -986,9 +997,9 @@ th8SetVarValue(
     }
 
     pBuf = (char *)pValue->u.buffer.pBuffer;
-    nUsed = pValue->u.buffer.nUsed;
+    nUsed = pValue->u.buffer.nUsed; /* may carry a taint bit */
 
-    pBuf[nUsed] = '\0';
+    pBuf[TH8_LEN(nUsed)] = '\0';
 
     if (pVar->bBorrowed) {
 	/* Return old borrowed buffer to the pool. */
@@ -1010,7 +1021,9 @@ th8SetVarValue(
      * Th8_Free on zData.
      */
     pVar->zData = pBuf;
-    pVar->nData = TH8_LEN(nUsed);
+    /* Preserve the taint bit; raw length is used for all buffer
+     * arithmetic above and below. */
+    pVar->nData = TH8_LEN(nUsed) | (nUsed & TH8_TAINT_BIT);
     pVar->nAlloc = pValue->u.buffer.nCapacity;
     pVar->bBorrowed = 1;
 
@@ -1022,14 +1035,15 @@ th8SetVarValue(
 
 #  if defined(TH8_ENABLE_CRYPTOGRAPHY)
     if (th8IsSecureVar(interp, zVar, nVar)) {
-	int rcSec =
-	    th8SecureSetVar(interp, zVar, nVar, pVar->zData, pVar->nData);
+	int rcSec = th8SecureSetVar(
+	    interp, zVar, nVar, pVar->zData, TH8_LEN(pVar->nData));
 
 	/*
 	 * Secure variables need their own copy - can't borrow
-	 * the cache buffer because it must be zeroed.
+	 * the cache buffer because it must be zeroed.  Raw length:
+	 * nData may carry a taint bit.
 	 */
-	Th8_SecureZero(interp, pVar->zData, pVar->nData + 1);
+	Th8_SecureZero(interp, pVar->zData, TH8_LEN(pVar->nData) + 1);
 	pVar->bBorrowed = 0;
 	pVar->nAlloc = 0;
 	/* Force the cache to release the buffer too. */
@@ -1219,13 +1233,14 @@ Th8_SaveSystemVar(
 	 * (cache lookup of a known-existent name). */
 	if (pVar)
 	    if (pVar->zData)
-		if (pVar->nData > 0) {
-		    pState->aEntry[i].zData = (char *)
-		        TH8_ALLOC(interp, pVar->nData);
+		if (TH8_LEN(pVar->nData) > 0) {
+		    size_t nRaw = TH8_LEN(pVar->nData);
+
+		    pState->aEntry[i].zData = (char *)TH8_ALLOC(interp, nRaw);
 		    if (pState->aEntry[i].zData) {
 			Th8_Memcpy(
-			    interp, pState->aEntry[i].zData, pVar->zData,
-			    pVar->nData);
+			    interp, pState->aEntry[i].zData, pVar->zData, nRaw);
+			/* Preserve the taint bit in the snapshot metadata. */
 			pState->aEntry[i].nData = pVar->nData;
 		    }
 		}

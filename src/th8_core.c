@@ -102,8 +102,11 @@
 typedef struct Th8_Buffer Th8_Buffer;
 struct Th8_Buffer {
     char *zBuf;
-    size_t nBuf;
-    size_t nAlloc;
+    size_t nBuf;   /* Raw byte count (never carries the taint bit). */
+    size_t nAlloc; /* Raw allocated capacity. */
+    size_t nTag;   /* Accumulated TH8_TAINT_BIT across all appended data.
+                    * Kept separate from nBuf/nAlloc so buffer arithmetic
+                    * stays raw; th8BufWrite ORs each write's taint here. */
 };
 
 /*
@@ -2713,12 +2716,30 @@ Th8_CreateAsyncState(Th8_Interp *interp, void *pCtx)
     }
 
     /* Link into the registry under interp's single-thread
-     * ownership (no lock needed - same-thread only). */
+     * ownership (no lock needed - same-thread only).
+     *
+     * APPEND at the tail so async sources are drained in registration
+     * (FIFO) order: an event queued earlier fires before one queued
+     * later, matching the intuitive / Tcl event-queue semantics.
+     * (th8DrainAll round-robins the registry from the head, and each
+     * source's own event queue is already FIFO.)  Prepending at the
+     * head (LIFO) would fire the most-recently-registered source first,
+     * reversing observable cross-source event order.  The registry is
+     * short -- one node per live async source -- so the O(n) walk to
+     * the tail is negligible and avoids threading a tail pointer
+     * through finalize/removal. */
     pNode->pState = pState;
     pNode->nFinalized = 0;
+    pNode->pNext = NULL;
 
-    pNode->pNext = interp->pAsyncStateHead;
-    interp->pAsyncStateHead = pNode;
+    if (!interp->pAsyncStateHead) {
+	interp->pAsyncStateHead = pNode;
+    } else {
+	Th8_AsyncStateNode *pTail = interp->pAsyncStateHead;
+
+	while (pTail->pNext) pTail = pTail->pNext;
+	pTail->pNext = pNode;
+    }
 
     return (void *)pState;
 }
@@ -5068,7 +5089,10 @@ th8ReleaseOldResult(Th8_Interp *interp)
      */
 
     if (interp->bResultSensitive && interp->zResult) {
-	Th8_SecureZero(interp, interp->zResult, interp->nResult + 1);
+	/* nResult may carry a taint bit; use the raw byte length for
+	 * the secure-zero span (an unmasked length would zero far past
+	 * the buffer). */
+	Th8_SecureZero(interp, interp->zResult, TH8_LEN(interp->nResult) + 1);
 	interp->bResultSensitive = 0;
     }
 #endif
@@ -5118,17 +5142,30 @@ Th8_SetResult(
     interp->zResult = 0;
     interp->nResult = 0;
     if (z) {
+	size_t nRaw, nTag = 0;
+
+	/*
+	 * Split the incoming length into its raw byte count and its
+	 * taint bit.  TH8_NOLEN (all bits set) MUST be resolved before
+	 * inspecting the taint bit.  Allocation, copying, and indexing
+	 * use the raw length; the stored nResult carries the taint so
+	 * the value stays tainted for the evaluator's security gate and
+	 * for `string is tainted`.
+	 */
+
 	if (n == TH8_NOLEN) {
-	    n = Th8_Strlen(interp, z);
+	    nRaw = Th8_Strlen(interp, z);
+	} else {
+	    nRaw = TH8_LEN(n);
+	    nTag = n & TH8_TAINT_BIT;
 	}
-	n = TH8_LEN(n);
-	interp->zResult = (char *)TH8_ALLOC_STR(interp, n);
+	interp->zResult = (char *)TH8_ALLOC_STR(interp, nRaw);
 	if (!interp->zResult) {
 	    return TH8_ERROR;
 	}
-	Th8_Memcpy(interp, interp->zResult, z, n);
-	interp->zResult[n] = 0;
-	interp->nResult = n;
+	Th8_Memcpy(interp, interp->zResult, z, nRaw);
+	interp->zResult[nRaw] = 0;
+	interp->nResult = nRaw | nTag;
     }
     return TH8_OK;
 }
@@ -5167,12 +5204,22 @@ Th8_SetResultStatic(
     th8ReleaseOldResult(interp);
 
     if (z) {
+	size_t nRaw, nTag = 0;
+
+	/*
+	 * Preserve the taint bit in nResult.  The static pointer is
+	 * stored as-is (no allocation), so only the stored length is
+	 * affected.  Resolve TH8_NOLEN before inspecting the taint bit.
+	 */
+
 	if (n == TH8_NOLEN) {
-	    n = Th8_Strlen(interp, z);
+	    nRaw = Th8_Strlen(interp, z);
+	} else {
+	    nRaw = TH8_LEN(n);
+	    nTag = n & TH8_TAINT_BIT;
 	}
-	n = TH8_LEN(n);
 	interp->zResult = (char *)(size_t)z; /* cast away const */
-	interp->nResult = n;
+	interp->nResult = nRaw | nTag;
 	interp->bResultBorrowed = 1; /* do NOT free on next SetResult */
     } else {
 	interp->zResult = 0;
@@ -5263,15 +5310,19 @@ Th8_ClearResult(Th8_Interp *interp) /* Interpreter. */
 int
 th8SetResultBorrowed(Th8_Interp *interp, const char *z, size_t n)
 {
+    size_t nRaw, nTag = 0;
+
     th8ReleaseOldResult(interp);
 
     if (n == TH8_NOLEN) {
-	n = Th8_Strlen(interp, z);
+	nRaw = Th8_Strlen(interp, z);
+    } else {
+	nRaw = TH8_LEN(n);
+	nTag = n & TH8_TAINT_BIT;
     }
-    n = TH8_LEN(n);
 
     interp->zResult = (char *)z;
-    interp->nResult = n;
+    interp->nResult = nRaw | nTag;
     interp->bResultBorrowed = 1;
     return TH8_OK;
 }
@@ -5344,6 +5395,7 @@ Th8_TakeResult(
 {
     char *z = interp->zResult;
     size_t n = interp->nResult;
+    size_t nRaw = TH8_LEN(n); /* raw byte length for allocation/copy/index */
 
     /*
      * Sensitive results MUST be consumed in-place; transferring
@@ -5364,18 +5416,19 @@ Th8_TakeResult(
     }
 
     if (pN) {
-	*pN = n;
+	*pN = n; /* return the tagged length so the taken value stays tainted */
     }
 
     if (interp->bResultBorrowed) {
 	/*
 	 * Result is borrowed - caller expects to own it.
-	 * Copy into a fresh allocation.
+	 * Copy into a fresh allocation.  Allocation, copying, and the
+	 * NUL index use the RAW length; the taint bit travels via *pN.
 	 */
-	char *zCopy = (char *)TH8_ALLOC_STR(interp, n);
+	char *zCopy = (char *)TH8_ALLOC_STR(interp, nRaw);
 	if (zCopy) {
-	    Th8_Memcpy(interp, zCopy, z, n);
-	    zCopy[n] = 0;
+	    Th8_Memcpy(interp, zCopy, z, nRaw);
+	    zCopy[nRaw] = 0;
 	}
 	interp->bResultBorrowed = 0;
 	z = zCopy;
@@ -5554,7 +5607,10 @@ th8FinalizeSensitiveResult(Th8_Interp *interp, size_t nLen)
     pData = th8ProtectedData(pPR);
     if (!pData) return TH8_ERROR;
 
-    pData[nLen] = '\0';
+    /* nLen may carry the taint bit: sensitivity (bResultSensitive) and
+     * trust (the taint tag) are independent classifications.  Mask for
+     * the NUL-terminator offset, but preserve the tag in nResult. */
+    pData[TH8_LEN(nLen)] = '\0';
     interp->zResult = (char *)pData;
     interp->nResult = nLen;
     interp->bResultBorrowed = 1; /* memory owned by protected region */
@@ -5617,6 +5673,7 @@ Th8_SetResultSensitive(Th8_Interp *interp, const char *z, size_t n)
     Th8_ProtectedRegion *pPR;
     unsigned char *pData;
     size_t nUsable, nCanary;
+    size_t nTag = 0; /* trust tag, preserved independently of sensitivity */
 
     if (!interp) return TH8_ERROR;
 
@@ -5645,8 +5702,12 @@ Th8_SetResultSensitive(Th8_Interp *interp, const char *z, size_t n)
 
     if (n == TH8_NOLEN) {
 	n = Th8_Strlen(interp, z);
+    } else {
+	/* Capture the trust tag before masking; a sensitive result that
+	 * came from untrusted input stays tainted. */
+	nTag = n & TH8_TAINT_BIT;
+	n = TH8_LEN(n);
     }
-    n = TH8_LEN(n);
 
     /*
      * The data buffer must hold n bytes of payload plus a NUL
@@ -5679,7 +5740,7 @@ Th8_SetResultSensitive(Th8_Interp *interp, const char *z, size_t n)
     if (n > 0) {
 	Th8_Memcpy(interp, pData, z, n);
     }
-    return th8FinalizeSensitiveResult(interp, n);
+    return th8FinalizeSensitiveResult(interp, n | nTag);
 }
 #endif /* TH8_ENABLE_CRYPTOGRAPHY */
 
@@ -7155,12 +7216,16 @@ Th8_StringAppend(
     size_t nApp) /* Length (TH8_NOLEN = NUL-term). */
 {
     size_t nNew;
+    size_t nTag;
     char *zNew;
 
     if (!interp) return TH8_ERROR;
     if (nApp == TH8_NOLEN) {
 	nApp = Th8_Strlen(interp, zApp);
     }
+    /* Output taint is the old buffer's taint OR the appended taint
+     * (TH8_XFER_TAINT semantics); captured before masking either. */
+    nTag = (*pnStr & TH8_TAINT_BIT) | (nApp & TH8_TAINT_BIT);
     nApp = TH8_LEN(nApp);
     nNew = TH8_LEN(*pnStr) + nApp;
     TH8_SIZECHECK(interp, nNew);
@@ -7184,7 +7249,7 @@ Th8_StringAppend(
     zNew[nNew] = 0;
     th8BufferFree(interp, *pzStr, TH8_LEN(*pnStr) + 1);
     *pzStr = zNew;
-    *pnStr = nNew;
+    *pnStr = nNew | nTag;
     return TH8_OK;
 }
 
@@ -10044,7 +10109,21 @@ Th8_GetCommandInfo(
     size_t nTail;
 
     if (!interp) return TH8_ERROR;
-    nName = TH8_LEN(nName);
+
+    /*
+     * Resolve the name length.  TH8_NOLEN is the documented "NUL-
+     * terminated, compute the length" sentinel; it is (size_t)-1, so it
+     * MUST be detected before TH8_LEN() masks it -- TH8_LEN(TH8_NOLEN)
+     * yields TH8_LEN_MASK (0x0fffffff, ~256 MiB), which would make
+     * th8SplitQualName scan far past the end of the name and fault.
+     * Explicit lengths still pass through TH8_LEN to strip any high
+     * flag bits, matching every other length-taking entry point.
+     */
+    if (nName == TH8_NOLEN) {
+	nName = Th8_Strlen(interp, zName);
+    } else {
+	nName = TH8_LEN(nName);
+    }
 
     th8SplitQualName(zName, nName, &zNs, &nNs, &zTail, &nTail);
 
@@ -10350,6 +10429,7 @@ th8BufInit(Th8_Buffer *pBuf) /* Buffer to initialize. */
     pBuf->zBuf = 0;
     pBuf->nBuf = 0;
     pBuf->nAlloc = 0;
+    pBuf->nTag = 0;
 }
 
 
@@ -10383,6 +10463,7 @@ th8BufFree(
     pBuf->zBuf = 0;
     pBuf->nBuf = 0;
     pBuf->nAlloc = 0;
+    pBuf->nTag = 0;
 }
 
 
@@ -10413,8 +10494,19 @@ th8BufWrite(
     Th8_Interp *interp, /* Interpreter for memory. */
     Th8_Buffer *pBuf, /* Buffer to append to. */
     const char *z, /* Data to append. */
-    size_t n) /* Number of bytes. */
+    size_t n) /* Number of bytes (may carry TH8_TAINT_BIT). */
 {
+    /*
+     * The incoming count may carry a taint bit (data derived from an
+     * untrusted source).  Record the taint in the buffer's nTag and
+     * strip it so all size arithmetic below uses the RAW byte count --
+     * otherwise a tagged length (~256 MiB) would blow past the growth
+     * guard and silently drop the append.  Callers that finalize a
+     * buffer into a value combine nBuf with nTag to keep the taint.
+     */
+    pBuf->nTag |= (n & TH8_TAINT_BIT);
+    n = TH8_LEN(n);
+
     if (n == 0) return;
     if (n > pBuf->nAlloc - pBuf->nBuf) {
 	size_t nSum = 0, nDbl = 0, nNew = 0;
@@ -12620,7 +12712,9 @@ th8SubstWord(
 
 done:
     if (rc == TH8_OK) {
-	Th8_SetResult(interp, output.zBuf, output.nBuf);
+	/* Carry any taint accumulated from variable/command
+	 * substitutions into the substituted word's result. */
+	Th8_SetResult(interp, output.zBuf, output.nBuf | output.nTag);
     }
     th8BufFree(interp, &output);
     return rc;
@@ -12668,10 +12762,19 @@ Th8_Subst(
 {
     Th8_Buffer buf;
     size_t i;
+    size_t nTag = 0; /* taint of the input template, applied to output */
     int rc = TH8_OK;
 
     if (!interp) return TH8_ERROR;
-    if (n == TH8_NOLEN) n = Th8_Strlen(interp, z);
+    if (n == TH8_NOLEN) {
+	n = Th8_Strlen(interp, z);
+    } else {
+	/* A tainted template taints the substituted output; strip the
+	 * tag before n is used as a loop bound / byte count so the scan
+	 * does not run past the buffer. */
+	nTag = n & TH8_TAINT_BIT;
+	n = TH8_LEN(n);
+    }
 
     th8BufInit(&buf);
 
@@ -12785,7 +12888,10 @@ Th8_Subst(
     }
 
     if (rc == TH8_OK) {
-	Th8_SetResult(interp, buf.zBuf ? buf.zBuf : "", buf.nBuf);
+	/* Output is tainted if the template was tainted (nTag) or any
+	 * substitution contributed tainted bytes (buf.nTag). */
+	Th8_SetResult(
+	    interp, buf.zBuf ? buf.zBuf : "", buf.nBuf | buf.nTag | nTag);
     }
     th8BufFree(interp, &buf);
     return rc;
@@ -13072,7 +13178,13 @@ th8SplitCommand(
 		    size_t nRes;
 		    const char *zRes = Th8_GetResult(interp, &nRes);
 
-		    th8BufWrite(interp, &strbuf, zRes, nRes);
+		    /* The byte count copied into strbuf must be the RAW
+		     * length; nRes may carry a taint bit (~256 MiB) that
+		     * would otherwise overrun th8BufWrite's size guard and
+		     * drop the word.  The taint travels intact in the
+		     * lenbuf entry, which becomes this argument's argl[]
+		     * length. */
+		    th8BufWrite(interp, &strbuf, zRes, TH8_LEN(nRes));
 		    th8BufAddChar(interp, &strbuf, 0);
 		    th8BufWrite(
 		        interp, &lenbuf, (const char *)&nRes, sizeof(size_t));
@@ -13536,15 +13648,20 @@ word_done:
 	    if (rc == TH8_OK) {
 		int e;
 
+		/* A tainted expansion word conservatively taints every
+		 * element it expands to. */
 		for (e = 0; e < nExpanded; e++) {
 		    th8CmdBuildAddWord(
-		        interp, pBuild, azExpanded[e], anExpanded[e]);
+		        interp, pBuild, azExpanded[e],
+		        anExpanded[e] | pBuild->wordBuf.nTag);
 		}
 	    }
 	    Th8_Free(interp, azExpanded);
 	} else {
+	    /* Carry the word's accumulated taint into its argl[] length. */
 	    th8CmdBuildAddWord(
-	        interp, pBuild, pBuild->wordBuf.zBuf, pBuild->wordBuf.nBuf);
+	        interp, pBuild, pBuild->wordBuf.zBuf,
+	        pBuild->wordBuf.nBuf | pBuild->wordBuf.nTag);
 	}
 	th8BufFree(interp, &pBuild->wordBuf);
 	pBuild->bWordActive = 0;
@@ -14510,6 +14627,19 @@ th8EvalIteration(
 	Th8_Free(interp, argv);
 	Th8_NRAddCallback(interp, th8EvalIteration, pState, 0, 0, 0);
 	return TH8_OK;
+    }
+
+    /*
+     * Reject a tainted command name.  Choosing which command to run
+     * from untrusted data is code selection and must never occur, even
+     * when the surrounding script is clean.  Report and fail closed;
+     * argv is freed by th8EvalPostCmd like any other dispatch error.
+     */
+
+    if (TH8_TAINTED(argl[0]) &&
+        Th8_ReportTaint(interp, "command name", argv[0], argl[0])) {
+	Th8_NRAddCallback(interp, th8EvalPostCmd, pState, argv, 0, 0);
+	return TH8_ERROR;
     }
 
     /*
@@ -15510,12 +15640,17 @@ Th8_SplitList(
     size_t *anLengths = 0;
     const char **azElements = 0;
     const char *zError = 0;
+    size_t nListTag = 0; /* taint of the whole list, applied per element */
     int rc;
 
     if (!interp) return TH8_ERROR;
     if (nList == TH8_NOLEN) {
 	nList = Th8_Strlen(interp, zList);
     }
+    /* A tainted list conservatively taints every element it yields.  The
+     * cache stays keyed on the raw length; the taint is captured here and
+     * re-applied to the OUTPUT element lengths (never the cache copy). */
+    nListTag = nList & TH8_TAINT_BIT;
     nList = TH8_LEN(nList);
 
     /*
@@ -15619,7 +15754,9 @@ Th8_SplitList(
 		anNew = (size_t *)&azNew[nE];
 		zBuf = (char *)&anNew[nE];
 		for (k = 0; k < nE; k++) {
-		    anNew[k] = anC[k];
+		    /* Cache holds raw lengths; the returned element
+		     * inherits the current list's taint. */
+		    anNew[k] = anC[k] | nListTag;
 		    azNew[k] = zBuf;
 		    Th8_Memcpy(interp, zBuf, azC[k], anC[k]);
 		    zBuf[anC[k]] = '\0';
@@ -15818,6 +15955,19 @@ Th8_SplitList(
 	    }
     }
 
+    /*
+     * Conservatively taint every returned element of a tainted list.
+     * Done AFTER the cache store above so the cache copy keeps raw
+     * lengths; the caller's taint is re-applied on every split.
+     */
+    if (nListTag && panElem && *panElem) {
+	size_t k;
+
+	for (k = 0; k < nElemCount; k++) {
+	    (*panElem)[k] |= nListTag;
+	}
+    }
+
     return TH8_OK;
 }
 
@@ -15864,11 +16014,13 @@ Th8_ListAppend(
     size_t nJoined = 0;
     const char *zJoined = 0;
     const char *zError = 0;
+    size_t nElemTag = 0; /* a tainted element taints the whole list */
 
     if (!interp) return TH8_ERROR;
     if (nElem == TH8_NOLEN) {
 	nElem = Th8_Strlen(interp, zElem);
     }
+    nElemTag = nElem & TH8_TAINT_BIT;
     nElem = TH8_LEN(nElem);
 
     /*
@@ -15919,6 +16071,9 @@ Th8_ListAppend(
 	    if (saRc != TH8_OK) return saRc;
 	}
     }
+    /* Propagate the element's taint into the list's stored length
+     * (the old-list taint is already carried by Th8_StringAppend). */
+    *pnList |= nElemTag;
     return TH8_OK;
 }
 
@@ -22197,10 +22352,19 @@ th8EvalCommon(
     int nSavedDepth = interp->nEvalDepth;
     size_t nInput;
 
+    /*
+     * Resolve TH8_NOLEN, but otherwise carry the taint bit through to
+     * th8EvalLocal so its security gate (TH8_TAINTED) fires on a
+     * tainted script.  "Trusted" evaluation concerns the signature
+     * policy, NOT taint -- a tainted script must never execute.
+     * th8EvalLocal masks nProgram to the raw length internally for its
+     * own arithmetic (nInput is only ever passed straight through).
+     */
+
     if (nProg == TH8_NOLEN) {
 	nInput = Th8_Strlen(interp, zProg);
     } else {
-	nInput = TH8_LEN(nProg);
+	nInput = TH8_LEN(nProg) | (nProg & TH8_TAINT_BIT);
     }
 
     /*

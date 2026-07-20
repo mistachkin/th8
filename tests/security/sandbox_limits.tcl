@@ -126,7 +126,7 @@ runTest {test sandbox-limits-3.1 {
   set r [::th8testlib::sandbox {
     string length [string repeat A 500000]
   }]
-  set alloc [sandboxAlloc $r]
+  set alloc [sandboxAllocCount $r]
   list [sandboxRc $r] [sandboxResult $r] [expr {$alloc > 0}]
 } -cleanup {
   unset -nocomplain r alloc

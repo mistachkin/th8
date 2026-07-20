@@ -379,22 +379,47 @@ runTest {test event-9.3 {
     th8 queue_event
 } -body {
   #
-  # Queue two callbacks; the first issues [interp cancel].  The
-  # second callback SHALL NOT execute: [update]'s
-  # between-callbacks Th8_Ready check observes the cancel and
-  # halts event dispatch.  The spec requires the dispatch halt
-  # (observable as the second callback not running); whether the
-  # halt also surfaces as a script error is implementation-
-  # defined and not asserted here.
+  # DETERMINISTIC test of the cancel-halt via queue_event_sync (inline,
+  # no worker thread).  Events fire in the order they were queued (FIFO
+  # -- see Th8_CreateAsyncState / Finding 027): the [interp cancel]
+  # drains first and halts dispatch, so the following [incr] never runs
+  # -> ::ran == 0.  The cleanup [update] flushes the leftover (un-drained)
+  # [incr] event so it does not leak into later tests.
+  #
+  # (Bug 59 originally flaked because the threaded queue_event queued its
+  # two events via racing worker threads, so [incr] sometimes drained
+  # before [interp cancel].  The cancel-halt itself was always correct;
+  # see Finding 027.)
   #
   set ::ran 0
-  ::th8testlib::queue_event 0 {interp cancel}
-  ::th8testlib::queue_event 0 {incr ::ran}
+  ::th8testlib::queue_event_sync {interp cancel}
+  ::th8testlib::queue_event_sync {incr ::ran}
   catch {update}
   set ::ran
 } -cleanup {
+  catch {update}
   unset -nocomplain ::ran
 } -result {0}}
+
+###############################################################################
+
+runTest {test event-9.4 {
+  R-59869-11636: positive control -- with no cancellation pending,
+  [update] dispatches BOTH queued callbacks exactly once.  Proves the
+  event-9.3 halt is caused specifically by the cancel, not by the queue
+  mechanism swallowing an event.
+} -constraints {
+    th8 queue_event
+} -body {
+  set ::ran 0
+  ::th8testlib::queue_event_sync {incr ::ran}
+  ::th8testlib::queue_event_sync {incr ::ran}
+  catch {update}
+  set ::ran
+} -cleanup {
+  catch {update}
+  unset -nocomplain ::ran
+} -result {2}}
 
 ###############################################################################
 

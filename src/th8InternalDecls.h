@@ -916,6 +916,11 @@ typedef struct Th8InternalStubsTable {
         Th8_RsaKey *pKey,
         unsigned char *pSavedBlob,
         size_t nSaved);
+    int (*th8_NtpValidateResponse)(
+        Th8_Interp *interp,
+        const void *respv,
+        const void *reqv,
+        th8_int64_t *pEpochSec);
 #endif
 
 } Th8InternalStubsTable;
@@ -926,7 +931,7 @@ typedef struct Th8InternalStubsTable {
  */
 
 #define TH8_INTERNAL_STUBS_MAGIC   (0x54483849)  /* "TH8I" */
-#define TH8_INTERNAL_STUBS_VERSION (51)
+#define TH8_INTERNAL_STUBS_VERSION (52)
 
 /*
  * Optional macro-redirection for plugins.  When
@@ -1117,6 +1122,8 @@ extern const Th8InternalStubsTable *th8InternalStubsPtr;
 	(th8InternalStubsPtr->th8_TestRsaKeyClearPubBlob)
 #    define th8TestRsaKeyRestorePubBlob                                      \
 	(th8InternalStubsPtr->th8_TestRsaKeyRestorePubBlob)
+#    define th8NtpValidateResponse                                           \
+	(th8InternalStubsPtr->th8_NtpValidateResponse)
 #    define th8FinalizeSensitiveResult                                       \
 	(th8InternalStubsPtr->th8_FinalizeSensitiveResult)
 #    define th8GetLastLocalMs (th8InternalStubsPtr->th8_GetLastLocalMs)

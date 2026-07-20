@@ -110,6 +110,47 @@ typedef long long th8_int64_t;
 /*
  *----------------------------------------------------------------------
  *
+ * th8test_native_platform --
+ *
+ *	Return the OS-native base platform table for the current
+ *	build: Th8_GetPosixPlatform() on POSIX, Th8_GetWin32Platform()
+ *	on Windows.
+ *
+ * Why / How:
+ *	th8.h declares exactly ONE of the two getters per platform
+ *	(Th8_GetPosixPlatform under !_WIN32, Th8_GetWin32Platform
+ *	otherwise), so a portable caller must select via the same
+ *	compile guard.  Naming Th8_GetPosixPlatform unconditionally
+ *	leaves it undeclared on MSVC (C4013 "assuming extern
+ *	returning int" -> C4047 pointer/int mismatch -> LNK2019).
+ *	This wrapper centralizes the guard so the drive code below
+ *	stays platform-neutral.
+ *
+ * Results:
+ *	Const pointer to the native platform table (never NULL on a
+ *	correctly built library).
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
+
+#ifdef TH8_TESTLIB_TH8
+static const Th8_Platform *
+th8test_native_platform(void)
+{
+#  if !defined(_WIN32) && !defined(WIN32)
+    return Th8_GetPosixPlatform();
+#  else
+    return Th8_GetWin32Platform();
+#  endif
+}
+#endif
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8test_civil_from_days --
  *
  *	Converts a day count (days since 1970-01-01) to a Gregorian
@@ -839,6 +880,420 @@ th8test_preeval_cmd(
         interp, "bad subcommand: must be install, uninstall, count, or mode",
         TH8_NOLEN);
     return TH8_ERROR;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_getcmdinfo_cmd --
+ *
+ *	Implements "th8testlib::getcmdinfo ?-nolen? name": looks the
+ *	command up through the public Th8_GetCommandInfo() entry point
+ *	and returns "1" when found, "0" when not.
+ *
+ * Why / How:
+ *	Th8_GetCommandInfo is a C-only entry point -- ordinary script
+ *	callers cannot reach its `nName == TH8_NOLEN` path because the
+ *	evaluator always hands a command an explicit argument length.
+ *	This shim lets a .tcl test drive BOTH length modes (an explicit
+ *	length, and the TH8_NOLEN "compute it" sentinel) across
+ *	qualified/simple and found/not-found names, so the lookup --
+ *	including the TH8_NOLEN guard whose absence once masked the
+ *	sentinel into a ~256 MiB over-read -- is exercised by the suite.
+ *
+ * Results:
+ *	TH8_OK; result is "1" (found) or "0" (not found).  TH8_ERROR
+ *	only on a usage error.
+ *
+ * Side effects:
+ *	None (any not-found error result Th8_GetCommandInfo leaves in
+ *	the interpreter is cleared before returning).
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_getcmdinfo_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    Th8_CommandProc xProc = NULL;
+    void *pCtx = NULL;
+    const char *zName;
+    size_t nName;
+    int bNoLen = 0;
+    int iName = 1;
+    int rc;
+
+    (void)ctx;
+
+    if (argc >= 2 && argl[1] == 6 && memcmp(argv[1], "-nolen", 6) == 0) {
+	bNoLen = 1;
+	iName = 2;
+    }
+    if (argc != iName + 1) {
+	return Th8_WrongNumArgs(
+	    interp, "th8testlib::getcmdinfo ?-nolen? name");
+    }
+
+    zName = argv[iName];
+    nName = bNoLen ? TH8_NOLEN : argl[iName];
+
+    rc = Th8_GetCommandInfo(interp, zName, nName, &xProc, &pCtx);
+
+    /*
+     * Th8_GetCommandInfo sets a "no such command" error result on
+     * failure; collapse the two outcomes into a clean boolean so the
+     * caller sees 1 (found) / 0 (not found) rather than an error.
+     */
+    Th8_ClearResult(interp);
+    return Th8_SetResultInt(interp, rc == TH8_OK ? 1 : 0);
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_taint_cmd --
+ *
+ *	Implements "th8testlib::taint VALUE": set the interpreter result
+ *	to VALUE with the taint bit forced on in the stored length.
+ *
+ * Why / How:
+ *	Taint is carried in the high bit (TH8_TAINT_BIT) of a size_t
+ *	length; ordinary script code has no way to synthesize a tagged
+ *	length, so tests cannot create a tainted value without a C-side
+ *	primitive.  Passing TH8_ADD_TAINT(rawLen) to Th8_SetResult marks
+ *	the returned value tainted, letting taint.tcl drive propagation
+ *	end to end.  The raw length is masked first so an already-tainted
+ *	argument is not mishandled.
+ *
+ * Results:
+ *	TH8_OK; result is VALUE, tainted.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_taint_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    (void)ctx;
+
+    if (argc != 2) {
+	return Th8_WrongNumArgs(interp, "th8testlib::taint value");
+    }
+    return Th8_SetResult(interp, argv[1], TH8_ADD_TAINT(TH8_LEN(argl[1])));
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_result_tainted_cmd --
+ *
+ *	Implements "th8testlib::result_tainted VALUE": store VALUE as a
+ *	tainted result, then report whether the STORED result carries
+ *	taint.  Isolates Th8_SetResult()'s taint handling from the
+ *	substitution and variable-storage paths: Th8_GetResult() returns
+ *	interp->nResult, whose high bit is the stored taint.
+ *
+ * Results:
+ *	TH8_OK; result is 1 if the stored result is tainted, else 0.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_result_tainted_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    size_t nStored = 0;
+
+    (void)ctx;
+
+    if (argc != 2) {
+	return Th8_WrongNumArgs(interp, "th8testlib::result_tainted value");
+    }
+    if (Th8_SetResult(interp, argv[1], TH8_ADD_TAINT(TH8_LEN(argl[1]))) !=
+        TH8_OK) {
+	return TH8_ERROR;
+    }
+    (void)Th8_GetResult(interp, &nStored);
+    return Th8_SetResultInt(interp, TH8_TAINTED(nStored) ? 1 : 0);
+}
+
+
+#  if defined(TH8_ENABLE_CRYPTOGRAPHY)
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_result_sensitive_tainted_cmd --
+ *
+ *	Implements "th8testlib::result_sensitive_tainted VALUE": store
+ *	VALUE as a tainted SENSITIVE result (Th8_SetResultSensitive with
+ *	the taint bit forced on), then report whether the stored result
+ *	still carries taint.
+ *
+ * Why / How:
+ *	Sensitivity (bResultSensitive -- stored in the protected,
+ *	mlock'd region) and trust (the taint tag on the length) are
+ *	INDEPENDENT classifications.  Th8_SetResultSensitive must mask
+ *	the tag off the byte count it uses for the copy / NUL, yet
+ *	preserve it in interp->nResult so a sensitive value derived from
+ *	untrusted input stays tainted.  This isolates that path from the
+ *	ordinary (non-sensitive) result storage exercised by
+ *	result_tainted.  Gated on TH8_ENABLE_CRYPTOGRAPHY (the protected
+ *	region is only compiled in with cryptography).
+ *
+ * Results:
+ *	TH8_OK; result is 1 if the stored sensitive result is tainted,
+ *	else 0.
+ *
+ * Side effects:
+ *	Sets (then overwrites) the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_result_sensitive_tainted_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    size_t nStored = 0;
+
+    (void)ctx;
+
+    if (argc != 2) {
+	return Th8_WrongNumArgs(
+	    interp, "th8testlib::result_sensitive_tainted value");
+    }
+    if (Th8_SetResultSensitive(
+            interp, argv[1], TH8_ADD_TAINT(TH8_LEN(argl[1]))) != TH8_OK) {
+	return TH8_ERROR;
+    }
+    (void)Th8_GetResult(interp, &nStored);
+    return Th8_SetResultInt(interp, TH8_TAINTED(nStored) ? 1 : 0);
+}
+#  endif /* TH8_ENABLE_CRYPTOGRAPHY */
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_arg_tainted_cmd --
+ *
+ *	Implements "th8testlib::arg_tainted VALUE": report whether the
+ *	argument the command received is tainted (TH8_TAINTED(argl[1])).
+ *	Drives the substitution / variable-read propagation paths -- the
+ *	taint bit is present only if the value that produced this
+ *	argument carried it through command or variable substitution.
+ *
+ * Results:
+ *	TH8_OK; result is 1 if the argument is tainted, else 0.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_arg_tainted_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    (void)ctx;
+    (void)argv;
+
+    if (argc != 2) {
+	return Th8_WrongNumArgs(interp, "th8testlib::arg_tainted value");
+    }
+    return Th8_SetResultInt(interp, TH8_TAINTED(argl[1]) ? 1 : 0);
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_eval_tainted_cmd --
+ *
+ *	Implements "th8testlib::eval_tainted SCRIPT": evaluate SCRIPT
+ *	with the taint bit forced on the length passed to Th8_Eval,
+ *	isolating the evaluation security gate from the substitution
+ *	paths.
+ *
+ * Results:
+ *	TH8_OK; result is 1 if the tainted script EXECUTED (the gate
+ *	failed -- a defect) and 0 if it was rejected.  Pair with a
+ *	side-effect probe variable to confirm no execution occurred.
+ *
+ * Side effects:
+ *	Sets the interpreter result; runs SCRIPT only if the gate is
+ *	broken.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_eval_tainted_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    int rc;
+
+    (void)ctx;
+
+    if (argc != 2) {
+	return Th8_WrongNumArgs(interp, "th8testlib::eval_tainted script");
+    }
+    rc = Th8_Eval(
+        interp, 0, argv[1], TH8_ADD_TAINT(TH8_LEN(argl[1])), "eval_tainted",
+        TH8_NOLEN);
+    Th8_ClearResult(interp);
+    return Th8_SetResultInt(interp, rc == TH8_OK ? 1 : 0);
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_taints_cmd --
+ *
+ *	Diagnostic: "th8testlib::taints ARG ...": return a space-
+ *	separated 0/1 for TH8_TAINTED(argl[i]) of every argument after
+ *	the command name, revealing the per-position taint the word
+ *	builder produced.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_taints_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    char out[512];
+    int i, n = 0;
+
+    (void)argv;
+    (void)ctx;
+
+    for (i = 1; i < argc && n < (int)sizeof(out) - 2; i++) {
+	if (i > 1) out[n++] = ' ';
+	out[n++] = TH8_TAINTED(argl[i]) ? '1' : '0';
+    }
+    return Th8_SetResult(interp, out, (size_t)n);
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_splitlist_probe_cmd --
+ *
+ *	Implements "th8testlib::splitlist_probe MODE VALUE": force the
+ *	taint bit on VALUE's length and split it via Th8_SplitList with
+ *	TH8_LIST_NO_CACHE, returning the element count.  MODE selects
+ *	which output pointers are supplied:
+ *	  count -- pazElem == NULL, panElem == NULL (count-only, like
+ *	           llength)
+ *	  lens  -- pazElem == NULL, panElem != NULL (lengths-only)
+ *
+ * Why / How:
+ *	The element-tagging guard in Th8_SplitList,
+ *	`if (nListTag && panElem && *panElem)`, is a three-condition
+ *	decision.  Ordinary script paths only reach the all-true and
+ *	short-circuit-on-C1 vectors: the guard is reached only on a cache
+ *	MISS (a cache hit returns earlier), and no script command pairs a
+ *	tainted list with a count-only or lengths-only split.  Both modes
+ *	pass pazElem == NULL, which short-circuits the element-copy /
+ *	allocation block, so the split leaves *panElem == 0 and the run
+ *	behaves identically in the release and debug/fault builds.  They
+ *	drive the two remaining MC/DC vectors deterministically:
+ *	  count (panElem == NULL)      -> {nListTag=T, panElem=NULL}
+ *	  lens  (panElem != NULL, but
+ *	         *panElem left NULL)   -> {panElem!=NULL, *panElem=NULL}
+ *	TH8_LIST_NO_CACHE forces the parse path so the guard is reached.
+ *
+ * Results:
+ *	TH8_OK; result is the element count as an integer.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_splitlist_probe_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    size_t *anElem = 0;
+    int nCount = 0;
+    size_t nTainted;
+    int rc;
+
+    (void)ctx;
+
+    if (argc != 3) {
+	return Th8_WrongNumArgs(
+	    interp, "th8testlib::splitlist_probe mode value");
+    }
+
+    /* Force the whole-list taint bit so nListTag is set inside the
+     * split; the raw byte count is preserved. */
+    nTainted = TH8_ADD_TAINT(TH8_LEN(argl[2]));
+
+    if (TH8_LEN(argl[1]) == 5 && memcmp(argv[1], "count", 5) == 0) {
+	rc = Th8_SplitList(
+	    interp, argv[2], nTainted, 0, 0, &nCount, TH8_LIST_NO_CACHE);
+    } else if (TH8_LEN(argl[1]) == 4 && memcmp(argv[1], "lens", 4) == 0) {
+	rc = Th8_SplitList(
+	    interp, argv[2], nTainted, 0, &anElem, &nCount, TH8_LIST_NO_CACHE);
+    } else {
+	Th8_SetResultStatic(interp, "mode must be count or lens", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    if (rc != TH8_OK) {
+	return rc;
+    }
+    return Th8_SetResultInt(interp, nCount);
 }
 
 
@@ -2905,7 +3360,7 @@ th8test_plat_wrappers_cmd(
     const char **argv,
     size_t *argl)
 {
-    char buf[16];
+    char sbuf[16];
     int arr[5] = {5, 3, 1, 4, 2};
     char *zList = NULL;
     size_t nList = 0;
@@ -2922,10 +3377,10 @@ th8test_plat_wrappers_cmd(
     }
 
     /* th8Memmove: copy 5 bytes; also drive n=0 + NULL guards. */
-    (void)th8Memmove(interp, buf, "abcde", 5);
-    (void)th8Memmove(interp, buf, "x", 0);          /* n=0 */
+    (void)th8Memmove(interp, sbuf, "abcde", 5);
+    (void)th8Memmove(interp, sbuf, "x", 0);          /* n=0 */
     (void)th8Memmove(interp, NULL, "x", 1);         /* dst=NULL */
-    (void)th8Memmove(interp, buf, NULL, 1);         /* src=NULL */
+    (void)th8Memmove(interp, sbuf, NULL, 1);         /* src=NULL */
 
     /* th8Strcmp: drive both-non-NULL, one-NULL, both-NULL. */
     cmpRes = th8Strcmp(interp, "alpha", "beta");
@@ -3044,15 +3499,15 @@ th8test_plat_wrappers_cmd(
 	     * NULL on small allocs) so xNeedMemory's body has 0
 	     * coverage. */
 	    if (pMemP && pMemP->xNeedMemory) {
-		void *p;
-		p = pMemP->xNeedMemory(interp, 0);
-		if (p) Th8_Free(interp, p);
-		p = pMemP->xNeedMemory(interp, ((size_t)-1) - 1);
-		if (p) Th8_Free(interp, p);
-		p = pMemP->xNeedMemory(interp, 32);
-		if (p) Th8_Free(interp, p);
-		p = pMemP->xNeedMemory(NULL, 32);
-		if (p) Th8_Free(interp, p);
+		void *pNeed;
+		pNeed = pMemP->xNeedMemory(interp, 0);
+		if (pNeed) Th8_Free(interp, pNeed);
+		pNeed = pMemP->xNeedMemory(interp, ((size_t)-1) - 1);
+		if (pNeed) Th8_Free(interp, pNeed);
+		pNeed = pMemP->xNeedMemory(interp, 32);
+		if (pNeed) Th8_Free(interp, pNeed);
+		pNeed = pMemP->xNeedMemory(NULL, 32);
+		if (pNeed) Th8_Free(interp, pNeed);
 		/* Drive th8_mem.c L89 C2=F (pPlat->xMalloc == NULL):
 		 * create a child interp normally (needs xMalloc),
 		 * then nullify xMalloc on its platform struct in
@@ -3364,11 +3819,11 @@ th8test_plat_wrappers_cmd(
      * uncovered.  Set one breakpoint, list it, then clear. */
     {
 	int bpid = 0;
-	char *zList = NULL;
-	size_t nList = 0;
+	char *zBpList = NULL;
+	size_t nBpList = 0;
 	(void)Th8_SetBreakpoint(interp, "script", 6, 42, &bpid);
-	Th8_ListAppendBreakpoints(interp, &zList, &nList);
-	if (zList) Th8_Free(interp, zList);
+	Th8_ListAppendBreakpoints(interp, &zBpList, &nBpList);
+	if (zBpList) Th8_Free(interp, zBpList);
 	(void)Th8_ClearBreakpoint(interp, bpid);
     }
 
@@ -3985,10 +4440,10 @@ th8test_plat_wrappers_cmd(
 	     * vector).  Th8_RsaKeyLoad is public TH8_API so
 	     * no internal-stubs change needed. */
 	    {
-		Th8_RsaKey *pSink = NULL;
+		Th8_RsaKey *pSinkNull = NULL;
 
 		/* Drive (T,-,-): zData=NULL. */
-		(void)Th8_RsaKeyLoad(interp, NULL, 20, &pSink);
+		(void)Th8_RsaKeyLoad(interp, NULL, 20, &pSinkNull);
 		/* Drive (F,F,T): ppKey=NULL.  Use blob (any valid-
 		 * length buffer); the function returns at L600
 		 * before reading the contents. */
@@ -4405,7 +4860,7 @@ th8test_plat_wrappers_cmd(
 	    /* Drive B. */
 	    {
 		const Th8_Platform *pParentHmk = Th8_GetPlatform(interp);
-		const Th8_Platform *pPosixHmk = Th8_GetPosixPlatform();
+		const Th8_Platform *pPosixHmk = th8test_native_platform();
 
 		if (pParentHmk && pPosixHmk) {
 		    Th8_Platform platHmk = *pParentHmk;
@@ -4601,12 +5056,12 @@ th8test_plat_wrappers_cmd(
 	 *   "0"   -- L15075 (T,F) + L15078 (T,F); val=0 returned.
 	 */
 	{
-	    int v;
-	    (void)Th8_ToInt(interp, "", 0, &v);
-	    (void)Th8_ToInt(interp, "+", 1, &v);
-	    (void)Th8_ToInt(interp, "+0", 2, &v);
-	    (void)Th8_ToInt(interp, "-0", 2, &v);
-	    (void)Th8_ToInt(interp, "0", 1, &v);
+	    int iv;
+	    (void)Th8_ToInt(interp, "", 0, &iv);
+	    (void)Th8_ToInt(interp, "+", 1, &iv);
+	    (void)Th8_ToInt(interp, "+0", 2, &iv);
+	    (void)Th8_ToInt(interp, "-0", 2, &iv);
+	    (void)Th8_ToInt(interp, "0", 1, &iv);
 	    Th8_ClearResult(interp);
 	}
 
@@ -4628,7 +5083,7 @@ th8test_plat_wrappers_cmd(
 #  if defined(TH8_PLUGIN_FILE_SYSTEMS)
 	{
 	    const Th8_Platform *pParent = Th8_GetPlatform(interp);
-	    const Th8_Platform *pPosix = Th8_GetPosixPlatform();
+	    const Th8_Platform *pPosix = th8test_native_platform();
 	    if (pParent && pPosix) {
 		Th8_Platform plat = *pParent;
 		Th8_Interp *pChild;
@@ -4700,7 +5155,7 @@ th8test_plat_wrappers_cmd(
 	 */
 	{
 	    const Th8_Platform *pParent2 = Th8_GetPlatform(interp);
-	    const Th8_Platform *pPosix2 = Th8_GetPosixPlatform();
+	    const Th8_Platform *pPosix2 = th8test_native_platform();
 	    if (pParent2 && pPosix2) {
 		Th8_Platform plat2 = *pParent2;
 		Th8_Interp *pChild2;
@@ -15743,7 +16198,7 @@ th8test_fault_cmd(
 		 * -enableSignedOnly flag plus an inline signing helper
 		 * would unlock that target.
 		 */
-		size_t j;
+		size_t jb;
 		const char *hex;
 
 		if (i + 1 >= argc || argl[i + 1] != 16) {
@@ -15755,12 +16210,12 @@ th8test_fault_cmd(
 		}
 		i++;
 		hex = argv[i];
-		for (j = 0; j < 8; j++) {
+		for (jb = 0; jb < 8; jb++) {
 		    unsigned int v = 0;
 		    int k;
 
 		    for (k = 0; k < 2; k++) {
-			char c = hex[j * 2 + k];
+			char c = hex[jb * 2 + k];
 			unsigned int d;
 
 			if (c >= '0' && c <= '9') {
@@ -15778,7 +16233,7 @@ th8test_fault_cmd(
 			}
 			v = (v << 4) | d;
 		    }
-		    cfg.aForceRandomBytes[j] = (unsigned char)v;
+		    cfg.aForceRandomBytes[jb] = (unsigned char)v;
 		}
 	    } else if (
 	        argl[i] == 22 &&
@@ -16065,6 +16520,19 @@ th8test_fault_cmd(
 		 * consumers.  Boolean flag.
 		 */
 		cfg.bFailTimeMs = 1;
+	    } else if (
+	        argl[i] == 21 &&
+	        memcmp(argv[i], "-failOsslFromdataInit", 21) == 0) {
+		/*
+		 * -failOsslFromdataInit -- arms TH8_OSSL_OP_FROMDATA_INIT
+		 * in nFailOsslMask so the OSSL_CALL wrapper in th8_snk.c
+		 * forces EVP_PKEY_fromdata_init() to report failure,
+		 * driving the "RSA verify: key construction failed"
+		 * error arm in the public-key construction path.  Boolean
+		 * flag (proof-of-concept for the OpenSSL fault shim).
+		 */
+		cfg.nFailOsslMask |=
+		    ((th8_uint64_t)1 << TH8_OSSL_OP_FROMDATA_INIT);
 	    } else if (
 	        argl[i] == 11 && memcmp(argv[i], "-failGetEnv", 11) == 0) {
 		/*
@@ -18007,6 +18475,249 @@ th8test_drivekeyfault_cmd(
 /*
  *----------------------------------------------------------------------
  *
+ * th8test_osslfaulteval_cmd --
+ *
+ *	::th8testlib::osslfaulteval opBit script
+ *
+ *	Arms bit `opBit` (a TH8_OSSL_OP_* id) in
+ *	Th8_FaultConfig.nFailOsslMask, installs the fault on THIS
+ *	interpreter, then evaluates `script` (typically a
+ *	`harpy verify` / `harpy sign` with inlined key material) so
+ *	the OSSL_CALL wrapper in th8_snk.c forces the corresponding
+ *	OpenSSL call to fail and its error arm runs.  Unlike
+ *	`fault eval` -- which runs the body in an isolated child
+ *	interp WITHOUT the signed-only crypto policy -- this evals
+ *	in the current interpreter so the crypto path is fully
+ *	live.  The fault is always uninstalled before returning.
+ *
+ *	The evaluated script's result string is preserved across
+ *	uninstall and returned as this command's result, with the
+ *	script's return code, so callers can `catch` it and match
+ *	the forced error message.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_faulteval_impl(
+    Th8_Interp *interp,
+    int argc,
+    const char **argv,
+    size_t *argl,
+    int posix)
+{
+    Th8_FaultConfig cfg;
+    unsigned char fctxBuf[sizeof(void *) * 256]; /* oversized */
+    Th8_FaultCtx *pFCtx = (Th8_FaultCtx *)fctxBuf;
+    th8_int64_t nOp = 0;
+    int rc;
+    char *zSaved = NULL;
+    size_t nSaved = 0;
+    const char *zRes;
+    const char *zCmd = posix ? "posixfaulteval" : "osslfaulteval";
+
+    if (argc != 3) {
+	return Th8_WrongNumArgs(
+	    interp, posix ? "th8testlib::posixfaulteval opBit script"
+	                  : "th8testlib::osslfaulteval opBit script");
+    }
+    if (Th8_FaultCtxSize() > sizeof(fctxBuf)) {
+	Th8_SetResultStatic(
+	    interp, "fault: Th8_FaultCtx too large for stack buffer",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    if (Th8_ToWideInt(interp, argv[1], argl[1], &nOp) != TH8_OK) {
+	return TH8_ERROR;
+    }
+    if (nOp < 0 || nOp >= 64) {
+	Th8_SetResultStatic(
+	    interp, "th8testlib faulteval: opBit out of range 0..63",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    Th8_FaultConfigInit(&cfg);
+    if (posix) {
+	cfg.nFailPosixMask = ((th8_uint64_t)1 << (unsigned int)nOp);
+    } else {
+	cfg.nFailOsslMask = ((th8_uint64_t)1 << (unsigned int)nOp);
+    }
+
+    if (Th8_FaultInstall(interp, &cfg, pFCtx) != TH8_OK) {
+	return TH8_ERROR;
+    }
+    rc =
+        Th8_Eval(interp, 0, argv[2], argl[2], zCmd, Th8_Strlen(interp, zCmd));
+
+    /*
+     * Preserve the eval's result string across Th8_FaultUninstall
+     * (which may reset the interp result), then restore it so the
+     * caller sees the forced error message.
+     */
+    zRes = Th8_GetResult(interp, &nSaved);
+    if (zRes) {
+	zSaved = (char *)TH8_ALLOC_STR(interp, nSaved);
+	if (zSaved) {
+	    Th8_Memcpy(interp, zSaved, zRes, nSaved);
+	    zSaved[nSaved] = '\0';
+	}
+    }
+
+    Th8_FaultUninstall(interp, pFCtx);
+
+    if (zSaved) {
+	Th8_SetResult(interp, zSaved, nSaved);
+	Th8_Free(interp, zSaved);
+    }
+    return rc;
+}
+
+static int
+th8test_osslfaulteval_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    (void)ctx;
+    return th8test_faulteval_impl(interp, argc, argv, argl, 0);
+}
+
+static int
+th8test_posixfaulteval_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    (void)ctx;
+    return th8test_faulteval_impl(interp, argc, argv, argl, 1);
+}
+
+
+#    if defined(TH8_ENABLE_CRYPTOGRAPHY)
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8testHexToBytes --
+ *
+ *	Decode nOut*2 hex characters from zHex into nOut bytes.
+ *	Returns TH8_OK on success, TH8_ERROR on a wrong length or a
+ *	non-hex character.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8testHexToBytes(
+    const char *zHex,
+    size_t nHex,
+    unsigned char *pOut,
+    size_t nOut)
+{
+    size_t i;
+
+    if (nHex != nOut * 2) return TH8_ERROR;
+    for (i = 0; i < nOut; i++) {
+	int hi, lo;
+	char ch = zHex[i * 2];
+	char cl = zHex[i * 2 + 1];
+
+	if (ch >= '0' && ch <= '9')
+	    hi = ch - '0';
+	else if (ch >= 'a' && ch <= 'f')
+	    hi = ch - 'a' + 10;
+	else if (ch >= 'A' && ch <= 'F')
+	    hi = ch - 'A' + 10;
+	else
+	    return TH8_ERROR;
+
+	if (cl >= '0' && cl <= '9')
+	    lo = cl - '0';
+	else if (cl >= 'a' && cl <= 'f')
+	    lo = cl - 'a' + 10;
+	else if (cl >= 'A' && cl <= 'F')
+	    lo = cl - 'A' + 10;
+	else
+	    return TH8_ERROR;
+
+	pOut[i] = (unsigned char)((hi << 4) | lo);
+    }
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_ntpvalidate_cmd --
+ *
+ *	::th8testlib::ntpvalidate flags stratum origTsHex txTsHex reqTxTsHex
+ *
+ *	Build a synthetic NTP response + request packet and drive
+ *	th8NtpValidateResponse (th8_time.c) directly via the internal
+ *	stubs, so the version/mode/stratum/anti-spoof/zero-timestamp
+ *	validation arms get MC/DC coverage WITHOUT a live NTP
+ *	exchange (no dependency on real time servers).  `flags` is
+ *	response byte 0 (LI|VN|Mode), `stratum` byte 1; the three
+ *	16-hex-char timestamps fill resp.origTs (@24), resp.txTs
+ *	(@40) and req.txTs (@40).  On success returns the derived
+ *	epoch seconds; on failure propagates the specific validation
+ *	error message so the caller can assert the driven arm.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_ntpvalidate_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    unsigned char resp[48], req[48];
+    th8_int64_t flags = 0, stratum = 0, epoch = 0;
+    int rc;
+
+    (void)ctx;
+
+    if (argc != 6) {
+	return Th8_WrongNumArgs(
+	    interp, "th8testlib::ntpvalidate flags stratum origTsHex "
+	            "txTsHex reqTxTsHex");
+    }
+    if (Th8_ToWideInt(interp, argv[1], argl[1], &flags) != TH8_OK) {
+	return TH8_ERROR;
+    }
+    if (Th8_ToWideInt(interp, argv[2], argl[2], &stratum) != TH8_OK) {
+	return TH8_ERROR;
+    }
+
+    Th8_Memset(interp, resp, 0, sizeof(resp));
+    Th8_Memset(interp, req, 0, sizeof(req));
+    resp[0] = (unsigned char)flags;
+    resp[1] = (unsigned char)stratum;
+    if (th8testHexToBytes(argv[3], argl[3], &resp[24], 8) != TH8_OK ||
+        th8testHexToBytes(argv[4], argl[4], &resp[40], 8) != TH8_OK ||
+        th8testHexToBytes(argv[5], argl[5], &req[40], 8) != TH8_OK) {
+	Th8_SetResultStatic(
+	    interp, "ntpvalidate: timestamps need 16 hex chars each",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    rc = th8NtpValidateResponse(interp, resp, req, &epoch);
+    if (rc == TH8_OK) {
+	return Th8_SetResultWideInt(interp, epoch);
+    }
+    return rc;
+}
+#    endif /* TH8_ENABLE_CRYPTOGRAPHY */
+
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8test_getpublickeytoken_cmd --
  *
  *	::th8testlib::getpublickeytoken zero|root|test
@@ -18603,7 +19314,7 @@ th8test_flagsethighbit_cmd(
     size_t *argl)
 {
     Th8_FlagSet fs;
-    char cHighBit = (char)0xC3;
+    char cHighBit = '\xC3';
 
     (void)ctx;
 
@@ -18624,9 +19335,27 @@ th8test_flagsethighbit_cmd(
 	Th8_SetResultStatic(interp, "expected add|remove", TH8_NOLEN);
 	return TH8_ERROR;
     }
-    /* Verify the call had no effect on present[] (since
-     * c >= 128 short-circuits the body). */
-    Th8_SetResultInt(interp, fs.present[(unsigned char)cHighBit]);
+    /*
+     * Verify the call had no effect on present[] (since c = 0xC3 (195)
+     * is >= 128, th8AfFlagSetAdd/Remove short-circuit at C1=F and never
+     * touch the array).  present[] has only 128 slots, so there is no
+     * present[195] to inspect -- reading it would be an out-of-bounds
+     * access (UBSan).  Instead confirm the whole array is still zero.
+     * Result 0 == "no flag present" (unchanged from the memset above),
+     * matching the prior present[c] == 0 contract.
+     */
+    {
+	size_t i;
+	int bAnySet = 0;
+
+	for (i = 0; i < sizeof(fs.present); i++) {
+	    if (fs.present[i]) {
+		bAnySet = 1;
+		break;
+	    }
+	}
+	Th8_SetResultInt(interp, bAnySet);
+    }
     return TH8_OK;
 }
 
@@ -19973,6 +20702,93 @@ th8test_queue_event_cmd(
 /*
  *----------------------------------------------------------------------
  *
+ * th8test_queue_event_sync_cmd --
+ *
+ *	Implements `::th8testlib::queue_event_sync SCRIPT`.  Queues
+ *	SCRIPT onto a fresh Th8_AsyncState by calling Th8_QueueEvent
+ *	directly on the CALLING thread -- no worker thread, no sleep.
+ *
+ * Why / How:
+ *	The threaded `queue_event` spawns a detached worker that
+ *	sleeps then queues, so two successive `queue_event 0 {...}`
+ *	calls race: the events can be queued (and thus drained by
+ *	`[update]`) in either order.  That non-determinism is exactly
+ *	what made `event-9.3` an intermittent flake (Bug 59) -- not a
+ *	defect in the cancel/catch machinery, which is correct and
+ *	covered by `suspend.tcl` Section 6.  Th8_QueueEvent is fully
+ *	mutex-protected and has no cross-thread requirement, so queuing
+ *	inline makes ordering across successive calls deterministic:
+ *	the first call's event is drained first.  The drain callback
+ *	(`th8test_queue_event_cb`) and context struct are shared with
+ *	the threaded command.
+ *
+ * Results:
+ *	TH8_OK once the event is queued; TH8_ERROR on allocation or
+ *	async-state failure (interpreter result: diagnostic).
+ *
+ * Side effects:
+ *	Allocates one context + async state (freed when the event
+ *	drains).  Queues one event on the per-interp event queue.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_queue_event_sync_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    th8test_qe_ctx *q;
+
+    (void)ctx;
+    if (argc != 2) {
+	return Th8_WrongNumArgs(
+	    interp, "th8testlib::queue_event_sync script");
+    }
+
+    q = (th8test_qe_ctx *)Th8_Malloc(interp, sizeof(th8test_qe_ctx));
+    if (!q) return TH8_ERROR;
+    Th8_Memset(interp, q, 0, sizeof(*q));
+    q->pInterp = interp;
+    q->nSleepMs = 0;
+
+    q->nScript = TH8_LEN(argl[1]);
+    q->zScript = (char *)Th8_Malloc(interp, q->nScript + 1);
+    if (!q->zScript) {
+	Th8_Free(interp, q);
+	return TH8_ERROR;
+    }
+    Th8_Memcpy(interp, q->zScript, argv[1], q->nScript);
+    q->zScript[q->nScript] = '\0';
+
+    q->pState = Th8_CreateAsyncState(interp, q);
+    if (!q->pState) {
+	Th8_Free(interp, q->zScript);
+	Th8_Free(interp, q);
+	Th8_SetResultStatic(
+	    interp, "queue_event_sync: Th8_CreateAsyncState failed",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /* Queue inline on the calling thread -- deterministic ordering. */
+    if (Th8_QueueEvent(q->pState, th8test_queue_event_cb) != TH8_OK) {
+	Th8_FinalizeAsyncState(q->pState);
+	Th8_Free(interp, q->zScript);
+	Th8_Free(interp, q);
+	Th8_SetResultStatic(
+	    interp, "queue_event_sync: Th8_QueueEvent failed", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
  * Stress tests for Th8_QueueEvent / Th8_CreateAsyncState lifecycle.
  *
  *	Two test commands live in this section:
@@ -20566,7 +21382,28 @@ Th8test_Init(Th8_Interp *interp)
     Th8_CreateCommand(
         interp, "::th8testlib::is_result_sensitive",
         th8test_is_result_sensitive_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::getcmdinfo", th8test_getcmdinfo_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::taint", th8test_taint_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::result_tainted", th8test_result_tainted_cmd, 0,
+        0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::arg_tainted", th8test_arg_tainted_cmd, 0, 0,
+        0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::eval_tainted", th8test_eval_tainted_cmd, 0, 0,
+        0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::taints", th8test_taints_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::splitlist_probe", th8test_splitlist_probe_cmd,
+        0, 0, 0);
 #  if defined(TH8_ENABLE_CRYPTOGRAPHY)
+    Th8_CreateCommand(
+        interp, "::th8testlib::result_sensitive_tainted",
+        th8test_result_sensitive_tainted_cmd, 0, 0, 0);
     Th8_CreateCommand(
         interp, "::th8testlib::mark_sensitive_release",
         th8test_mark_sensitive_release_cmd, 0, 0, 0);
@@ -20778,6 +21615,15 @@ Th8test_Init(Th8_Interp *interp)
         interp, "::th8testlib::drivekeyfault", th8test_drivekeyfault_cmd, 0,
         0, 0);
     Th8_CreateCommand(
+        interp, "::th8testlib::osslfaulteval", th8test_osslfaulteval_cmd, 0,
+        0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::posixfaulteval", th8test_posixfaulteval_cmd, 0,
+        0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::ntpvalidate", th8test_ntpvalidate_cmd, 0, 0,
+        0);
+    Th8_CreateCommand(
         interp, "::th8testlib::policyverifydata",
         th8test_policyverifydata_cmd, 0, 0, 0);
     Th8_CreateCommand(
@@ -20823,6 +21669,9 @@ Th8test_Init(Th8_Interp *interp)
     Th8_CreateCommand(
         interp, "::th8testlib::queue_event", th8test_queue_event_cmd, 0, 0,
         0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::queue_event_sync", th8test_queue_event_sync_cmd,
+        0, 0, 0);
     Th8_CreateCommand(
         interp, "::th8testlib::event_stress", th8test_event_stress_cmd, 0, 0,
         0);

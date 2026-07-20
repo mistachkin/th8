@@ -1176,16 +1176,17 @@ th8PolicyVerifyData(
 
     rc = Th8_HarpySigLoad(interp, zSigData, nSigData, &pSig, &nSig, &zToken);
     if (rc != TH8_OK) {
-	Th8_SetResultStatic(
-	    interp, "signed-only: invalid signature file", TH8_NOLEN);
+	Th8_ErrorMessage(
+	    interp, "signed-only: invalid signature file for \"", zName,
+	    nName);
 	goto error;
     }
     if (!zToken || Th8_Strlen(interp, zToken) != 16) {
-	Th8_SetResultStatic(
+	Th8_ErrorMessage(
 	    interp,
 	    "signed-only: missing public key token in "
-	    "signature header",
-	    TH8_NOLEN);
+	    "signature header for \"",
+	    zName, nName);
 	goto error;
     }
 
@@ -1251,11 +1252,11 @@ th8PolicyVerifyData(
 	    "  extracted signature SHA-512: %s\n",
 	    (int)nName, zName, dataHash, sigHash);
 
-	Th8_SetResultStatic(
+	Th8_ErrorMessage(
 	    interp,
 	    "signed-only: script signature verification "
-	    "failed",
-	    TH8_NOLEN);
+	    "failed for \"",
+	    zName, nName);
 	goto error;
     }
 

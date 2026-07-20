@@ -25,6 +25,74 @@ proc emit {fd args} {
   }
 }
 
+#
+# parseHeader --
+#     Extract TH8_API function declarations from one public header
+#     and return a list of {funcName retType params} triples in
+#     declaration order.
+#
+#     A public API function declaration begins with the TH8_API
+#     export marker at column 0.  The return type, function name,
+#     and parameter list MAY span multiple lines: clang-format
+#     reflows a declaration whose single-line form exceeds the
+#     column limit into
+#
+#         TH8_API int
+#         Th8_Foo(...);
+#
+#     so the earlier same-line-only regex silently dropped every
+#     such function from the stubs table (leaving it linkable on
+#     platforms that link the full library, but an unresolved
+#     external on stubs-only builds such as the MSVC testlib DLL).
+#     Key off the TH8_API marker and accumulate the whole
+#     declaration up to its closing ");" so both the single-line
+#     and multi-line forms are captured identically.
+#
+proc parseHeader {hdr} {
+  set fd [open $hdr r]
+  set lines [split [read $fd] \n]
+  close $fd
+
+  set funcs {}
+  set nLines [llength $lines]
+  for {set i 0} {$i < $nLines} {incr i} {
+    set line [lindex $lines $i]
+
+    if {[string match "TH8_API *" $line]} then {
+      set fullDecl $line
+      while {![string match "*);*" $fullDecl] && $i < $nLines - 1} {
+        incr i
+        append fullDecl " " [string trim [lindex $lines $i]]
+      }
+
+      #
+      # Collapse interior whitespace (including the joined line
+      # breaks) to single spaces so the extraction regex is
+      # line-break agnostic.
+      #
+      regsub -all {\s+} $fullDecl { } fullDecl
+      set fullDecl [string trim $fullDecl]
+
+      #
+      # Extract "TH8_API <retType> <FuncName>(<params>);".  The
+      # function name is the last th8-prefixed identifier directly
+      # before the '('; the required "\(" skips data declarations
+      # (TH8_API extern <type> <name>;), which have no parameter
+      # list.
+      #
+      if {[regexp \
+              {^TH8_API\s+(.+?)\s*([Tt]h8_?\w+)\s*\((.*)\)\s*;} \
+              $fullDecl -> retType funcName params]} then {
+        if {$funcName eq "Th8_Interp"} then { continue }
+        set retType [string trim $retType]
+        set params [string trim $params]
+        lappend funcs [list $funcName $retType $params]
+      }
+    }
+  }
+  return $funcs
+}
+
 proc main {argv} {
   if {[llength $argv] != 3} then {
     puts stderr "Usage: tclsh mkstubs.tcl <th8.h> <th8Decls.h> <th8StubInit.c>"
@@ -35,37 +103,28 @@ proc main {argv} {
   set init [lindex $argv 2]
 
   #
-  # Read th8.h and extract function declarations.
+  # Aggregate TH8_API declarations from every public header.  The
+  # primary header (th8.h) is parsed FIRST so its stub-table slot
+  # offsets are unchanged when the sibling public headers append
+  # their functions -- this keeps the stubs ABI
+  # (TH8_STUBS_VERSION) stable.  TH8_API functions are not confined
+  # to th8.h: th8_hash.h and th8_plugin.h also export public API
+  # (e.g. Th8_RegisterPlugin), and omitting them left the MSVC
+  # stubs-only testlib DLL with unresolved externals.  New public
+  # headers must be added to the sibling list below.
   #
-
-  set fd [open $hdr r]
-  set lines [split [read $fd] \n]
-  close $fd
-
-  set funcs {}
-  set nLines [llength $lines]
-  for {set i 0} {$i < $nLines} {incr i} {
-    set line [lindex $lines $i]
-
-    if {[regexp {^((?:const )?\w[\w* ]+\*?)\s*([Tt]h8_?\w+)\(} $line -> retType funcName]} then {
-      if {$funcName eq "Th8_Interp"} then { continue }
-
-      set fullDecl $line
-      while {![string match "*);*" $fullDecl] && $i < $nLines - 1} {
-        incr i
-        append fullDecl "\n" [lindex $lines $i]
+  set dir [file dirname $hdr]
+  set funcs [parseHeader $hdr]
+  foreach sib {th8_hash.h th8_plugin.h} {
+    set sibPath [file join $dir $sib]
+    if {![file exists $sibPath]} then { continue }
+    foreach f [parseHeader $sibPath] {
+      set nm [lindex $f 0]
+      set dup 0
+      foreach g $funcs {
+        if {[lindex $g 0] eq $nm} then { set dup 1; break }
       }
-
-      if {[regexp {^(.*?)\((.*)\)\s*;} $fullDecl -> prefix params]} then {
-        set retType [string trim $retType]
-        #
-        # Strip TH8_API from the return type -- it must not
-        # appear on struct member function pointers.
-        #
-        regsub {^TH8_API\s+} $retType {} retType
-        set params [string trim $params]
-        lappend funcs [list $funcName $retType $params]
-      }
+      if {!$dup} then { lappend funcs $f }
     }
   }
 
@@ -252,7 +311,16 @@ proc main {argv} {
       "#ifndef TH8_DECLS_H" \
       "#define TH8_DECLS_H" \
       "" \
+      "/*" \
+      " * The stubs table aggregates the public API from every public" \
+      " * header, so th8Decls.h must pull in each of them for the" \
+      " * types they define (e.g. Th8_GetCommandsProc from th8_plugin.h," \
+      " * Th8_Hash / Th8_HashEntry from th8_hash.h).  Keep this list in" \
+      " * sync with the sibling-header list in mkstubs.tcl." \
+      " */" \
       "#include \"th8.h\"" \
+      "#include \"th8_hash.h\"" \
+      "#include \"th8_plugin.h\"" \
       "" \
       "/*" \
       " * The stubs table: a struct of function pointers for every" \
