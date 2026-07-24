@@ -1538,6 +1538,17 @@ th8SecureSetVar(
     pKS = (Th8_KeyStore *)th8GetSecureKeyStore(interp);
     if (!pKS) return TH8_ERROR;
 
+    /* Bug 65: bound the slot index before writing the key page.  iSlot
+     * is always a valid created slot, so an out-of-range value here is
+     * a "must never happen" corruption -- without this guard it would
+     * be a wild TH8_SECURE_KEY_SIZE-byte CSPRNG write at an arbitrary
+     * key-page offset.  NEVER() asserts it in debug, keeps the check in
+     * release, and compiles to a constant under the MC/DC build so it
+     * adds no uncoverable decision.  Fail closed. */
+    if (NEVER(pData->iSlot < 0 || pData->iSlot >= TH8_SECURE_MAX_SLOTS)) {
+	return TH8_ERROR;
+    }
+
     /* Rotate the key FIRST: zero old, generate new.
      * The new ciphertext is then encrypted with the fresh key,
      * which is the same key that th8SecureGetVar will use for

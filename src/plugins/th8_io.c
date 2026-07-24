@@ -201,6 +201,8 @@ puts_command(
     int iArg = 1;
     const char *zStr;
     size_t nStr;
+    char *zOut = 0;
+    size_t nOut = 0;
 
     if (argc < 2 || argc > 4) {
 	return Th8_WrongNumArgs(interp, "puts ?-nonewline? ?channel? string");
@@ -268,12 +270,10 @@ puts_command(
 
     {
 	int rc;
-	char *zOut = 0;
-	size_t nOut = 0;
 
-	Th8_StringAppend(interp, &zOut, &nOut, zStr, nStr);
+	TH8_STR_APPEND(interp, &zOut, &nOut, zStr, nStr);
 	if (!noNewline) {
-	    Th8_StringAppend(interp, &zOut, &nOut, "\n", 1);
+	    TH8_STR_APPEND(interp, &zOut, &nOut, "\n", 1);
 	}
 	rc = Th8_Output(interp, zOut, nOut, TH8_TRANSLATE_NONE);
 	Th8_Free(interp, zOut);
@@ -284,6 +284,10 @@ puts_command(
 
     Th8_ClearResult(interp);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zOut);
+    return TH8_ERROR;
 }
 
 
@@ -659,6 +663,10 @@ read_command(
     int bNoNewline = 0;
     th8_int64_t numChars = -1;  /* -1 = read all */
     int iChanArg;
+    char *zAll = 0;
+    size_t nAll = 0;
+    char *zLine = 0;
+    size_t nLine = 0;
 
     (void)ctx;
 
@@ -707,15 +715,10 @@ read_command(
 	Th8_Channel *pChan = th8ChannelFind(interp, zChan, nChan);
 
 	if (pChan) {
-	    char *zAll = 0;
-	    size_t nAll = 0;
-	    char *zLine = 0;
-	    size_t nLine = 0;
-
 	    while (th8ChannelRead(interp, pChan, &zLine, &nLine) == TH8_OK &&
 	           ALWAYS(zLine)) {
-		Th8_StringAppend(interp, &zAll, &nAll, zLine, nLine);
-		Th8_StringAppend(interp, &zAll, &nAll, "\n", 1);
+		TH8_STR_APPEND(interp, &zAll, &nAll, zLine, nLine);
+		TH8_STR_APPEND(interp, &zAll, &nAll, "\n", 1);
 		Th8_Free(interp, zLine);
 		zLine = 0;
 
@@ -759,10 +762,6 @@ read_command(
      * Read from stdin by calling Th8_Input in a loop.
      */
     {
-	char *zAll = 0;
-	size_t nAll = 0;
-	char *zLine = 0;
-	size_t nLine = 0;
 	int rc;
 
 	while (1) {
@@ -771,7 +770,7 @@ read_command(
 		Th8_Free(interp, zLine);
 		break;
 	    }
-	    Th8_StringAppend(interp, &zAll, &nAll, zLine, nLine);
+	    TH8_STR_APPEND(interp, &zAll, &nAll, zLine, nLine);
 	    Th8_Free(interp, zLine);
 	    zLine = 0;
 
@@ -794,6 +793,11 @@ read_command(
 	Th8_Free(interp, zAll);
     }
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zLine);
+    Th8_Free(interp, zAll);
+    return TH8_ERROR;
 }
 
 

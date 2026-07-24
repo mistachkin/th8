@@ -147,8 +147,8 @@ th8ChannelCreate(Th8_Interp *interp, size_t nSize)
 		nBase = nOsPath - k - 1;
 	    }
 	}
-	Th8_StringAppend(interp, &zName, &nName, "./tmp/", 6);
-	Th8_StringAppend(interp, &zName, &nName, zBase, nBase);
+	TH8_STR_APPEND(interp, &zName, &nName, "./tmp/", 6);
+	TH8_STR_APPEND(interp, &zName, &nName, zBase, nBase);
     }
 
     /*
@@ -207,6 +207,15 @@ th8ChannelCreate(Th8_Interp *interp, size_t nSize)
 
     Th8_SetResult(interp, zName, nName);
     return TH8_OK;
+
+oom:
+    if (pPlat->xChannelControl) {
+	pPlat->xChannelControl(
+	    interp, pPlat->pCtx, pChannel, TH8_CHANCTL_CLOSE, 0, 0, 0, 0);
+    }
+    Th8_Free(interp, zOsPath);
+    Th8_Free(interp, zName);
+    return TH8_ERROR;
 }
 
 

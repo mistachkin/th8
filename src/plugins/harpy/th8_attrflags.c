@@ -698,36 +698,36 @@ Th8_AttrFlagsFormat(
 	const Th8_FlagSet *pFs = &pMap->a[i].flags;
 
 	if (bSpace && nOut > 0) {
-	    Th8_StringAppend(interp, &zOut, &nOut, " ", 1);
+	    TH8_STR_APPEND(interp, &zOut, &nOut, " ", 1);
 	}
 
 	if (key != 0) {
 	    char zBuf[18];  /* 16 hex + ':' + NUL */
 	    int n;
 
-	    Th8_StringAppend(interp, &zOut, &nOut, "{", 1);
+	    TH8_STR_APPEND(interp, &zOut, &nOut, "{", 1);
 	    n = th8AfFormatHex(zBuf, (th8_uint64_t)key, bLegacy);
 	    if (!bLegacy) {
 		zBuf[n++] = ':';
 		zBuf[n] = 0;
 	    }
-	    Th8_StringAppend(interp, &zOut, &nOut, zBuf, (size_t)n);
+	    TH8_STR_APPEND(interp, &zOut, &nOut, zBuf, (size_t)n);
 
 	    if (bSort) {
 		for (c = 0; c < 128; c++) {
 		    if (pFs->present[c]) {
 			char ch = (char)c;
 
-			Th8_StringAppend(interp, &zOut, &nOut, &ch, 1);
+			TH8_STR_APPEND(interp, &zOut, &nOut, &ch, 1);
 		    }
 		}
 	    } else {
 		/* Insertion order. */
 		for (c = 0; c < pFs->nOrder; c++) {
-		    Th8_StringAppend(interp, &zOut, &nOut, &pFs->order[c], 1);
+		    TH8_STR_APPEND(interp, &zOut, &nOut, &pFs->order[c], 1);
 		}
 	    }
-	    Th8_StringAppend(interp, &zOut, &nOut, "}", 1);
+	    TH8_STR_APPEND(interp, &zOut, &nOut, "}", 1);
 	} else {
 	    /* Default key: emit flags. */
 	    if (bSort) {
@@ -735,12 +735,12 @@ Th8_AttrFlagsFormat(
 		    if (pFs->present[c]) {
 			char ch = (char)c;
 
-			Th8_StringAppend(interp, &zOut, &nOut, &ch, 1);
+			TH8_STR_APPEND(interp, &zOut, &nOut, &ch, 1);
 		    }
 		}
 	    } else {
 		for (c = 0; c < pFs->nOrder; c++) {
-		    Th8_StringAppend(interp, &zOut, &nOut, &pFs->order[c], 1);
+		    TH8_STR_APPEND(interp, &zOut, &nOut, &pFs->order[c], 1);
 		}
 	    }
 	}
@@ -749,6 +749,10 @@ Th8_AttrFlagsFormat(
     *pzOut = zOut;
     *pnOut = nOut;
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zOut);
+    return TH8_ERROR;
 }
 
 

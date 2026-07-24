@@ -74,7 +74,7 @@ format_command(
 
     for (i = 0; i < nFmt; i++) {
 	if (zFmt[i] != '%') {
-	    Th8_StringAppend(interp, &zOut, &nOut, &zFmt[i], 1);
+	    TH8_STR_APPEND(interp, &zOut, &nOut, &zFmt[i], 1);
 	    continue;
 	}
 	i++;  /* skip '%' */
@@ -85,7 +85,7 @@ format_command(
 	 */
 
 	if (zFmt[i] == '%') {
-	    Th8_StringAppend(interp, &zOut, &nOut, "%", 1);
+	    TH8_STR_APPEND(interp, &zOut, &nOut, "%", 1);
 	    continue;
 	}
 
@@ -864,9 +864,9 @@ fmt_pad_and_emit:
 			 * Left-justify: content then spaces.
 			 */
 
-			Th8_StringAppend(interp, &zOut, &nOut, zNum, nNum);
+			TH8_STR_APPEND(interp, &zOut, &nOut, zNum, nNum);
 			for (k = 0; k < pad; k++) {
-			    Th8_StringAppend(interp, &zOut, &nOut, " ", 1);
+			    TH8_STR_APPEND(interp, &zOut, &nOut, " ", 1);
 			}
 		    } else if (
 		        flagZero && nNum > 0 &&
@@ -876,11 +876,11 @@ fmt_pad_and_emit:
 			 * zeros, then digits.
 			 */
 
-			Th8_StringAppend(interp, &zOut, &nOut, zNum, 1);
+			TH8_STR_APPEND(interp, &zOut, &nOut, zNum, 1);
 			for (k = 0; k < pad; k++) {
-			    Th8_StringAppend(interp, &zOut, &nOut, "0", 1);
+			    TH8_STR_APPEND(interp, &zOut, &nOut, "0", 1);
 			}
-			Th8_StringAppend(
+			TH8_STR_APPEND(
 			    interp, &zOut, &nOut, &zNum[1], nNum - 1);
 		    } else {
 			/*
@@ -888,12 +888,12 @@ fmt_pad_and_emit:
 			 */
 
 			for (k = 0; k < pad; k++) {
-			    Th8_StringAppend(interp, &zOut, &nOut, &cPad, 1);
+			    TH8_STR_APPEND(interp, &zOut, &nOut, &cPad, 1);
 			}
-			Th8_StringAppend(interp, &zOut, &nOut, zNum, nNum);
+			TH8_STR_APPEND(interp, &zOut, &nOut, zNum, nNum);
 		    }
 		} else {
-		    Th8_StringAppend(interp, &zOut, &nOut, zNum, nNum);
+		    TH8_STR_APPEND(interp, &zOut, &nOut, zNum, nNum);
 		}
 		break;
 	    }
@@ -908,6 +908,12 @@ not_enough:
     Th8_Free(interp, zOut);
     Th8_SetResultStatic(
         interp, "not enough arguments for all format specifiers", TH8_NOLEN);
+    return TH8_ERROR;
+
+oom:
+    /* A TH8_STR_APPEND growth allocation failed; Th8_StringAppend
+     * already set the "out of memory" result. */
+    Th8_Free(interp, zOut);
     return TH8_ERROR;
 }
 

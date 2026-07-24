@@ -46,6 +46,7 @@
 #endif
 
 #include "th8.h"
+#include "th8_int.h"
 #include "th8_mem.h"
 #include "th8_shell.h"
 
@@ -1852,9 +1853,9 @@ Th8Shell_RunRepl(
 	 */
 
 	if (nCmd > 0) {
-	    Th8_StringAppend(interp, &zCmd, &nCmd, "\n", 1);
+	    TH8_STR_APPEND(interp, &zCmd, &nCmd, "\n", 1);
 	}
-	Th8_StringAppend(interp, &zCmd, &nCmd, zLine, TH8_NOLEN);
+	TH8_STR_APPEND(interp, &zCmd, &nCmd, zLine, TH8_NOLEN);
 	TH8SHELL_FREE_LINE(zLine);
 
 	/*
@@ -1908,6 +1909,10 @@ Th8Shell_RunRepl(
 done:
     if (pExitCode) *pExitCode = exitCode;
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zCmd);
+    return TH8_ERROR;
 }
 
 

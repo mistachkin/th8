@@ -236,6 +236,8 @@ time_command(
     th8_int64_t i;
     th8_int64_t startUs, endUs, usPerIter;
     int rc = TH8_OK;
+    char *zOut = NULL;
+    size_t nOut = 0;
 
     (void)ctx;
 
@@ -261,23 +263,24 @@ time_command(
     usPerIter = (count > 0) ? (endUs - startUs) / count : 0;
 
     {
-	char *zOut = NULL;
-	size_t nOut = 0;
-
 	Th8_SetResultWideInt(interp, usPerIter);
 	{
 	    size_t nNum;
 	    const char *zNum = Th8_GetResult(interp, &nNum);
 
-	    Th8_StringAppend(interp, &zOut, &nOut, zNum, nNum);
+	    TH8_STR_APPEND(interp, &zOut, &nOut, zNum, nNum);
 	}
-	Th8_StringAppend(
+	TH8_STR_APPEND(
 	    interp, &zOut, &nOut, " microseconds per iteration", 27);
 	Th8_SetResult(interp, zOut, nOut);
 	Th8_Free(interp, zOut);
     }
 
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zOut);
+    return TH8_ERROR;
 }
 
 

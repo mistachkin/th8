@@ -103,7 +103,7 @@ ifeq ($(ENABLE_VARIABLES),1)
 endif
 ifeq ($(ENABLE_MIMALLOC),1)
   FEATURE_DEFS += -DTH8_USE_MIMALLOC
-  MIMALLOC_INCLUDES = -Iexternals/mimalloc/include
+  MIMALLOC_INCLUDES = -Iexternals/mimalloc/vendor/include
   MIMALLOC_OBJ = $(B)th8_mimalloc.o $(B)mimalloc_static.o
 endif
 
@@ -425,8 +425,8 @@ endif
 # ----------------------------------------------------------------
 
 ifeq ($(ENABLE_MIMALLOC),1)
-MI_SRC = externals/mimalloc/src
-MI_INC = externals/mimalloc/include
+MI_SRC = externals/mimalloc/vendor/src
+MI_INC = externals/mimalloc/vendor/include
 
 $(B)mimalloc_static.o: $(MI_SRC)/static.c | $(B)
 	$(CC) -O2 -DMI_STATIC_LIB -I$(MI_INC) -I$(MI_SRC) \

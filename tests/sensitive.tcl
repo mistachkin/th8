@@ -119,5 +119,65 @@ runTest {test sensitive-4.1 {
 } -result {1 1 1 1}}
 
 ###############################################################################
+#
+# Section 5 -- R-54106-02907: sensitivity propagates through value-
+# preserving operations (command substitution, variable storage), the
+# same conservative way taint does.  These pin the parallel-tag fix:
+# a secure value flowing through [list ...] or through a regular
+# variable must remain classified sensitive at the boundary.
+#
+###############################################################################
+
+runTest {test sensitive-5.1 {
+  R-54106-02907: a secure value substituted through [list ...] into a
+                 regular variable is still sensitive when read back
+} -constraints {
+    th8 crypto_testlib
+} -setup {
+  catch {secure delete _sens_5_1}
+  secure create _sens_5_1 "topsecret"
+  set _copy_5_1 [list $_sens_5_1]
+} -body {
+  # Field 1 of the probe is Th8_IsResultSensitive after Th8_GetVar.
+  lindex [::th8testlib::sensitive_probe _copy_5_1] 1
+} -cleanup {
+  catch {secure delete _sens_5_1}
+  unset -nocomplain _copy_5_1
+} -result {1}}
+
+###############################################################################
+
+runTest {test sensitive-5.2 {
+  R-54106-02907: Th8_TakeResult on the substituted-then-stored sensitive
+                 value is still refused (field 3 of the probe)
+} -constraints {
+    th8 crypto_testlib
+} -setup {
+  catch {secure delete _sens_5_2}
+  secure create _sens_5_2 "topsecret"
+  set _copy_5_2 [list $_sens_5_2]
+} -body {
+  lindex [::th8testlib::sensitive_probe _copy_5_2] 3
+} -cleanup {
+  catch {secure delete _sens_5_2}
+  unset -nocomplain _copy_5_2
+} -result {1}}
+
+###############################################################################
+
+runTest {test sensitive-5.3 {
+  R-54106-02907: no false positive -- an ordinary value flowing through
+                 the same [list ...] path is NOT sensitive
+} -constraints {
+    th8 crypto_testlib
+} -setup {
+  set _plain_5_3 [list "ordinary"]
+} -body {
+  lindex [::th8testlib::sensitive_probe _plain_5_3] 1
+} -cleanup {
+  unset -nocomplain _plain_5_3
+} -result {0}}
+
+###############################################################################
 
 source tests/epilogue.tcl

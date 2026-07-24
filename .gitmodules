@@ -13,8 +13,8 @@
 #
 # =====================================================================
 
-[submodule "externals/mimalloc"]
-	path = externals/mimalloc
+[submodule "externals/mimalloc/vendor"]
+	path = externals/mimalloc/vendor
 	url = https://github.com/microsoft/mimalloc.git
 	branch = main
 	shallow = true

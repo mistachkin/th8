@@ -1035,15 +1035,19 @@ Th8_Output(
 
 	    for (i = 0; i < n; i++) {
 		if (z[i] == '\n') {
-		    Th8_StringAppend(interp, &zOut, &nOut, "\r\n", 2);
+		    TH8_STR_APPEND(interp, &zOut, &nOut, "\r\n", 2);
 		} else {
-		    Th8_StringAppend(interp, &zOut, &nOut, &z[i], 1);
+		    TH8_STR_APPEND(interp, &zOut, &nOut, &z[i], 1);
 		}
 	    }
 	    rc = pPlatform->xOutput(
 	        interp, pPlatform->pCtx, zOut ? zOut : "", nOut, pChannel);
 	    Th8_Free(interp, zOut);
 	    return rc;
+
+oom:
+	    Th8_Free(interp, zOut);
+	    return TH8_ERROR;
 	}
 
 	return pPlatform->xOutput(interp, pPlatform->pCtx, z, n, pChannel);

@@ -894,10 +894,10 @@ th8ExprEval(
 	if (rc != TH8_OK) return rc;
 	{
 	    size_t nCond;
-	    char *zCond = Th8_TakeResult(interp, &nCond);
+	    char *zCond = th8TakeResultInternal(interp, &nCond);
 
 	    rc = Th8_ToWideInt(interp, zCond, nCond, &iCond);
-	    Th8_Free(interp, zCond);
+	    th8FreeSensitive(interp, zCond, nCond);
 	    if (rc != TH8_OK) return rc;
 	}
 
@@ -972,7 +972,7 @@ th8ExprEval(
 
 	rc = th8ExprEval(interp, pExpr->pLeft, zName, nName);
 	if (rc != TH8_OK) return rc;
-	zVarName = Th8_TakeResult(interp, &nVarName);
+	zVarName = th8TakeResultInternal(interp, &nVarName);
 	nVarName = TH8_LEN(nVarName);
 
 	rc = th8ExprEval(interp, pExpr->pRight, zName, nName);
@@ -980,13 +980,16 @@ th8ExprEval(
 	    Th8_Free(interp, zVarName);
 	    return rc;
 	}
-	zRhs = Th8_TakeResult(interp, &nRhs);
-	nRhs = TH8_LEN(nRhs);
+	/* Keep nRhs tagged (do NOT mask here): Th8_SetVar and Th8_SetResult
+	 * both accept a tagged length and mask internally, so the assigned
+	 * value's taint/sensitive classification propagates into the variable
+	 * and the expression result. */
+	zRhs = th8TakeResultInternal(interp, &nRhs);
 
 	rc = Th8_SetVar(interp, zVarName, nVarName, zRhs, nRhs);
 	Th8_Free(interp, zVarName);
 	if (rc != TH8_OK) {
-	    Th8_Free(interp, zRhs);
+	    th8FreeSensitive(interp, zRhs, nRhs);
 	    return rc;
 	}
 
@@ -995,7 +998,7 @@ th8ExprEval(
 	 * (which copies) and then free our taken buffer.
 	 */
 	rc = Th8_SetResult(interp, zRhs, nRhs);
-	Th8_Free(interp, zRhs);
+	th8FreeSensitive(interp, zRhs, nRhs);
 	return rc;
 #  else
 	/* Bug 35: TH8_OP_VAR_ASSIGN (:=) is unreachable when
@@ -1025,10 +1028,10 @@ th8ExprEval(
 	if (rc != TH8_OK) return rc;
 	{
 	    size_t nL;
-	    char *zL = Th8_TakeResult(interp, &nL);
+	    char *zL = th8TakeResultInternal(interp, &nL);
 
 	    rc = Th8_ToBoolean(interp, zL, nL, &bLeft);
-	    Th8_Free(interp, zL);
+	    th8FreeSensitive(interp, zL, nL);
 	    if (rc != TH8_OK) return rc;
 	}
 	if (pExpr->pOp->eOp == TH8_OP_LOGICAL_AND) {
@@ -1040,10 +1043,10 @@ th8ExprEval(
 	    {
 		int bRight;
 		size_t nR;
-		char *zR = Th8_TakeResult(interp, &nR);
+		char *zR = th8TakeResultInternal(interp, &nR);
 
 		rc = Th8_ToBoolean(interp, zR, nR, &bRight);
-		Th8_Free(interp, zR);
+		th8FreeSensitive(interp, zR, nR);
 		if (rc != TH8_OK) return rc;
 		return Th8_SetResultInt(interp, bRight != 0);
 	    }
@@ -1056,10 +1059,10 @@ th8ExprEval(
 	    {
 		int bRight;
 		size_t nR;
-		char *zR = Th8_TakeResult(interp, &nR);
+		char *zR = th8TakeResultInternal(interp, &nR);
 
 		rc = Th8_ToBoolean(interp, zR, nR, &bRight);
-		Th8_Free(interp, zR);
+		th8FreeSensitive(interp, zR, nR);
 		if (rc != TH8_OK) return rc;
 		return Th8_SetResultInt(interp, bRight != 0);
 	    }
@@ -1151,6 +1154,9 @@ th8ExprEval(
 	th8_int64_t iLeft = 0, iRight = 0;
 	char *zLeft = 0, *zRight = 0;
 	size_t nLeft = 0, nRight = 0;
+	/* Tagged lengths captured before masking, so a sensitive operand
+	 * copy can be securely zeroed at the free below (defense in depth). */
+	size_t nLeftTag = 0, nRightTag = 0;
 
 	/*
 	 * Evaluate children.
@@ -1159,14 +1165,16 @@ th8ExprEval(
 	if (pExpr->pLeft) {
 	    rc = th8ExprEval(interp, pExpr->pLeft, zName, nName);
 	    if (rc == TH8_OK) {
-		zLeft = Th8_TakeResult(interp, &nLeft);
+		zLeft = th8TakeResultInternal(interp, &nLeft);
+		nLeftTag = nLeft;
 		nLeft = TH8_LEN(nLeft);
 	    }
 	}
 	if (rc == TH8_OK && pExpr->pRight) {
 	    rc = th8ExprEval(interp, pExpr->pRight, zName, nName);
 	    if (rc == TH8_OK) {
-		zRight = Th8_TakeResult(interp, &nRight);
+		zRight = th8TakeResultInternal(interp, &nRight);
+		nRightTag = nRight;
 		nRight = TH8_LEN(nRight);
 	    }
 	}
@@ -1683,9 +1691,14 @@ th8ExprEval(
 	    case TH8_OP_SEQ:
 	    case TH8_OP_SNE: {
 		int iEqual = 0;
+		/* Compare content only: mask the tag bits (taint/sensitive)
+		 * out of the lengths.  Tags are value metadata, not part of
+		 * the string, so a tainted or sensitive "x" is string-equal to
+		 * a plain "x". */
+		size_t nL = TH8_LEN(nLeft);
+		size_t nR = TH8_LEN(nRight);
 
-		if (nRight == nLeft &&
-		    0 == Th8_Memcmp(interp, zRight, zLeft, nRight)) {
+		if (nR == nL && 0 == Th8_Memcmp(interp, zRight, zLeft, nR)) {
 		    iEqual = 1;
 		}
 		if (pExpr->pOp->eOp == TH8_OP_SEQ) {
@@ -1713,11 +1726,15 @@ th8ExprEval(
 		    TH8_LIST_NONE);
 		if (rc == TH8_OK) {
 		    int k;
+		    /* Compare content only; mask tag bits from both the left
+		     * operand and each element (a tainted/sensitive list
+		     * yields tagged element lengths). */
+		    size_t nLraw = TH8_LEN(nLeft);
 
 		    for (k = 0; k < nCount; k++) {
-			if (anElem[k] == nLeft &&
+			if (TH8_LEN(anElem[k]) == nLraw &&
 			    0 ==
-			        Th8_Memcmp(interp, azElem[k], zLeft, nLeft)) {
+			        Th8_Memcmp(interp, azElem[k], zLeft, nLraw)) {
 			    iFound = 1;
 			    break;
 			}
@@ -1738,8 +1755,8 @@ th8ExprEval(
 	}
 
 finish:
-	Th8_Free(interp, zLeft);
-	Th8_Free(interp, zRight);
+	th8FreeSensitive(interp, zLeft, nLeftTag);
+	th8FreeSensitive(interp, zRight, nRightTag);
     }
 
     return rc;
@@ -2324,7 +2341,7 @@ th8ExprParse(
 				Th8_Free(interp, pNode);
 				break;
 			    }
-			    zArg1 = Th8_TakeResult(interp, &nArg1);
+			    zArg1 = th8TakeResultInternal(interp, &nArg1);
 			}
 			/* Evaluate second arg if present */
 			if (found) {
@@ -2334,11 +2351,11 @@ th8ExprParse(
 			        interp, &zExpr[commaAt + 1], n2, zName,
 			        nName);
 			    if (rc != TH8_OK) {
-				Th8_Free(interp, zArg1);
+				th8FreeSensitive(interp, zArg1, nArg1);
 				Th8_Free(interp, pNode);
 				break;
 			    }
-			    zArg2 = Th8_TakeResult(interp, &nArg2);
+			    zArg2 = th8TakeResultInternal(interp, &nArg2);
 			}
 		    }
 
@@ -2349,8 +2366,8 @@ th8ExprParse(
 		    rc = th8ExprEvalFunc(
 		        interp, &zExpr[start], nFuncName, zArg1, nArg1, zArg2,
 		        nArg2);
-		    Th8_Free(interp, zArg1);
-		    Th8_Free(interp, zArg2);
+		    th8FreeSensitive(interp, zArg1, nArg1);
+		    th8FreeSensitive(interp, zArg2, nArg2);
 		    if (rc != TH8_OK) {
 			Th8_Free(interp, pNode);
 			break;

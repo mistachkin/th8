@@ -1031,7 +1031,7 @@ th8HttpsTimeQuery(
 	nUrl = Th8_Strlen(interp, zUrl);
     }
 
-    Th8_StringAppend(interp, &zFullUrl, &nFullUrl, zUrl, nUrl);
+    TH8_STR_APPEND(interp, &zFullUrl, &nFullUrl, zUrl, nUrl);
 
     /*
      * Append the nonce as a query parameter.  Use '?' if the
@@ -1048,11 +1048,11 @@ th8HttpsTimeQuery(
 		break;
 	    }
 	}
-	Th8_StringAppend(
+	TH8_STR_APPEND(
 	    interp, &zFullUrl, &nFullUrl,
 	    hasQuery ? "&nonce=" : "?nonce=", 7);
     }
-    Th8_StringAppend(
+    TH8_STR_APPEND(
         interp, &zFullUrl, &nFullUrl, zNonceHex, TH8_TIME_NONCE_BYTES * 2);
 
     /*
@@ -1227,6 +1227,10 @@ th8HttpsTimeQuery(
     }
 
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zFullUrl);
+    return TH8_ERROR;
 }
 
 

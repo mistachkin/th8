@@ -276,7 +276,7 @@ namespace eval ::th8test {
         [llength [info commands harpy]] > 0 && \
         [::th8testlib::signed_only query]} then {
       set ::_harpyToken [::th8testlib::load_snk \
-          tests/helpers/testkey2048.snk]
+          tests/helpers/th8_test_key.snk]
 
       testConstraint harpy_sign 1
     }

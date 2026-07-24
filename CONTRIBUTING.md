@@ -85,7 +85,7 @@ If you forgot `--recurse-submodules`:
 git submodule update --init --recursive
 ```
 
-The submodules today are `externals/mimalloc` (Microsoft
+The submodules today are `externals/mimalloc/vendor` (Microsoft
 mimalloc, the production allocator) and `externals/tommath/vendor`
 (libtom/libtommath, the source for the bignum amalgamation built
 under `externals/tommath/build/` by `make tommath_vendor`).

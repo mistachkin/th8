@@ -232,12 +232,10 @@ file_join_command(
 	 */
 
 	if (nResult > 0 && !th8IsPathSep(zResult[nResult - 1])) {
-	    rc = Th8_StringAppend(interp, &zResult, &nResult, "/", 1);
-	    if (rc != TH8_OK) goto done;
+	    TH8_STR_APPEND(interp, &zResult, &nResult, "/", 1);
 	}
 
-	rc = Th8_StringAppend(interp, &zResult, &nResult, z, n);
-	if (rc != TH8_OK) goto done;
+	TH8_STR_APPEND(interp, &zResult, &nResult, z, n);
     }
 
     if (zResult) {
@@ -249,6 +247,11 @@ file_join_command(
 done:
     Th8_Free(interp, zResult);
     return rc;
+
+oom:
+    /* TH8_STR_APPEND growth failed; "out of memory" already set. */
+    rc = TH8_ERROR;
+    goto done;
 }
 
 

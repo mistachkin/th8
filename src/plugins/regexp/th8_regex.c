@@ -1242,14 +1242,12 @@ regexp_command(
 
 			    Th8_SetResultInt(interp, (int)pmatch[k].rm_so);
 			    zBuf = Th8_GetResult(interp, &nBuf);
-			    Th8_StringAppend(
-			        interp, &zIdx, &nIdx, zBuf, nBuf);
-			    Th8_StringAppend(interp, &zIdx, &nIdx, " ", 1);
+			    TH8_STR_APPEND(interp, &zIdx, &nIdx, zBuf, nBuf);
+			    TH8_STR_APPEND(interp, &zIdx, &nIdx, " ", 1);
 			    Th8_SetResultInt(
 			        interp, (int)pmatch[k].rm_eo - 1);
 			    zBuf = Th8_GetResult(interp, &nBuf);
-			    Th8_StringAppend(
-			        interp, &zIdx, &nIdx, zBuf, nBuf);
+			    TH8_STR_APPEND(interp, &zIdx, &nIdx, zBuf, nBuf);
 			    Th8_ListAppend(
 			        interp, &zInlineList, &nInlineList, zIdx,
 			        nIdx);
@@ -1293,14 +1291,12 @@ regexp_command(
 
 			    Th8_SetResultInt(interp, (int)pmatch[k].rm_so);
 			    zBuf = Th8_GetResult(interp, &nBuf);
-			    Th8_StringAppend(
-			        interp, &zIdx, &nIdx, zBuf, nBuf);
-			    Th8_StringAppend(interp, &zIdx, &nIdx, " ", 1);
+			    TH8_STR_APPEND(interp, &zIdx, &nIdx, zBuf, nBuf);
+			    TH8_STR_APPEND(interp, &zIdx, &nIdx, " ", 1);
 			    Th8_SetResultInt(
 			        interp, (int)pmatch[k].rm_eo - 1);
 			    zBuf = Th8_GetResult(interp, &nBuf);
-			    Th8_StringAppend(
-			        interp, &zIdx, &nIdx, zBuf, nBuf);
+			    TH8_STR_APPEND(interp, &zIdx, &nIdx, zBuf, nBuf);
 #  if defined(TH8_ENABLE_VARIABLES)
 			    Th8_SetVar(
 			        interp, argv[iArg + k],
@@ -1372,13 +1368,20 @@ regexp_command(
 	} else {
 	    Th8_SetResultInt(interp, matched ? 1 : 0);
 	}
+
+	rc = TH8_OK;
+	goto cleanup;
+
+oom:
+	Th8_Free(interp, zInlineList);
+	rc = TH8_ERROR;
     }
 
     /*
      * Cleanup.
      */
 
-    rc = TH8_OK;
+cleanup:
     th8_regfree(&re);
     Th8_Free(interp, pmatch);
     Th8_Free(interp, aChrPat);
@@ -1565,7 +1568,7 @@ regsub_command(
 	    zPre = th8ChrToUtf8(
 	        interp, &aChrStr[searchStart],
 	        (int)(pmatch[0].rm_so - (th8_regoff_t)searchStart), &nPre);
-	    Th8_StringAppend(interp, &zOut, &nOut, zPre, nPre);
+	    TH8_STR_APPEND(interp, &zOut, &nOut, zPre, nPre);
 	    Th8_Free(interp, zPre);
 	}
 
@@ -1593,12 +1596,11 @@ regsub_command(
 			    zSub = th8ChrToUtf8(
 			        interp, &aChrStr[pmatch[idx].rm_so], nSubChr,
 			        &nSub);
-			    Th8_StringAppend(
-			        interp, &zOut, &nOut, zSub, nSub);
+			    TH8_STR_APPEND(interp, &zOut, &nOut, zSub, nSub);
 			    Th8_Free(interp, zSub);
 			}
 		    } else {
-			Th8_StringAppend(interp, &zOut, &nOut, &zRepl[r], 1);
+			TH8_STR_APPEND(interp, &zOut, &nOut, &zRepl[r], 1);
 		    }
 		} else if (zRepl[r] == '&') {
 		    size_t nSub;
@@ -1608,10 +1610,10 @@ regsub_command(
 		    nSubChr = (int)(pmatch[0].rm_eo - pmatch[0].rm_so);
 		    zSub = th8ChrToUtf8(
 		        interp, &aChrStr[pmatch[0].rm_so], nSubChr, &nSub);
-		    Th8_StringAppend(interp, &zOut, &nOut, zSub, nSub);
+		    TH8_STR_APPEND(interp, &zOut, &nOut, zSub, nSub);
 		    Th8_Free(interp, zSub);
 		} else {
-		    Th8_StringAppend(interp, &zOut, &nOut, &zRepl[r], 1);
+		    TH8_STR_APPEND(interp, &zOut, &nOut, &zRepl[r], 1);
 		}
 	    }
 	}
@@ -1629,7 +1631,7 @@ regsub_command(
 		char *zOne;
 
 		zOne = th8ChrToUtf8(interp, &aChrStr[searchStart], 1, &nOne);
-		Th8_StringAppend(interp, &zOut, &nOut, zOne, nOne);
+		TH8_STR_APPEND(interp, &zOut, &nOut, zOne, nOne);
 		Th8_Free(interp, zOne);
 		searchStart++;
 	    } else {
@@ -1649,15 +1651,14 @@ regsub_command(
 	zTail = th8ChrToUtf8(
 	    interp, &aChrStr[searchStart], nChrStr - (int)searchStart,
 	    &nTail);
-	Th8_StringAppend(interp, &zOut, &nOut, zTail, nTail);
+	TH8_STR_APPEND(interp, &zOut, &nOut, zTail, nTail);
 	Th8_Free(interp, zTail);
     } else if (nSubs == 0) {
 	/*
 	 * No match: output original string unchanged.
 	 */
 
-	Th8_StringAppend(
-	    interp, &zOut, &nOut, argv[iArg - 2], argl[iArg - 2]);
+	TH8_STR_APPEND(interp, &zOut, &nOut, argv[iArg - 2], argl[iArg - 2]);
     }
 
     /*
@@ -1679,6 +1680,7 @@ regsub_command(
      * Cleanup.
      */
 
+cleanup:
     Th8_Free(interp, zOut);
     th8_regfree(&re);
     Th8_Free(interp, pmatch);
@@ -1687,6 +1689,10 @@ regsub_command(
     th8RegexTeardown();
 
     return rc;
+
+oom:
+    rc = TH8_ERROR;
+    goto cleanup;
 }
 
 

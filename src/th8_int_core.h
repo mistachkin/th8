@@ -393,9 +393,10 @@ struct Th8_Interp {
      */
 
     char *zResult;
-    size_t nResult;
+    size_t nResult; /* raw byte length | tag bits (taint 0x10000000,
+                     * sensitive 0x20000000); sensitivity is derived from
+                     * TH8_SENSITIVE(nResult), not a separate flag. */
     int bResultBorrowed; /* zResult is borrowed (cache-owned). */
-    int bResultSensitive;
 
     /*
      * Finally block state.  Updated by the [try] command after
@@ -639,7 +640,8 @@ struct Th8_Interp {
 
     /*
      * Protected (mlock'd, guard-paged) backing region for the
-     * interpreter result when bResultSensitive is set, AND the
+     * interpreter result when it is sensitive (TH8_SENSITIVE(nResult)),
+     * AND the
      * decryption destination for [secure] variable operations
      * (th8SecureGetVar uses it for the plaintext result;
      * th8SecureSave uses it as scratch for re-encryption with

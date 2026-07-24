@@ -40,7 +40,7 @@ runTest {test osslfault-1.1 {
 } -constraints {
     th8 crypto_enabled harpy_sign fault_injection
 } -setup {
-  set t [th8testlib::load_snk tests/helpers/testkey2048.snk]
+  set t [th8testlib::load_snk tests/helpers/th8_test_key.snk]
   set d "ossl fault poc"
   set s [harpy sign $t $d]
 } -body {
@@ -64,7 +64,7 @@ runTest {test osslfault-1.2 {
 } -constraints {
     th8 crypto_enabled harpy_sign fault_injection
 } -setup {
-  set t [th8testlib::load_snk tests/helpers/testkey2048.snk]
+  set t [th8testlib::load_snk tests/helpers/th8_test_key.snk]
   set d "ossl fault poc"
   set s [harpy sign $t $d]
 } -body {
@@ -88,7 +88,7 @@ runTest {test osslfault-1.3 {
 } -constraints {
     th8 crypto_enabled harpy_sign fault_injection
 } -setup {
-  set t [th8testlib::load_snk tests/helpers/testkey2048.snk]
+  set t [th8testlib::load_snk tests/helpers/th8_test_key.snk]
   set d "ossl fault poc"
   set s [harpy sign $t $d]
 } -body {
@@ -111,7 +111,7 @@ runTest {test osslfault-2.1 {
 } -constraints {
     th8 crypto_enabled harpy_sign fault_injection
 } -setup {
-  set t [th8testlib::load_snk tests/helpers/testkey2048.snk]
+  set t [th8testlib::load_snk tests/helpers/th8_test_key.snk]
   set d "ossl rollout verify"
   set s [harpy sign $t $d]
 } -body {
@@ -138,7 +138,7 @@ runTest {test osslfault-3.1 {
 } -constraints {
     th8 crypto_enabled harpy_sign fault_injection
 } -setup {
-  set t [th8testlib::load_snk tests/helpers/testkey2048.snk]
+  set t [th8testlib::load_snk tests/helpers/th8_test_key.snk]
   set d "ossl rollout sign"
 } -body {
   set fails [list]

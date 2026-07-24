@@ -245,6 +245,7 @@ append_command(
     size_t *argl)  /* Argument lengths. */
 {
     int i;
+    char *zNew = 0;
 
     if (argc < 2) {
 	return Th8_WrongNumArgs(interp, "append varname ?value ...?");
@@ -301,12 +302,12 @@ append_command(
 
 	if (Th8_GetVar(interp, argv[1], argl[1]) == TH8_OK) {
 	    zCur = Th8_GetResult(interp, &nCur);
-	    nTag |= (nCur & TH8_TAINT_BIT);
+	    nTag |= (nCur & TH8_TAG_BITS);
 	    nCur = TH8_LEN(nCur);
 	}
 
 	for (i = 2; i < argc; i++) {
-	    nTag |= (argl[i] & TH8_TAINT_BIT);
+	    nTag |= (argl[i] & TH8_TAG_BITS);
 	    nAppend += TH8_LEN(argl[i]);
 	}
 	nTotal = nCur + nAppend;
@@ -371,17 +372,22 @@ fallback:
     for (i = 2; i < argc; i++) {
 	size_t nCur;
 	const char *zCur;
-	char *zNew = 0;
 	size_t nNew = 0;
 
+	zNew = 0;
 	zCur = Th8_GetResult(interp, &nCur);
-	Th8_StringAppend(interp, &zNew, &nNew, zCur, nCur);
-	Th8_StringAppend(interp, &zNew, &nNew, argv[i], argl[i]);
+	TH8_STR_APPEND(interp, &zNew, &nNew, zCur, nCur);
+	TH8_STR_APPEND(interp, &zNew, &nNew, argv[i], argl[i]);
 	Th8_SetVar(interp, argv[1], argl[1], zNew, nNew);
 	Th8_Free(interp, zNew);
+	zNew = 0;
 	Th8_GetVar(interp, argv[1], argl[1]);
     }
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zNew);
+    return TH8_ERROR;
 }
 
 
@@ -413,10 +419,10 @@ fallback:
 static int
 incr_command(
     Th8_Interp *interp, /* Interpreter. */
-    void *ctx,   /* Not used. */
-    int argc,   /* Number of arguments. */
-    const char **argv,  /* Argument values. */
-    size_t *argl)  /* Argument lengths. */
+    void *ctx, /* Not used. */
+    int argc, /* Number of arguments. */
+    const char **argv, /* Argument values. */
+    size_t *argl) /* Argument lengths. */
 {
     int iVal = 0;
     int iIncr = 1;
@@ -499,10 +505,10 @@ incr_command(
 static int
 unset_command(
     Th8_Interp *interp, /* Interpreter. */
-    void *ctx,   /* Not used. */
-    int argc,   /* Number of arguments. */
-    const char **argv,  /* Argument values. */
-    size_t *argl)  /* Argument lengths. */
+    void *ctx, /* Not used. */
+    int argc, /* Number of arguments. */
+    const char **argv, /* Argument values. */
+    size_t *argl) /* Argument lengths. */
 {
     int i;
     int rc;
@@ -575,12 +581,13 @@ unset_command(
 static int
 global_command(
     Th8_Interp *interp, /* Interpreter. */
-    void *ctx,   /* Not used. */
-    int argc,   /* Number of arguments. */
-    const char **argv,  /* Argument values. */
-    size_t *argl)  /* Argument lengths. */
+    void *ctx, /* Not used. */
+    int argc, /* Number of arguments. */
+    const char **argv, /* Argument values. */
+    size_t *argl) /* Argument lengths. */
 {
     int i;
+    char *zGlobal = 0;
 
     if (argc < 2) {
 	return Th8_WrongNumArgs(interp, "global varname ?varname ...?");
@@ -590,12 +597,12 @@ global_command(
 	 * Build the global name "::varname" and create a link.
 	 */
 
-	char *zGlobal = 0;
 	size_t nGlobal = 0;
 	int rc;
 
-	Th8_StringAppend(interp, &zGlobal, &nGlobal, "::", 2);
-	Th8_StringAppend(interp, &zGlobal, &nGlobal, argv[i], argl[i]);
+	zGlobal = 0;
+	TH8_STR_APPEND(interp, &zGlobal, &nGlobal, "::", 2);
+	TH8_STR_APPEND(interp, &zGlobal, &nGlobal, argv[i], argl[i]);
 
 	/*
 	 * Ensure the global variable exists (create if needed).
@@ -607,6 +614,7 @@ global_command(
 	rc = Th8_LinkVar(
 	    interp, argv[i], TH8_LEN(argl[i]), 1, zGlobal, nGlobal);
 	Th8_Free(interp, zGlobal);
+	zGlobal = 0;
 
 	/*
 	 * Ignore "variable exists" error -- the variable may
@@ -619,6 +627,10 @@ global_command(
     }
     Th8_ClearResult(interp);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zGlobal);
+    return TH8_ERROR;
 }
 
 
@@ -656,7 +668,7 @@ uplevel_command(
     const char **argv,
     size_t *argl)
 {
-    int iFrame = -1;  /* Default: one level up */
+    int iFrame = -1; /* Default: one level up */
 
     if (argc < 2 || argc > 3) {
 	return Th8_WrongNumArgs(interp, "uplevel ?level? script");
@@ -732,6 +744,7 @@ upvar_command(
     int iFrame = -1;
     int iStart = 1;
     int i;
+    char *zErr = 0;
 
     if (argc < 4) {
 	return Th8_WrongNumArgs(
@@ -761,11 +774,10 @@ upvar_command(
 	    }
 	}
 	if (badLevel) {
-	    char *zErr = 0;
 	    size_t nErr = 0;
-	    Th8_StringAppend(interp, &zErr, &nErr, "bad level \"", 11);
-	    Th8_StringAppend(interp, &zErr, &nErr, argv[1], argl[1]);
-	    Th8_StringAppend(interp, &zErr, &nErr, "\"", 1);
+	    TH8_STR_APPEND(interp, &zErr, &nErr, "bad level \"", 11);
+	    TH8_STR_APPEND(interp, &zErr, &nErr, argv[1], argl[1]);
+	    TH8_STR_APPEND(interp, &zErr, &nErr, "\"", 1);
 	    Th8_SetResult(interp, zErr, nErr);
 	    Th8_Free(interp, zErr);
 	    return TH8_ERROR;
@@ -783,6 +795,10 @@ upvar_command(
     }
     Th8_ClearResult(interp);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zErr);
+    return TH8_ERROR;
 }
 
 
@@ -821,13 +837,14 @@ upvar_command(
 static int
 variable_command(
     Th8_Interp *interp, /* Interpreter. */
-    void *ctx,   /* Not used. */
-    int argc,   /* Number of arguments. */
-    const char **argv,  /* Argument values. */
-    size_t *argl)  /* Argument lengths. */
+    void *ctx, /* Not used. */
+    int argc, /* Number of arguments. */
+    const char **argv, /* Argument values. */
+    size_t *argl) /* Argument lengths. */
 {
     int i;
-    int inProc;  /* True if we're inside a procedure. */
+    int inProc; /* True if we're inside a procedure. */
+    char *zQual = 0;
 
     (void)ctx;
 
@@ -874,9 +891,10 @@ variable_command(
     for (i = 1; i < argc; i += 2) {
 	const char *zName = argv[i];
 	size_t nName = argl[i];
-	char *zQual = 0;
 	size_t nQual = 0;
 	const char *zNs;
+
+	zQual = 0;
 
 	/*
 	 * Build the fully qualified namespace variable name.
@@ -912,9 +930,9 @@ variable_command(
 		}
 	    }
 	    if (!nameIsAbsolute && nsIsRealNonRoot) {
-		Th8_StringAppend(interp, &zQual, &nQual, zNs, TH8_NOLEN);
-		Th8_StringAppend(interp, &zQual, &nQual, "::", 2);
-		Th8_StringAppend(interp, &zQual, &nQual, zName, nName);
+		TH8_STR_APPEND(interp, &zQual, &nQual, zNs, TH8_NOLEN);
+		TH8_STR_APPEND(interp, &zQual, &nQual, "::", 2);
+		TH8_STR_APPEND(interp, &zQual, &nQual, zName, nName);
 		zName = zQual;
 		nName = nQual;
 	    }
@@ -990,9 +1008,14 @@ variable_command(
 	}
 
 	Th8_Free(interp, zQual);
+	zQual = 0;
     }
     Th8_ClearResult(interp);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zQual);
+    return TH8_ERROR;
 }
 
 
@@ -1131,6 +1154,7 @@ array_get_command(
     size_t nResult = 0;
     char **azElem = 0;
     size_t *anElem = 0;
+    char *zFull = 0;
     int nCount = 0;
     int i;
     int rc;
@@ -1154,19 +1178,19 @@ array_get_command(
     for (i = 0; i < nCount; i++) {
 	size_t nVal;
 	const char *zVal;
-	char *zFull = 0;
 	size_t nFull = 0;
 
+	zFull = 0;
 	if (argc == 4 &&
 	    !Th8_GlobMatch(
 	        interp, argv[3], TH8_LEN(argl[3]), azElem[i], anElem[i])) {
 	    continue;
 	}
 
-	Th8_StringAppend(interp, &zFull, &nFull, argv[2], argl[2]);
-	Th8_StringAppend(interp, &zFull, &nFull, "(", 1);
-	Th8_StringAppend(interp, &zFull, &nFull, azElem[i], anElem[i]);
-	Th8_StringAppend(interp, &zFull, &nFull, ")", 1);
+	TH8_STR_APPEND(interp, &zFull, &nFull, argv[2], argl[2]);
+	TH8_STR_APPEND(interp, &zFull, &nFull, "(", 1);
+	TH8_STR_APPEND(interp, &zFull, &nFull, azElem[i], anElem[i]);
+	TH8_STR_APPEND(interp, &zFull, &nFull, ")", 1);
 
 	Th8_GetVar(interp, zFull, nFull);
 	zVal = Th8_GetResult(interp, &nVal);
@@ -1174,6 +1198,7 @@ array_get_command(
 	Th8_ListAppend(interp, &zResult, &nResult, azElem[i], anElem[i]);
 	Th8_ListAppend(interp, &zResult, &nResult, zVal, nVal);
 	Th8_Free(interp, zFull);
+	zFull = 0;
     }
     Th8_Free(interp, azElem);
 
@@ -1184,6 +1209,12 @@ array_get_command(
 	Th8_ClearResult(interp);
     }
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zFull);
+    Th8_Free(interp, azElem);
+    Th8_Free(interp, zResult);
+    return TH8_ERROR;
 }
 
 
@@ -1226,6 +1257,7 @@ array_set_command(
 {
     char **azElem = 0;
     size_t *anElem = 0;
+    char *zFull = 0;
     int nCount = 0;
     int rc;
     int i;
@@ -1248,14 +1280,15 @@ array_set_command(
 	 * Access it as "name()" then unset the dummy element.
 	 */
 
-	char *zFull = 0;
 	size_t nFull = 0;
 
-	Th8_StringAppend(interp, &zFull, &nFull, argv[2], argl[2]);
-	Th8_StringAppend(interp, &zFull, &nFull, "(__th8_array_init__)", 20);
+	zFull = 0;
+	TH8_STR_APPEND(interp, &zFull, &nFull, argv[2], argl[2]);
+	TH8_STR_APPEND(interp, &zFull, &nFull, "(__th8_array_init__)", 20);
 	Th8_SetVar(interp, zFull, nFull, "", 0);
 	Th8_UnsetVar(interp, zFull, nFull);
 	Th8_Free(interp, zFull);
+	zFull = 0;
 	Th8_Free(interp, azElem);
 	Th8_ClearResult(interp);
 	return TH8_OK;
@@ -1269,19 +1302,25 @@ array_set_command(
     }
 
     for (i = 0; i < nCount; i += 2) {
-	char *zFull = 0;
 	size_t nFull = 0;
 
-	Th8_StringAppend(interp, &zFull, &nFull, argv[2], argl[2]);
-	Th8_StringAppend(interp, &zFull, &nFull, "(", 1);
-	Th8_StringAppend(interp, &zFull, &nFull, azElem[i], anElem[i]);
-	Th8_StringAppend(interp, &zFull, &nFull, ")", 1);
+	zFull = 0;
+	TH8_STR_APPEND(interp, &zFull, &nFull, argv[2], argl[2]);
+	TH8_STR_APPEND(interp, &zFull, &nFull, "(", 1);
+	TH8_STR_APPEND(interp, &zFull, &nFull, azElem[i], anElem[i]);
+	TH8_STR_APPEND(interp, &zFull, &nFull, ")", 1);
 	Th8_SetVar(interp, zFull, nFull, azElem[i + 1], anElem[i + 1]);
 	Th8_Free(interp, zFull);
+	zFull = 0;
     }
     Th8_Free(interp, azElem);
     Th8_ClearResult(interp);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zFull);
+    Th8_Free(interp, azElem);
+    return TH8_ERROR;
 }
 
 
@@ -1375,6 +1414,14 @@ array_unset_command(
     const char **argv,
     size_t *argl)
 {
+    char *zNames = 0;
+    size_t nNames = 0;
+    char **azName = 0;
+    size_t *anName = 0;
+    char *zFull = 0;
+    int nCount = 0;
+    int i;
+
     (void)ctx;
 
     if (argc != 3 && argc != 4) {
@@ -1387,13 +1434,6 @@ array_unset_command(
 
     /* With pattern: remove matching elements. */
     {
-	char *zNames = 0;
-	size_t nNames = 0;
-	char **azName = 0;
-	size_t *anName = 0;
-	int nCount = 0;
-	int i;
-
 	Th8_ListAppendArray(
 	    interp, argv[2], TH8_LEN(argl[2]), &zNames, &nNames);
 	if (zNames) {
@@ -1411,22 +1451,27 @@ array_unset_command(
 	    if (Th8_GlobMatch(
 	            interp, argv[3], TH8_LEN(argl[3]), azName[i],
 	            TH8_LEN(anName[i]))) {
-		char *zFull = 0;
 		size_t nFull = 0;
 
-		Th8_StringAppend(interp, &zFull, &nFull, argv[2], argl[2]);
-		Th8_StringAppend(interp, &zFull, &nFull, "(", 1);
-		Th8_StringAppend(
-		    interp, &zFull, &nFull, azName[i], anName[i]);
-		Th8_StringAppend(interp, &zFull, &nFull, ")", 1);
+		zFull = 0;
+		TH8_STR_APPEND(interp, &zFull, &nFull, argv[2], argl[2]);
+		TH8_STR_APPEND(interp, &zFull, &nFull, "(", 1);
+		TH8_STR_APPEND(interp, &zFull, &nFull, azName[i], anName[i]);
+		TH8_STR_APPEND(interp, &zFull, &nFull, ")", 1);
 		Th8_UnsetVar(interp, zFull, nFull);
 		Th8_Free(interp, zFull);
+		zFull = 0;
 	    }
 	}
 	Th8_Free(interp, azName);
     }
     Th8_ClearResult(interp);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zFull);
+    Th8_Free(interp, azName);
+    return TH8_ERROR;
 }
 
 
@@ -1499,6 +1544,8 @@ array_statistics_command(
     size_t nNames = 0;
     char **azElem = 0;
     size_t *anElem = 0;
+    char *zFull = 0;
+    char *zErr = 0;
     int nCount = 0;
     int i;
     int rc;
@@ -1516,11 +1563,10 @@ array_statistics_command(
     }
 
     if (!Th8_ExistsArrayVar(interp, argv[2], TH8_LEN(argl[2]))) {
-	char *zErr = 0;
 	size_t nErr = 0;
-	Th8_StringAppend(interp, &zErr, &nErr, "\"", 1);
-	Th8_StringAppend(interp, &zErr, &nErr, argv[2], argl[2]);
-	Th8_StringAppend(interp, &zErr, &nErr, "\" isn't an array", 16);
+	TH8_STR_APPEND(interp, &zErr, &nErr, "\"", 1);
+	TH8_STR_APPEND(interp, &zErr, &nErr, argv[2], argl[2]);
+	TH8_STR_APPEND(interp, &zErr, &nErr, "\" isn't an array", 16);
 	Th8_SetResult(interp, zErr, nErr);
 	Th8_Free(interp, zErr);
 	return TH8_ERROR;
@@ -1539,39 +1585,41 @@ array_statistics_command(
      */
     for (i = 0; i < nCount && ALWAYS(azElem); i++) {
 	size_t nVal;
-	char *zFull = 0;
 	size_t nFull = 0;
 
+	zFull = 0;
 	nNameBytesTotal += anElem[i];
 	if (anElem[i] > nNameLenMax) nNameLenMax = anElem[i];
 
-	Th8_StringAppend(interp, &zFull, &nFull, argv[2], argl[2]);
-	Th8_StringAppend(interp, &zFull, &nFull, "(", 1);
-	Th8_StringAppend(interp, &zFull, &nFull, azElem[i], anElem[i]);
-	Th8_StringAppend(interp, &zFull, &nFull, ")", 1);
+	TH8_STR_APPEND(interp, &zFull, &nFull, argv[2], argl[2]);
+	TH8_STR_APPEND(interp, &zFull, &nFull, "(", 1);
+	TH8_STR_APPEND(interp, &zFull, &nFull, azElem[i], anElem[i]);
+	TH8_STR_APPEND(interp, &zFull, &nFull, ")", 1);
 	Th8_GetVar(interp, zFull, nFull);
 	(void)Th8_GetResult(interp, &nVal);
 	nValueBytesTotal += nVal;
 	Th8_Free(interp, zFull);
+	zFull = 0;
     }
     Th8_Free(interp, azElem);
+    azElem = 0;
     Th8_ClearResult(interp);
 
     /*
      * Build the multi-line result.
      */
     nBuf = th8Snprintf(interp, zBuf, sizeof(zBuf), "%d entries\n", nCount);
-    Th8_StringAppend(interp, &zResult, &nResult, zBuf, (size_t)nBuf);
+    TH8_STR_APPEND(interp, &zResult, &nResult, zBuf, (size_t)nBuf);
 
     nBuf = th8Snprintf(
         interp, zBuf, sizeof(zBuf), "total element name bytes: %llu\n",
         (unsigned long long)nNameBytesTotal);
-    Th8_StringAppend(interp, &zResult, &nResult, zBuf, (size_t)nBuf);
+    TH8_STR_APPEND(interp, &zResult, &nResult, zBuf, (size_t)nBuf);
 
     nBuf = th8Snprintf(
         interp, zBuf, sizeof(zBuf), "total element value bytes: %llu\n",
         (unsigned long long)nValueBytesTotal);
-    Th8_StringAppend(interp, &zResult, &nResult, zBuf, (size_t)nBuf);
+    TH8_STR_APPEND(interp, &zResult, &nResult, zBuf, (size_t)nBuf);
 
     if (nCount > 0) {
 	nBuf = th8Snprintf(
@@ -1582,16 +1630,23 @@ array_statistics_command(
 	    interp, zBuf, sizeof(zBuf),
 	    "average element name length: 0.00\n");
     }
-    Th8_StringAppend(interp, &zResult, &nResult, zBuf, (size_t)nBuf);
+    TH8_STR_APPEND(interp, &zResult, &nResult, zBuf, (size_t)nBuf);
 
     nBuf = th8Snprintf(
         interp, zBuf, sizeof(zBuf), "maximum element name length: %llu",
         (unsigned long long)nNameLenMax);
-    Th8_StringAppend(interp, &zResult, &nResult, zBuf, (size_t)nBuf);
+    TH8_STR_APPEND(interp, &zResult, &nResult, zBuf, (size_t)nBuf);
 
     Th8_SetResult(interp, zResult, nResult);
     Th8_Free(interp, zResult);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zErr);
+    Th8_Free(interp, zFull);
+    Th8_Free(interp, azElem);
+    Th8_Free(interp, zResult);
+    return TH8_ERROR;
 }
 
 
@@ -1854,17 +1909,17 @@ array_startsearch_command(
     int nSid;
     int counter;
     int nEpoch;
+    char *zErr = 0;
 
     (void)ctx;
     if (argc != 3) {
 	return Th8_WrongNumArgs(interp, "array startsearch arrayName");
     }
     if (!Th8_ExistsArrayVar(interp, argv[2], TH8_LEN(argl[2]))) {
-	char *zErr = 0;
 	size_t nErr = 0;
-	Th8_StringAppend(interp, &zErr, &nErr, "\"", 1);
-	Th8_StringAppend(interp, &zErr, &nErr, argv[2], argl[2]);
-	Th8_StringAppend(interp, &zErr, &nErr, "\" isn't an array", 16);
+	TH8_STR_APPEND(interp, &zErr, &nErr, "\"", 1);
+	TH8_STR_APPEND(interp, &zErr, &nErr, argv[2], argl[2]);
+	TH8_STR_APPEND(interp, &zErr, &nErr, "\" isn't an array", 16);
 	Th8_SetResult(interp, zErr, nErr);
 	Th8_Free(interp, zErr);
 	return TH8_ERROR;
@@ -1929,6 +1984,10 @@ array_startsearch_command(
 
     Th8_SetResult(interp, zSid, (size_t)nSid);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zErr);
+    return TH8_ERROR;
 }
 
 /*
@@ -1983,6 +2042,7 @@ array_nextelement_command(
 {
     th8ArraySearch *p;
     Th8_HashEntry *pCur;
+    char *zErr = 0;
 
     (void)ctx;
     if (argc != 4) {
@@ -1992,11 +2052,10 @@ array_nextelement_command(
     p = th8ArraySearchFind(
         interp, argv[3], TH8_LEN(argl[3]), argv[2], TH8_LEN(argl[2]));
     if (!p) {
-	char *zErr = 0;
 	size_t nErr = 0;
-	Th8_StringAppend(interp, &zErr, &nErr, "couldn't find search \"", 22);
-	Th8_StringAppend(interp, &zErr, &nErr, argv[3], argl[3]);
-	Th8_StringAppend(interp, &zErr, &nErr, "\"", 1);
+	TH8_STR_APPEND(interp, &zErr, &nErr, "couldn't find search \"", 22);
+	TH8_STR_APPEND(interp, &zErr, &nErr, argv[3], argl[3]);
+	TH8_STR_APPEND(interp, &zErr, &nErr, "\"", 1);
 	Th8_SetResult(interp, zErr, nErr);
 	Th8_Free(interp, zErr);
 	return TH8_ERROR;
@@ -2025,6 +2084,10 @@ array_nextelement_command(
 	}
     }
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zErr);
+    return TH8_ERROR;
 }
 
 /*
@@ -2070,6 +2133,7 @@ array_anymore_command(
     size_t *argl)
 {
     th8ArraySearch *p;
+    char *zErr = 0;
 
     (void)ctx;
     if (argc != 4) {
@@ -2078,17 +2142,20 @@ array_anymore_command(
     p = th8ArraySearchFind(
         interp, argv[3], TH8_LEN(argl[3]), argv[2], TH8_LEN(argl[2]));
     if (!p) {
-	char *zErr = 0;
 	size_t nErr = 0;
-	Th8_StringAppend(interp, &zErr, &nErr, "couldn't find search \"", 22);
-	Th8_StringAppend(interp, &zErr, &nErr, argv[3], argl[3]);
-	Th8_StringAppend(interp, &zErr, &nErr, "\"", 1);
+	TH8_STR_APPEND(interp, &zErr, &nErr, "couldn't find search \"", 22);
+	TH8_STR_APPEND(interp, &zErr, &nErr, argv[3], argl[3]);
+	TH8_STR_APPEND(interp, &zErr, &nErr, "\"", 1);
 	Th8_SetResult(interp, zErr, nErr);
 	Th8_Free(interp, zErr);
 	return TH8_ERROR;
     }
     Th8_SetResultInt(interp, p->pCursor != 0);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zErr);
+    return TH8_ERROR;
 }
 
 /*
@@ -2137,6 +2204,7 @@ array_donesearch_command(
     size_t *argl)
 {
     th8ArraySearch *p;
+    char *zErr = 0;
 
     (void)ctx;
     if (argc != 4) {
@@ -2146,11 +2214,10 @@ array_donesearch_command(
     p = th8ArraySearchFind(
         interp, argv[3], TH8_LEN(argl[3]), argv[2], TH8_LEN(argl[2]));
     if (!p) {
-	char *zErr = 0;
 	size_t nErr = 0;
-	Th8_StringAppend(interp, &zErr, &nErr, "couldn't find search \"", 22);
-	Th8_StringAppend(interp, &zErr, &nErr, argv[3], argl[3]);
-	Th8_StringAppend(interp, &zErr, &nErr, "\"", 1);
+	TH8_STR_APPEND(interp, &zErr, &nErr, "couldn't find search \"", 22);
+	TH8_STR_APPEND(interp, &zErr, &nErr, argv[3], argl[3]);
+	TH8_STR_APPEND(interp, &zErr, &nErr, "\"", 1);
 	Th8_SetResult(interp, zErr, nErr);
 	Th8_Free(interp, zErr);
 	return TH8_ERROR;
@@ -2158,6 +2225,10 @@ array_donesearch_command(
     th8ArraySearchRelease(interp, argv[3], TH8_LEN(argl[3]), p);
     Th8_ClearResult(interp);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zErr);
+    return TH8_ERROR;
 }
 
 

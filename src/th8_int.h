@@ -100,6 +100,57 @@ TH8_INTERNAL void th8MiHeapDone(void);
 #define TH8_EVAL_TRUSTED ((int)0x01)
 
 /*
+ * TH8_ASSERT_RAW_LEN(n) --
+ *
+ *	Debug-build invariant: `n` is a RAW byte count with NO taint
+ *	bit set (TH8_TAINT_BIT, bit 28).  Place at sites that consume a
+ *	size_t as a PHYSICAL byte count -- an allocation size, a memcpy
+ *	length, a buffer index, or a byte-scan loop bound -- where a
+ *	taint-tagged length (~256 MiB) would over-read, over-allocate,
+ *	or over-copy.  A tainted length must be resolved with TH8_LEN()
+ *	(and the tag preserved separately) BEFORE reaching such a site;
+ *	string/list lengths are bounded by TH8_MX_STRLEN (< bit 28), so
+ *	a set bit 28 there always means a leaked taint tag, never a real
+ *	length.  This turns the otherwise-silent over-read (which only
+ *	AddressSanitizer catches, since the bytes usually land in mapped
+ *	heap without faulting) into a deterministic abort on any debug
+ *	build.  Compiles to nothing in release / OMIT-safety builds,
+ *	mirroring the ALWAYS/NEVER gating in th8.h.
+ */
+#if defined(TH8_OMIT_AUXILIARY_SAFETY_CHECKS)
+#  define TH8_ASSERT_RAW_LEN(n) ((void)0)
+#elif defined(TH8_DEBUG)
+#  define TH8_ASSERT_RAW_LEN(n) assert(!TH8_TAINTED(n))
+#else
+#  define TH8_ASSERT_RAW_LEN(n) ((void)0)
+#endif
+
+/*
+ * TH8_STR_APPEND(interp, pzStr, pnStr, zApp, nApp) --
+ *
+ *	Append to a growable (char **, size_t *) string accumulator via
+ *	Th8_StringAppend and, on a growth-allocation failure, branch to
+ *	the enclosing function's `oom:` label instead of silently
+ *	continuing with a truncated string (Bug 61).  Th8_StringAppend
+ *	has already set the interpreter result to "out of memory" and
+ *	left *pzStr / *pnStr at their last good (untruncated) state.
+ *
+ *	Every function that uses this macro MUST define an `oom:` label
+ *	that releases the function's accumulator(s) and returns
+ *	TH8_ERROR.  This keeps the failure handling LOCAL to the
+ *	function -- no interpreter-wide state -- while making the check
+ *	impossible to forget: omitting the label is a compile error.
+ *	`oom` is the project's established cleanup-label name (see the
+ *	existing `goto oom;` sites).
+ */
+#define TH8_STR_APPEND(interp, pzStr, pnStr, zApp, nApp)                     \
+    do {                                                                     \
+	if (Th8_StringAppend((interp), (pzStr), (pnStr), (zApp), (nApp)) !=  \
+	    TH8_OK)                                                          \
+	    goto oom;                                                        \
+    } while (0)
+
+/*
  * Forward declarations for internal struct types.  Full definitions
  * live in th8_int_core.h, included after this header in every .c
  * file that needs to dereference them.
@@ -119,9 +170,18 @@ th8Memmove(Th8_Interp *interp, void *dst, const void *src, size_t n);
 /* Platform strcmp -- internal */
 TH8_INTERNAL int
 th8Strcmp(Th8_Interp *interp, const char *s1, const char *s2);
+/* Take the interpreter result for an INTERNAL consumer, copying (not
+ * refusing) a sensitive result so it can be processed; the returned
+ * length keeps the sensitive tag.  Caller must free with th8FreeSensitive
+ * (or Th8_Free once the sensitivity is no longer relevant). */
+TH8_INTERNAL char *th8TakeResultInternal(Th8_Interp *interp, size_t *pN);
+/* Free z, securely zeroing it first when nTagged marks it sensitive
+ * (TH8_SENSITIVE).  Defense in depth for propagated secret plaintext. */
+TH8_INTERNAL void
+th8FreeSensitive(Th8_Interp *interp, char *z, size_t nTagged);
 /* Platform strchr -- internal */
 TH8_INTERNAL char *th8Strchr(Th8_Interp *interp, const char *s, int c);
-/* Platform strchr -- internal */
+/* Platform strrchr -- internal */
 TH8_INTERNAL char *th8Strrchr(Th8_Interp *interp, const char *s, int c);
 /* Platform atoi -- internal */
 TH8_INTERNAL int th8Atoi(Th8_Interp *interp, const char *s);
@@ -1181,9 +1241,10 @@ th8GetProtectedResultRegion(Th8_Interp *interp);
  *	After bytes (nLen of them) have been written into the
  *	protected result region's data area (offset by the canary),
  *	finalize them as the current sensitive interpreter result:
- *	NUL-terminate, set zResult/nResult, set bResultSensitive=1
- *	and bResultBorrowed=1.  Caller must have ensured the region
- *	exists and the canary is valid.  Returns TH8_OK.
+ *	NUL-terminate, set zResult, set nResult with the sensitive tag
+ *	bit forced on (TH8_ADD_SENSITIVE), and set bResultBorrowed=1.
+ *	Caller must have ensured the region exists and the canary is
+ *	valid.  Returns TH8_OK.
  */
 TH8_INTERNAL int th8FinalizeSensitiveResult(Th8_Interp *interp, size_t nLen);
 #endif

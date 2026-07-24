@@ -670,15 +670,15 @@ harpy_command(
 	    zB64 = Th8_GetResult(interp, &nB64);
 
 	    /* Build .b64sig header. */
-	    Th8_StringAppend(
+	    TH8_STR_APPEND(
 	        interp, &zOut, &nOut,
 	        "##################################"
 	        "#############################################\n"
 	        "#\n"
 	        "# signature.b64sig -- ",
 	        TH8_NOLEN);
-	    Th8_StringAppend(interp, &zOut, &nOut, argv[2], argl[2]);
-	    Th8_StringAppend(
+	    TH8_STR_APPEND(interp, &zOut, &nOut, argv[2], argl[2]);
+	    TH8_STR_APPEND(
 	        interp, &zOut, &nOut,
 	        "\n#\n"
 	        "# TH8 Script Signature File (Harpy)\n"
@@ -705,10 +705,10 @@ harpy_command(
 			lineEnd++;
 		    }
 		    if (lineEnd > k) {
-			Th8_StringAppend(interp, &zOut, &nOut, "  ", 2);
-			Th8_StringAppend(
+			TH8_STR_APPEND(interp, &zOut, &nOut, "  ", 2);
+			TH8_STR_APPEND(
 			    interp, &zOut, &nOut, zB64 + k, lineEnd - k);
-			Th8_StringAppend(interp, &zOut, &nOut, "\n", 1);
+			TH8_STR_APPEND(interp, &zOut, &nOut, "\n", 1);
 		    }
 		    k = lineEnd;
 		    while (k < nB64 && (zB64[k] == '\n' || zB64[k] == '\r')) {
@@ -718,8 +718,12 @@ harpy_command(
 	    }
 	    Th8_SetResult(interp, zOut, nOut);
 	    Th8_Free(interp, zOut);
+	    return TH8_OK;
+
+oom:
+	    Th8_Free(interp, zOut);
+	    return TH8_ERROR;
 	}
-	return TH8_OK;
     }
 
     /*

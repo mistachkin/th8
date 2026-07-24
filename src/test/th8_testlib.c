@@ -1054,7 +1054,7 @@ th8test_result_tainted_cmd(
  *	still carries taint.
  *
  * Why / How:
- *	Sensitivity (bResultSensitive -- stored in the protected,
+ *	Sensitivity (the sensitive tag bit -- stored in the protected,
  *	mlock'd region) and trust (the taint tag on the length) are
  *	INDEPENDENT classifications.  Th8_SetResultSensitive must mask
  *	the tag off the byte count it uses for the copy / NUL, yet
@@ -1285,7 +1285,8 @@ th8test_splitlist_probe_cmd(
 	    interp, argv[2], nTainted, 0, 0, &nCount, TH8_LIST_NO_CACHE);
     } else if (TH8_LEN(argl[1]) == 4 && memcmp(argv[1], "lens", 4) == 0) {
 	rc = Th8_SplitList(
-	    interp, argv[2], nTainted, 0, &anElem, &nCount, TH8_LIST_NO_CACHE);
+	    interp, argv[2], nTainted, 0, &anElem, &nCount,
+	    TH8_LIST_NO_CACHE);
     } else {
 	Th8_SetResultStatic(interp, "mode must be count or lens", TH8_NOLEN);
 	return TH8_ERROR;
@@ -11079,9 +11080,9 @@ th8test_is_result_sensitive_cmd(
  *	heap-sensitive secure-zero path in th8ReleaseOldResult by:
  *	  1. Th8_SetResult with a fixed payload -- heap-allocates
  *	     interp->zResult.
- *	  2. Th8_MarkResultSensitive -- sets bResultSensitive=1.
+ *	  2. Th8_MarkResultSensitive -- sets the sensitive tag bit in nResult.
  *	  3. Th8_SetResultStatic to a benign reply -- internally
- *	     calls th8ReleaseOldResult with bResultSensitive=T and
+ *	     calls th8ReleaseOldResult with a sensitive result and
  *	     zResult!=NULL, hitting the L4886 (T,T) MC/DC vector
  *	     that no normal script path can reach.
  *
@@ -11117,7 +11118,7 @@ th8test_mark_sensitive_release_cmd(
 
     /* Optional "empty" mode: mark sensitive with zResult=NULL so
      * the subsequent SetResult drives the L4886 (T,F) vector
-     * (bResultSensitive=T && zResult==NULL is F). */
+     * (sensitive-tag && zResult==NULL is F). */
     if (argc == 2 && argl[1] == 5 && memcmp(argv[1], "empty", 5) == 0) {
 	/* Clear the result so zResult becomes NULL. */
 	(void)Th8_SetResult(interp, NULL, 0);
@@ -11398,7 +11399,7 @@ th8test_take_result_cmd(
  *	single C call, performs the canonical sequence:
  *	  1. Th8_GetVar(interp, varName) -- reads varName, which for
  *	     a [secure] variable internally calls Th8_SetResultSensitive
- *	     and leaves bResultSensitive set.
+ *	     and leaves the result marked sensitive (nResult tag).
  *	  2. Captures Th8_IsResultSensitive immediately.
  *	  3. Captures the result length (NOT the bytes -- we will not
  *	     copy plaintext out of the protected region).
@@ -11446,8 +11447,11 @@ th8test_sensitive_probe_cmd(
 	return rcGet;
     }
     flagBefore = Th8_IsResultSensitive(interp);
-    /* Capture length only; do not read the bytes. */
+    /* Capture length only; do not read the bytes.  Mask the tag bits
+     * (taint/sensitive now ride in the length) so the reported byte
+     * count is the raw length. */
     Th8_GetResult(interp, &nLen);
+    nLen = TH8_LEN(nLen);
 
     zTaken = Th8_TakeResult(interp, NULL);
     takeRefused = (zTaken == NULL);
@@ -16018,6 +16022,198 @@ th8test_sandbox_cmd(
 
 /* Saved counters from the most recent fault eval. */
 static Th8_FaultConfig th8test_lastFaultConfig;
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_nreval_schedfail_cmd --
+ *
+ *	Implements "th8testlib::nreval_schedfail": verify that
+ *	Th8_NREval propagates a callback-scheduling failure instead of
+ *	reporting success.
+ *
+ * Why / How:
+ *	Th8_NREval's only allocation is the Th8_Callback pushed by
+ *	Th8_NRAddCallback (Th8_Strlen does not allocate).  We create an
+ *	isolated child interp with xPanic=NULL, install the fault layer
+ *	with nAllocFailAfter=1 so the VERY FIRST allocation fails, then
+ *	call Th8_NREval directly.  That first allocation IS the callback,
+ *	so Th8_NRAddCallback returns TH8_ERROR; a correct Th8_NREval must
+ *	surface that as TH8_ERROR (regression guard for the bug where it
+ *	discarded the return and unconditionally returned TH8_OK -- an
+ *	OOM while scheduling was reported as success and the deferred
+ *	eval silently never ran).
+ *
+ * Results:
+ *	TH8_OK; result is 1 if Th8_NREval correctly returned TH8_ERROR
+ *	on the forced scheduling failure, 0 if it wrongly returned
+ *	TH8_OK, or -1 if the harness could not be set up.
+ *
+ * Side effects:
+ *	Creates/destroys a child interpreter; installs/uninstalls the
+ *	fault layer on it.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_nreval_schedfail_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pP;
+    int nResult = -1;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::nreval_schedfail");
+    }
+
+    pP = Th8_GetPlatform(interp);
+    if (pP) {
+	Th8_Platform cp = *pP;
+	Th8_Interp *pChild;
+
+	cp.xPanic = 0; /* OOM returns error instead of aborting. */
+	pChild = Th8_CreateInterp(&cp);
+	if (pChild) {
+	    Th8_FaultConfig cfg;
+	    char fbuf[1024];
+	    Th8_FaultCtx *pFCtx = (Th8_FaultCtx *)(void *)fbuf;
+
+	    Th8_RegisterLanguage(pChild);
+	    Th8_FaultConfigInit(&cfg);
+	    cfg.nAllocFailAfter = 1; /* fail the first allocation */
+	    if (Th8_FaultCtxSize() <= sizeof(fbuf) &&
+	        Th8_FaultInstall(pChild, &cfg, pFCtx) == TH8_OK) {
+		static const char zProg[] = "set schedFailProbe 1";
+		int rc =
+		    Th8_NREval(pChild, zProg, sizeof(zProg) - 1, NULL, 0);
+
+		Th8_FaultUninstall(pChild, pFCtx);
+		/* Correct behavior: the forced callback-alloc failure is
+		 * surfaced as TH8_ERROR. */
+		nResult = (rc == TH8_ERROR) ? 1 : 0;
+	    }
+	    Th8_DeleteInterp(pChild);
+	}
+    }
+    return Th8_SetResultInt(interp, nResult);
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_bufwrite_oom_cmd --
+ *
+ *	Implements "th8testlib::bufwrite_oom": verify that a growable
+ *	Th8_Buffer append failure (out of memory) is surfaced as an
+ *	error at finalization instead of silently publishing a TRUNCATED
+ *	buffer.
+ *
+ * Why / How:
+ *	Th8_Subst on plain input ("abcdef" -- no backslash/$/[ ) copies
+ *	the bytes through th8BufWrite, whose first call grows the output
+ *	buffer.  We sweep a forced single allocation failure over the
+ *	first few allocation ordinals; for each, Th8_Subst must EITHER
+ *	return the full correct result ("abcdef", when the failed alloc
+ *	did not affect it) OR return TH8_ERROR.  It must NEVER return
+ *	TH8_OK with a truncated / wrong result -- that was Bug 61, where
+ *	th8BufWrite silently dropped an append and the caller published
+ *	the truncated buffer as success.  Runs in an isolated child
+ *	interp with xPanic=NULL so OOM returns an error rather than
+ *	aborting.
+ *
+ * Results:
+ *	TH8_OK; result is 1 if the invariant held for every swept
+ *	ordinal (no truncated success), 0 if any ordinal produced a
+ *	truncated TH8_OK result, or -1 if the harness could not be set
+ *	up.
+ *
+ * Side effects:
+ *	Creates/destroys child interpreters; installs/uninstalls the
+ *	fault layer.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_bufwrite_oom_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pP;
+    int nResult = -1;
+    int nOk = 0; /* count of usable (harness-installed) sweeps */
+    int nBad = 0; /* count of truncated-success violations */
+    int nFail; /* forced failing allocation ordinal */
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::bufwrite_oom");
+    }
+
+    pP = Th8_GetPlatform(interp);
+    if (!pP) {
+	return Th8_SetResultInt(interp, nResult);
+    }
+
+    for (nFail = 1; nFail <= 6; nFail++) {
+	Th8_Platform cp = *pP;
+	Th8_Interp *pChild;
+
+	cp.xPanic = 0;
+	pChild = Th8_CreateInterp(&cp);
+	if (!pChild) {
+	    continue;
+	}
+	{
+	    Th8_FaultConfig cfg;
+	    char fbuf[1024];
+	    Th8_FaultCtx *pFCtx = (Th8_FaultCtx *)(void *)fbuf;
+
+	    Th8_RegisterLanguage(pChild);
+	    Th8_FaultConfigInit(&cfg);
+	    cfg.nAllocFailAfter = nFail;
+	    if (Th8_FaultCtxSize() <= sizeof(fbuf) &&
+	        Th8_FaultInstall(pChild, &cfg, pFCtx) == TH8_OK) {
+		static const char zIn[] = "abcdef";
+		int rc =
+		    Th8_Subst(pChild, zIn, sizeof(zIn) - 1, TH8_SUBST_ALL);
+
+		Th8_FaultUninstall(pChild, pFCtx);
+		nOk++;
+		if (rc == TH8_OK) {
+		    size_t nRes = 0;
+		    const char *zRes = Th8_GetResult(pChild, &nRes);
+		    /* On success the result MUST be the full input; a
+		     * truncated / short result reported as success is the
+		     * bug. */
+		    if (TH8_LEN(nRes) != sizeof(zIn) - 1 ||
+		        Th8_Memcmp(pChild, zRes, zIn, sizeof(zIn) - 1) != 0) {
+			nBad++;
+		    }
+		}
+	    }
+	}
+	Th8_DeleteInterp(pChild);
+    }
+
+    if (nOk > 0) {
+	nResult = (nBad == 0) ? 1 : 0;
+    }
+    return Th8_SetResultInt(interp, nResult);
+}
 
 static int
 th8test_fault_cmd(
@@ -21576,6 +21772,12 @@ Th8test_Init(Th8_Interp *interp)
     Th8_CreateCommand(
         interp, "::th8testlib::malloc_drive", th8test_malloc_drive_cmd, 0, 0,
         0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::nreval_schedfail",
+        th8test_nreval_schedfail_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::bufwrite_oom", th8test_bufwrite_oom_cmd, 0, 0,
+        0);
 #  endif
 
     Th8_CreateCommand(interp, "::th8testlib::kv", th8test_kv_cmd, 0, 0, 0);
@@ -21670,8 +21872,8 @@ Th8test_Init(Th8_Interp *interp)
         interp, "::th8testlib::queue_event", th8test_queue_event_cmd, 0, 0,
         0);
     Th8_CreateCommand(
-        interp, "::th8testlib::queue_event_sync", th8test_queue_event_sync_cmd,
-        0, 0, 0);
+        interp, "::th8testlib::queue_event_sync",
+        th8test_queue_event_sync_cmd, 0, 0, 0);
     Th8_CreateCommand(
         interp, "::th8testlib::event_stress", th8test_event_stress_cmd, 0, 0,
         0);

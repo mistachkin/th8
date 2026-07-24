@@ -66,6 +66,14 @@ th8FreeVariable(
 	}
 	pVar->nRef--;
 	if (pVar->nRef <= 0) {
+	    /* Defense in depth: securely zero sensitive plaintext before
+	     * releasing the scalar value's backing memory. */
+	    if (pVar->zData && TH8_SENSITIVE(pVar->nData)) {
+		Th8_SecureZero(
+		    interp, pVar->zData,
+		    pVar->nAlloc > 0 ? pVar->nAlloc
+		                     : TH8_LEN(pVar->nData) + 1);
+	    }
 	    if (pVar->bBorrowed) {
 		if (pVar->nAlloc > 0) {
 		    th8BufferFree(interp, pVar->zData, pVar->nAlloc);
@@ -108,7 +116,7 @@ th8FreeVariable(
 int
 th8FreeVarEntry(
     Th8_HashEntry *pEntry, /* Hash entry to process. */
-    void *pCtx)   /* Interpreter (as void*). */
+    void *pCtx) /* Interpreter (as void*). */
 {
     Th8_Interp *interp = (Th8_Interp *)pCtx;
 
@@ -240,13 +248,13 @@ Th8_IsSystemVar(Th8_Interp *interp, const char *zName, size_t nName)
 
 static void
 th8AnalyzeVarName(
-    const char *zVar,  /* Variable name. */
-    size_t nVar,  /* Length (TH8_NOLEN = NUL-term). */
+    const char *zVar, /* Variable name. */
+    size_t nVar, /* Length (TH8_NOLEN = NUL-term). */
     const char **pzOuter, /* OUT: outer name start. */
-    size_t *pnOuter,  /* OUT: outer name length. */
+    size_t *pnOuter, /* OUT: outer name length. */
     const char **pzInner, /* OUT: array index (or NULL). */
-    size_t *pnInner,  /* OUT: array index length. */
-    int *pbGlobal)  /* OUT: true if :: prefix. */
+    size_t *pnInner, /* OUT: array index length. */
+    int *pbGlobal) /* OUT: true if :: prefix. */
 {
     size_t i;
     const char *zOuter = zVar;
@@ -321,9 +329,9 @@ th8AnalyzeVarName(
 static Th8_Variable *
 th8FindValue(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zVar,  /* Variable name. */
-    size_t nVar,  /* Length (TH8_NOLEN = NUL-term). */
-    int bCreate)  /* Create if not found? */
+    const char *zVar, /* Variable name. */
+    size_t nVar, /* Length (TH8_NOLEN = NUL-term). */
+    int bCreate) /* Create if not found? */
 {
     const char *zOuter, *zInner;
     size_t nOuter, nInner;
@@ -331,6 +339,10 @@ th8FindValue(
     Th8_HashEntry *pEntry;
     Th8_Variable *pVar;
     Th8_Frame *pFrame;
+    /* Function-scope so the oom label can free the namespace-path
+     * accumulator built in the qualified-name branch below. */
+    char *zFull = 0;
+    size_t nFull = 0;
 
     th8AnalyzeVarName(
         zVar, nVar, &zOuter, &nOuter, &zInner, &nInner, &bGlobal);
@@ -377,10 +389,10 @@ th8FindValue(
 	     */
 
 	    {
-		char *zFull = 0;
-		size_t nFull = 0;
+		zFull = 0;
+		nFull = 0;
 
-		Th8_StringAppend(interp, &zFull, &nFull, "::", 2);
+		TH8_STR_APPEND(interp, &zFull, &nFull, "::", 2);
 		/* Reaching this branch requires the outer name to
 		 * contain "::" (per the hasNs loop above), so
 		 * th8SplitQualName finds the separator and sets
@@ -388,8 +400,7 @@ th8FindValue(
 		 * sub-conditions are defensive belt-and-braces
 		 * tests, ALWAYS T at runtime. */
 		if (ALWAYS(zNsPath != NULL && nNsPath > 0)) {
-		    Th8_StringAppend(
-		        interp, &zFull, &nFull, zNsPath, nNsPath);
+		    TH8_STR_APPEND(interp, &zFull, &nFull, zNsPath, nNsPath);
 		}
 		pNs = th8FindNamespace(interp, zFull, nFull, bCreate);
 		Th8_Free(interp, zFull);
@@ -520,6 +531,13 @@ check_array:
     }
 
     return pVar;
+
+oom:
+    /* A TH8_STR_APPEND growth failed while building the namespace
+     * path; "out of memory" already set.  Free the partial path and
+     * report lookup failure (NULL). */
+    Th8_Free(interp, zFull);
+    return NULL;
 }
 
 
@@ -550,8 +568,8 @@ check_array:
 int
 Th8_GetVar(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zVar,  /* Variable name. */
-    size_t nVar)  /* Length (TH8_NOLEN = NUL-term). */
+    const char *zVar, /* Variable name. */
+    size_t nVar) /* Length (TH8_NOLEN = NUL-term). */
 {
     Th8_Variable *pVar;
 
@@ -767,9 +785,9 @@ th8AppendInPlace(
     if (pVar->nAlloc == 0) return TH8_ERROR;
 
     nCur = TH8_LEN(pVar->nData);
-    nTag = pVar->nData & TH8_TAINT_BIT;
+    nTag = pVar->nData & TH8_TAG_BITS;
     for (i = 0; i < nArgs; i++) {
-	nTag |= (anArg[i] & TH8_TAINT_BIT);
+	nTag |= (anArg[i] & TH8_TAG_BITS);
 	nAppend += TH8_LEN(anArg[i]);
     }
 
@@ -818,10 +836,10 @@ th8AppendInPlace(
 int
 Th8_SetVar(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zVar,  /* Variable name. */
-    size_t nVar,  /* Name length (TH8_NOLEN = NUL). */
-    const char *zVal,  /* Value to set. */
-    size_t nVal)  /* Value length (TH8_NOLEN = NUL). */
+    const char *zVar, /* Variable name. */
+    size_t nVar, /* Name length (TH8_NOLEN = NUL). */
+    const char *zVal, /* Value to set. */
+    size_t nVal) /* Value length (TH8_NOLEN = NUL). */
 {
     Th8_Variable *pVar;
     size_t nTag = 0; /* taint bit of the incoming value, if any */
@@ -853,7 +871,7 @@ Th8_SetVar(
     if (nVal == TH8_NOLEN) {
 	nVal = Th8_Strlen(interp, zVal);
     } else {
-	nTag = nVal & TH8_TAINT_BIT;
+	nTag = nVal & TH8_TAG_BITS;
 	nVal = TH8_LEN(nVal);
     }
 
@@ -865,6 +883,13 @@ Th8_SetVar(
      */
     th8RemoveFromCache(interp, TH8_CACHE_BUFFER, zVar, nVar);
 
+    /* Defense in depth: if the old value was sensitive plaintext, securely
+     * zero it before releasing its (pageable) backing memory. */
+    if (pVar->zData && TH8_SENSITIVE(pVar->nData)) {
+	Th8_SecureZero(
+	    interp, pVar->zData,
+	    pVar->nAlloc > 0 ? pVar->nAlloc : TH8_LEN(pVar->nData) + 1);
+    }
     if (pVar->bBorrowed) {
 	/* Return the borrowed buffer to the pool. */
 	if (pVar->nAlloc > 0) {
@@ -875,8 +900,8 @@ Th8_SetVar(
     }
     pVar->bBorrowed = 0;
     pVar->nAlloc = 0;
-    /* nData carries the taint bit; allocation/copy/index below use the
-     * raw length nVal so the buffer size stays correct. */
+    /* nData carries the tag bits (taint/sensitive); allocation/copy/index
+     * below use the raw length nVal so the buffer size stays correct. */
     pVar->nData = nVal | nTag;
     pVar->zData = (char *)TH8_ALLOC_STR(interp, nVal);
     if (!pVar->zData) {
@@ -1001,6 +1026,13 @@ th8SetVarValue(
 
     pBuf[TH8_LEN(nUsed)] = '\0';
 
+    /* Defense in depth: securely zero sensitive plaintext before releasing
+     * the old value's backing memory. */
+    if (pVar->zData && TH8_SENSITIVE(pVar->nData)) {
+	Th8_SecureZero(
+	    interp, pVar->zData,
+	    pVar->nAlloc > 0 ? pVar->nAlloc : TH8_LEN(pVar->nData) + 1);
+    }
     if (pVar->bBorrowed) {
 	/* Return old borrowed buffer to the pool. */
 	if (pVar->nAlloc > 0) {
@@ -1023,7 +1055,7 @@ th8SetVarValue(
     pVar->zData = pBuf;
     /* Preserve the taint bit; raw length is used for all buffer
      * arithmetic above and below. */
-    pVar->nData = TH8_LEN(nUsed) | (nUsed & TH8_TAINT_BIT);
+    pVar->nData = TH8_LEN(nUsed) | (nUsed & TH8_TAG_BITS);
     pVar->nAlloc = pValue->u.buffer.nCapacity;
     pVar->bBorrowed = 1;
 
@@ -1095,9 +1127,9 @@ th8SetVarValue(
  */
 
 typedef struct {
-    char *zName;  /* Full qualified name. */
+    char *zName; /* Full qualified name. */
     size_t nName;
-    char *zData;  /* Saved value (malloc'd copy). */
+    char *zData; /* Saved value (malloc'd copy). */
     size_t nData;
 } Th8_SysVarEntry;
 
@@ -1162,9 +1194,9 @@ typedef struct {
 int
 Th8_SaveSystemVar(
     Th8_Interp *interp,
-    const char *zArr,  /* Array name (e.g. "::th8_security"). */
-    size_t nArr,  /* Length (TH8_NOLEN = NUL-term). */
-    void **ppSaved)  /* OUT: opaque handle. */
+    const char *zArr, /* Array name (e.g. "::th8_security"). */
+    size_t nArr, /* Length (TH8_NOLEN = NUL-term). */
+    void **ppSaved) /* OUT: opaque handle. */
 {
     Th8_SysVarState *pState;
     char *zNames = NULL;
@@ -1173,6 +1205,10 @@ Th8_SaveSystemVar(
     size_t *anElem = NULL;
     int nCount = 0;
     int rc, i;
+    /* Function-scope so the oom label can free the partial element
+     * name for the entry being built when a growth fails. */
+    char *zFull = NULL;
+    size_t nFull = 0;
 
     if (!interp) return TH8_ERROR;
     *ppSaved = NULL;
@@ -1212,14 +1248,14 @@ Th8_SaveSystemVar(
     pState->nCount = nCount;
 
     for (i = 0; i < nCount; i++) {
-	char *zFull = NULL;
-	size_t nFull = 0;
 	Th8_Variable *pVar;
 
-	Th8_StringAppend(interp, &zFull, &nFull, zArr, nArr);
-	Th8_StringAppend(interp, &zFull, &nFull, "(", 1);
-	Th8_StringAppend(interp, &zFull, &nFull, azElem[i], anElem[i]);
-	Th8_StringAppend(interp, &zFull, &nFull, ")", 1);
+	zFull = NULL;
+	nFull = 0;
+	TH8_STR_APPEND(interp, &zFull, &nFull, zArr, nArr);
+	TH8_STR_APPEND(interp, &zFull, &nFull, "(", 1);
+	TH8_STR_APPEND(interp, &zFull, &nFull, azElem[i], anElem[i]);
+	TH8_STR_APPEND(interp, &zFull, &nFull, ")", 1);
 
 	pState->aEntry[i].zName = zFull;
 	pState->aEntry[i].nName = nFull;
@@ -1239,7 +1275,8 @@ Th8_SaveSystemVar(
 		    pState->aEntry[i].zData = (char *)TH8_ALLOC(interp, nRaw);
 		    if (pState->aEntry[i].zData) {
 			Th8_Memcpy(
-			    interp, pState->aEntry[i].zData, pVar->zData, nRaw);
+			    interp, pState->aEntry[i].zData, pVar->zData,
+			    nRaw);
 			/* Preserve the taint bit in the snapshot metadata. */
 			pState->aEntry[i].nData = pVar->nData;
 		    }
@@ -1249,6 +1286,26 @@ Th8_SaveSystemVar(
     Th8_Free(interp, azElem);
     *ppSaved = pState;
     return TH8_OK;
+
+oom:
+    /* A TH8_STR_APPEND growth failed while building element name i;
+     * "out of memory" already set.  zFull is the partial (unstored)
+     * name for entry i.  Free it, unwind the fully-captured entries
+     * (0..i-1) exactly as Th8_RestoreSystemVar would, then release
+     * the snapshot and the split list. */
+    Th8_Free(interp, zFull);
+    {
+	int j;
+
+	for (j = 0; j < i; j++) {
+	    Th8_Free(interp, pState->aEntry[j].zData);
+	    Th8_Free(interp, pState->aEntry[j].zName);
+	}
+    }
+    Th8_Free(interp, pState->aEntry);
+    Th8_Free(interp, pState);
+    Th8_Free(interp, azElem);
+    return TH8_ERROR;
 }
 
 
@@ -1279,9 +1336,9 @@ Th8_SaveSystemVar(
 int
 Th8_RestoreSystemVar(
     Th8_Interp *interp,
-    const char *zArr,  /* Array name (unused, for API symmetry). */
-    size_t nArr,  /* Length (unused). */
-    void *pSaved)  /* Handle from Th8_SaveSystemVar. */
+    const char *zArr, /* Array name (unused, for API symmetry). */
+    size_t nArr, /* Length (unused). */
+    void *pSaved) /* Handle from Th8_SaveSystemVar. */
 {
     Th8_SysVarState *pState = (Th8_SysVarState *)pSaved;
     int i;
@@ -1339,8 +1396,8 @@ Th8_RestoreSystemVar(
 int
 Th8_UnsetVar(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zVar,  /* Variable name. */
-    size_t nVar)  /* Length (TH8_NOLEN = NUL-term). */
+    const char *zVar, /* Variable name. */
+    size_t nVar) /* Length (TH8_NOLEN = NUL-term). */
 {
     const char *zOuter, *zInner;
     size_t nOuter, nInner;
@@ -1491,8 +1548,8 @@ Th8_UnsetVar(
 int
 Th8_ExistsVar(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zVar,  /* Variable name. */
-    size_t nVar)  /* Length (TH8_NOLEN = NUL-term). */
+    const char *zVar, /* Variable name. */
+    size_t nVar) /* Length (TH8_NOLEN = NUL-term). */
 {
     Th8_Variable *pVar;
 
@@ -1541,8 +1598,8 @@ Th8_ExistsVar(
 int
 Th8_ExistsArrayVar(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zVar,  /* Variable name. */
-    size_t nVar)  /* Length (TH8_NOLEN = NUL-term). */
+    const char *zVar, /* Variable name. */
+    size_t nVar) /* Length (TH8_NOLEN = NUL-term). */
 {
     const char *zOuter, *zInner;
     size_t nOuter, nInner;
@@ -1600,8 +1657,8 @@ Th8_ExistsArrayVar(
 int
 th8GetArrayEpoch(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zVar,  /* Variable name. */
-    size_t nVar)  /* Length (TH8_NOLEN = NUL-term). */
+    const char *zVar, /* Variable name. */
+    size_t nVar) /* Length (TH8_NOLEN = NUL-term). */
 {
     const char *zOuter, *zInner;
     size_t nOuter, nInner;
@@ -1660,8 +1717,8 @@ th8GetArrayEpoch(
 int
 th8GetArrayGeneration(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zVar,  /* Variable name. */
-    size_t nVar)  /* Length (TH8_NOLEN = NUL-term). */
+    const char *zVar, /* Variable name. */
+    size_t nVar) /* Length (TH8_NOLEN = NUL-term). */
 {
     const char *zOuter, *zInner;
     size_t nOuter, nInner;
@@ -1716,8 +1773,8 @@ th8GetArrayGeneration(
 Th8_Hash *
 th8GetArrayElementHash(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zVar,  /* Variable name. */
-    size_t nVar)  /* Length (TH8_NOLEN = NUL-term). */
+    const char *zVar, /* Variable name. */
+    size_t nVar) /* Length (TH8_NOLEN = NUL-term). */
 {
     const char *zOuter, *zInner;
     size_t nOuter, nInner;
@@ -1775,11 +1832,11 @@ th8GetArrayElementHash(
 int
 Th8_LinkVar(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zLocal,  /* Local variable name. */
-    size_t nLocal,  /* Local name length. */
-    int iFrame,   /* Target frame identifier. */
+    const char *zLocal, /* Local variable name. */
+    size_t nLocal, /* Local name length. */
+    int iFrame, /* Target frame identifier. */
     const char *zRemote, /* Remote variable name. */
-    size_t nRemote)  /* Remote name length. */
+    size_t nRemote) /* Remote name length. */
 {
     Th8_Variable *pRemote;
     Th8_HashEntry *pEntry;
@@ -1891,9 +1948,14 @@ int th8SubstWord(Th8_Interp *, const char *, size_t, const char *, size_t);
 int
 th8SubstVarName(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zWord,  /* Word (starts with '$'). */
-    size_t nWord)  /* Byte length of variable ref. */
+    const char *zWord, /* Word (starts with '$'). */
+    size_t nWord) /* Byte length of variable ref. */
 {
+    /* Function-scope so the oom label can free the substituted array
+     * name built in the array-reference branch below. */
+    char *zFull = 0;
+    size_t nFull = 0;
+
     /*
      * ${name} form -- strip braces.
      */
@@ -1929,14 +1991,14 @@ th8SubstVarName(
 	if (i < nName)
 	    if (zName[i] == '(')
 		if (zName[nName - 1] == ')') {
-            /*
+		    /*
 	     * Array reference: zName[0..i-1] is the array name,
 	     * zName[i+1..nName-2] is the raw index.
 	     * Substitute the index, then build "name(substIndex)".
 	     */
 
 		    const char *zIdx = &zName[i + 1];
-		    size_t nIdx = nName - i - 2;  /* exclude parens */
+		    size_t nIdx = nName - i - 2; /* exclude parens */
 		    int rc;
 
 		    rc = th8SubstWord(interp, zIdx, nIdx, NULL, 0);
@@ -1945,13 +2007,12 @@ th8SubstVarName(
 		    {
 			size_t nRes;
 			const char *zRes = Th8_GetResult(interp, &nRes);
-			char *zFull = 0;
-			size_t nFull = 0;
-
-			Th8_StringAppend(interp, &zFull, &nFull, zName, i);
-			Th8_StringAppend(interp, &zFull, &nFull, "(", 1);
-			Th8_StringAppend(interp, &zFull, &nFull, zRes, nRes);
-			Th8_StringAppend(interp, &zFull, &nFull, ")", 1);
+			zFull = 0;
+			nFull = 0;
+			TH8_STR_APPEND(interp, &zFull, &nFull, zName, i);
+			TH8_STR_APPEND(interp, &zFull, &nFull, "(", 1);
+			TH8_STR_APPEND(interp, &zFull, &nFull, zRes, nRes);
+			TH8_STR_APPEND(interp, &zFull, &nFull, ")", 1);
 			rc = Th8_GetVar(interp, zFull, nFull);
 			Th8_Free(interp, zFull);
 			return rc;
@@ -1961,6 +2022,12 @@ th8SubstVarName(
 	/* Simple variable (no array subscript). */
 	return Th8_GetVar(interp, zName, nName);
     }
+
+oom:
+    /* A TH8_STR_APPEND growth failed while building the substituted
+     * array name; "out of memory" already set. */
+    Th8_Free(interp, zFull);
+    return TH8_ERROR;
 }
 
 
@@ -1988,8 +2055,8 @@ th8SubstVarName(
 int
 Th8_ListAppendVariables(
     Th8_Interp *interp, /* Interpreter. */
-    char **pz,   /* IN/OUT: list buffer. */
-    size_t *pn)   /* IN/OUT: list length. */
+    char **pz, /* IN/OUT: list buffer. */
+    size_t *pn) /* IN/OUT: list length. */
 {
     void *aCtx[3];
 
@@ -2030,10 +2097,10 @@ Th8_ListAppendVariables(
 int
 Th8_ListAppendNsVariables(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zNs,  /* Namespace name (or NULL for current). */
-    size_t nNs,   /* Length of zNs. */
-    char **pz,   /* IN/OUT: list buffer. */
-    size_t *pn)   /* IN/OUT: list length. */
+    const char *zNs, /* Namespace name (or NULL for current). */
+    size_t nNs, /* Length of zNs. */
+    char **pz, /* IN/OUT: list buffer. */
+    size_t *pn) /* IN/OUT: list length. */
 {
     Th8_Namespace *pNs;
     void *aCtx[3];
@@ -2079,8 +2146,8 @@ Th8_ListAppendNsVariables(
 int
 Th8_ListAppendGlobalVariables(
     Th8_Interp *interp, /* Interpreter. */
-    char **pz,   /* IN/OUT: list buffer. */
-    size_t *pn)   /* IN/OUT: list length. */
+    char **pz, /* IN/OUT: list buffer. */
+    size_t *pn) /* IN/OUT: list length. */
 {
     Th8_Frame *pGlobal;
     void *aCtx[3];
@@ -2168,8 +2235,8 @@ th8AppendLinkedHashKeys(Th8_HashEntry *pEntry, void *pVoid)
 int
 Th8_ListAppendVarLinks(
     Th8_Interp *interp, /* Interpreter. */
-    char **pz,   /* IN/OUT: list buffer. */
-    size_t *pn)   /* IN/OUT: list length. */
+    char **pz, /* IN/OUT: list buffer. */
+    size_t *pn) /* IN/OUT: list length. */
 {
     void *aCtx[3];
 
@@ -2210,10 +2277,10 @@ Th8_ListAppendVarLinks(
 int
 Th8_ListAppendArray(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zArr,  /* Array name. */
-    size_t nArr,  /* Name length. */
-    char **pz,   /* IN/OUT: list buffer. */
-    size_t *pn)   /* IN/OUT: list length. */
+    const char *zArr, /* Array name. */
+    size_t nArr, /* Name length. */
+    char **pz, /* IN/OUT: list buffer. */
+    size_t *pn) /* IN/OUT: list length. */
 {
     Th8_Variable *pVar;
     void *aCtx[3];
@@ -2288,8 +2355,8 @@ int
 th8ParseVarName(
     Th8_Interp *interp, /* Interpreter (for error messages). */
     const char *zString, /* Input (should start with '$'). */
-    size_t nString,  /* Byte length (TH8_NOLEN = NUL). */
-    Th8_Value *pToken)  /* OUT: filled as TH8_TOKEN_VARIABLE. */
+    size_t nString, /* Byte length (TH8_NOLEN = NUL). */
+    Th8_Value *pToken) /* OUT: filled as TH8_TOKEN_VARIABLE. */
 {
     size_t nVar = 0;
     int rc;

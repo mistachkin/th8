@@ -83,16 +83,22 @@ th8EnvNulTerminate(
     size_t nBuf) /* Size of stack buffer. */
 {
     char *zOut;
+    /* Mask any taint tag off before using the length as a byte count /
+     * index / allocation size: a tagged length is ~256 MiB and would
+     * over-read/over-write.  The buffer contents are NUL-terminated,
+     * not re-published, so the tag itself is not needed downstream. */
+    size_t nRaw = TH8_LEN(n);
 
-    if (n + 1 <= nBuf) {
-	memcpy(zBuf, z, n);
-	zBuf[n] = '\0';
+    TH8_ASSERT_RAW_LEN(nRaw);
+    if (nRaw + 1 <= nBuf) {
+	Th8_Memcpy(interp, zBuf, z, nRaw);
+	zBuf[nRaw] = '\0';
 	return zBuf;
     }
-    zOut = (char *)TH8_ALLOC_STR(interp, n);
+    zOut = (char *)TH8_ALLOC_STR(interp, nRaw);
     if (!zOut) return NULL;
-    Th8_Memcpy(interp, zOut, z, n);
-    zOut[n] = '\0';
+    Th8_Memcpy(interp, zOut, z, nRaw);
+    zOut[nRaw] = '\0';
     return zOut;
 }
 

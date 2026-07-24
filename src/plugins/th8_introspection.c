@@ -289,6 +289,8 @@ th8InfoCmdCallback(Th8_HashEntry *pEntry, void *pVoid)
     Th8_InfoCmdCtx *p = (Th8_InfoCmdCtx *)pVoid;
     const char *zName = pEntry->zKey;
     size_t nName = pEntry->nKey;
+    char *zFull = 0;
+    size_t nFull = 0;
 
     if (p->bProcsOnly) {
 	/*
@@ -308,16 +310,17 @@ th8InfoCmdCallback(Th8_HashEntry *pEntry, void *pVoid)
 	 * Build "::ns::name" and append.
 	 */
 
-	char *zFull = 0;
-	size_t nFull = 0;
-
-	Th8_StringAppend(p->interp, &zFull, &nFull, p->zPrefix, p->nPrefix);
-	Th8_StringAppend(p->interp, &zFull, &nFull, "::", 2);
-	Th8_StringAppend(p->interp, &zFull, &nFull, zName, nName);
+	TH8_STR_APPEND(p->interp, &zFull, &nFull, p->zPrefix, p->nPrefix);
+	TH8_STR_APPEND(p->interp, &zFull, &nFull, "::", 2);
+	TH8_STR_APPEND(p->interp, &zFull, &nFull, zName, nName);
 	Th8_ListAppend(p->interp, p->pzList, p->pnList, zFull, nFull);
 	Th8_Free(p->interp, zFull);
     }
     return TH8_OK;
+
+oom:
+    Th8_Free(p->interp, zFull);
+    return TH8_ERROR;
 }
 
 /*
@@ -551,6 +554,8 @@ info_default_command(
     void *pContext;
     Th8_ProcDefn *p;
     int i;
+    char *zErr = 0;
+    size_t nErr = 0;
 
     (void)ctx;
 
@@ -561,12 +566,9 @@ info_default_command(
     if (Th8_GetCommandInfo(interp, argv[2], argl[2], &xProc, &pContext) !=
             TH8_OK ||
         (xProc != th8ProcCall1 && xProc != th8NprocCall1)) {
-	char *zErr = 0;
-	size_t nErr = 0;
-
-	Th8_StringAppend(interp, &zErr, &nErr, "\"", 1);
-	Th8_StringAppend(interp, &zErr, &nErr, argv[2], argl[2]);
-	Th8_StringAppend(
+	TH8_STR_APPEND(interp, &zErr, &nErr, "\"", 1);
+	TH8_STR_APPEND(interp, &zErr, &nErr, argv[2], argl[2]);
+	TH8_STR_APPEND(
 	    interp, &zErr, &nErr, "\" is not a procedure", TH8_NOLEN);
 	Th8_SetResult(interp, zErr, nErr);
 	Th8_Free(interp, zErr);
@@ -599,20 +601,21 @@ info_default_command(
     }
 
     {
-	char *zErr = 0;
-	size_t nErr = 0;
-
-	Th8_StringAppend(interp, &zErr, &nErr, "procedure \"", TH8_NOLEN);
-	Th8_StringAppend(interp, &zErr, &nErr, argv[2], argl[2]);
-	Th8_StringAppend(
+	TH8_STR_APPEND(interp, &zErr, &nErr, "procedure \"", TH8_NOLEN);
+	TH8_STR_APPEND(interp, &zErr, &nErr, argv[2], argl[2]);
+	TH8_STR_APPEND(
 	    interp, &zErr, &nErr, "\" doesn't have an argument \"",
 	    TH8_NOLEN);
-	Th8_StringAppend(interp, &zErr, &nErr, argv[3], argl[3]);
-	Th8_StringAppend(interp, &zErr, &nErr, "\"", 1);
+	TH8_STR_APPEND(interp, &zErr, &nErr, argv[3], argl[3]);
+	TH8_STR_APPEND(interp, &zErr, &nErr, "\"", 1);
 	Th8_SetResult(interp, zErr, nErr);
 	Th8_Free(interp, zErr);
 	return TH8_ERROR;
     }
+
+oom:
+    Th8_Free(interp, zErr);
+    return TH8_ERROR;
 }
 #    endif
 
@@ -652,6 +655,8 @@ info_body_command(
     Th8_CommandProc xProc;
     void *pContext;
     Th8_ProcDefn *p;
+    char *zErr = 0;
+    size_t nErr = 0;
 
     if (argc != 3) {
 	return Th8_WrongNumArgs(interp, "info body procname");
@@ -659,12 +664,9 @@ info_body_command(
     if (Th8_GetCommandInfo(interp, argv[2], argl[2], &xProc, &pContext) !=
             TH8_OK ||
         (xProc != th8ProcCall1 && xProc != th8NprocCall1)) {
-	char *zErr = 0;
-	size_t nErr = 0;
-
-	Th8_StringAppend(interp, &zErr, &nErr, "\"", 1);
-	Th8_StringAppend(interp, &zErr, &nErr, argv[2], argl[2]);
-	Th8_StringAppend(
+	TH8_STR_APPEND(interp, &zErr, &nErr, "\"", 1);
+	TH8_STR_APPEND(interp, &zErr, &nErr, argv[2], argl[2]);
+	TH8_STR_APPEND(
 	    interp, &zErr, &nErr, "\" is not a procedure", TH8_NOLEN);
 	Th8_SetResult(interp, zErr, nErr);
 	Th8_Free(interp, zErr);
@@ -672,6 +674,10 @@ info_body_command(
     }
     p = (struct Th8_ProcDefn *)pContext;
     return Th8_SetResult(interp, p->zProgram, p->nProgram);
+
+oom:
+    Th8_Free(interp, zErr);
+    return TH8_ERROR;
 }
 
 
@@ -712,6 +718,8 @@ info_args_command(
     Th8_ProcDefn *p;
     char *zList = 0;
     size_t nList = 0;
+    char *zErr = 0;
+    size_t nErr = 0;
     int i;
 
     if (argc != 3) {
@@ -720,12 +728,9 @@ info_args_command(
     if (Th8_GetCommandInfo(interp, argv[2], argl[2], &xProc, &pContext) !=
             TH8_OK ||
         (xProc != th8ProcCall1 && xProc != th8NprocCall1)) {
-	char *zErr = 0;
-	size_t nErr = 0;
-
-	Th8_StringAppend(interp, &zErr, &nErr, "\"", 1);
-	Th8_StringAppend(interp, &zErr, &nErr, argv[2], argl[2]);
-	Th8_StringAppend(
+	TH8_STR_APPEND(interp, &zErr, &nErr, "\"", 1);
+	TH8_STR_APPEND(interp, &zErr, &nErr, argv[2], argl[2]);
+	TH8_STR_APPEND(
 	    interp, &zErr, &nErr, "\" is not a procedure", TH8_NOLEN);
 	Th8_SetResult(interp, zErr, nErr);
 	Th8_Free(interp, zErr);
@@ -741,6 +746,10 @@ info_args_command(
     Th8_SetResult(interp, zList, nList);
     Th8_Free(interp, zList);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zErr);
+    return TH8_ERROR;
 }
 
 

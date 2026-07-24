@@ -570,6 +570,100 @@ runTest {test coroutine-10.1 {
 } -result {1 1}}
 
 ###############################################################################
+#
+# Section 11 -- R-18099-47953: nested coroutines (one coroutine body
+# creates and resumes another).  These pin the pYieldingCoro save/
+# restore fix (Bug 69): resuming an inner coroutine must not terminate
+# the enclosing one, which must still be able to yield afterward.
+#
+###############################################################################
+
+runTest {test coroutine-11.1 {
+  R-18099-47953: outer coroutine (no yield) creates, resumes, and
+  drives an inner coroutine to completion; its result is the nested
+  computation
+} -constraints {
+    coroutine
+} -body {
+  coroutine _outer apply {{} {
+    set v [coroutine _inner apply {{} { yield fromInner; return innerDone }}]
+    set r [_inner]
+    return "$v/$r"
+  }}
+} -cleanup {
+  catch {rename _outer ""}
+  catch {rename _inner ""}
+} -result {fromInner/innerDone}}
+
+###############################################################################
+
+runTest {test coroutine-11.2 {
+  R-18099-47953: outer coroutine yields after resuming an inner
+  coroutine that itself yields (inner still suspended)
+} -constraints {
+    coroutine
+} -body {
+  set first [coroutine _outer apply {{} {
+    set v [coroutine _inner apply {{} { yield i1; yield i2; return iDone }}]
+    set r1 [_inner]
+    yield "mid:$v/$r1"
+    set r2 [_inner]
+    return "done:$r2"
+  }}]
+  set second [_outer]
+  list $first $second
+} -cleanup {
+  catch {rename _outer ""}
+  catch {rename _inner ""}
+  unset -nocomplain first second
+} -result {mid:i1/i2 done:iDone}}
+
+###############################################################################
+
+runTest {test coroutine-11.3 {
+  R-18099-47953: outer coroutine yields AFTER the inner coroutine has
+  COMPLETED -- the enclosing coroutine's yield prompt must be restored
+  when the inner one is deleted (the load-bearing Bug 69 case)
+} -constraints {
+    coroutine
+} -body {
+  set a [coroutine _outer apply {{} {
+    set v [coroutine _inner apply {{} { yield iB; return dB }}]
+    set r [_inner]
+    yield "mid:$v/$r"
+    return final
+  }}]
+  set b [_outer]
+  list $a $b
+} -cleanup {
+  catch {rename _outer ""}
+  catch {rename _inner ""}
+  unset -nocomplain a b
+} -result {mid:iB/dB final}}
+
+###############################################################################
+
+runTest {test coroutine-11.4 {
+  R-18099-47953: outer coroutine yields BEFORE creating the inner
+  coroutine, then creates and drives it on the next resume
+} -constraints {
+    coroutine
+} -body {
+  set a [coroutine _outer apply {{} {
+    yield started
+    set v [coroutine _inner apply {{} { yield iB; return dB }}]
+    set r [_inner]
+    return "done:$v/$r"
+  }}]
+  set b [_outer]
+  list $a $b
+} -cleanup {
+  catch {rename _outer ""}
+  catch {rename _inner ""}
+  unset -nocomplain a b
+} -result {started done:iB/dB}}
+
+###############################################################################
 
 source tests/epilogue.tcl
 

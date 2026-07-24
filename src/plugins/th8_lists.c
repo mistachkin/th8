@@ -110,16 +110,23 @@ join_command(
 
     for (i = 0; i < nCount; i++) {
 	if (i > 0) {
-	    Th8_StringAppend(interp, &zOut, &nOut, zSep, nSep);
+	    TH8_STR_APPEND(interp, &zOut, &nOut, zSep, nSep);
 	}
 	if (azElem) {
-	    Th8_StringAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
+	    TH8_STR_APPEND(interp, &zOut, &nOut, azElem[i], anElem[i]);
 	}
     }
     Th8_SetResult(interp, zOut, nOut);
     Th8_Free(interp, zOut);
     Th8_Free(interp, azElem);
     return TH8_OK;
+
+oom:
+    /* A TH8_STR_APPEND growth failed; "out of memory" already set.
+     * Free the partial output and the split-list vector. */
+    Th8_Free(interp, zOut);
+    Th8_Free(interp, azElem);
+    return TH8_ERROR;
 }
 
 
@@ -190,14 +197,23 @@ lappend_command(
     if (Th8_GetVar(interp, argv[1], argl[1]) == TH8_OK) {
 	size_t nCur;
 	const char *zCur = Th8_GetResult(interp, &nCur);
+	/* nCur may carry the taint bit; mask it for byte traversal so
+	 * the scan bound is the real length (a tagged length is
+	 * ~256 MiB and would over-read).  The tagged nCur is preserved
+	 * and passed to Th8_StringAppend below, which propagates the
+	 * taint into the appended list. */
+	size_t nRaw = TH8_LEN(nCur);
 	int braceDepth = 0;
 	int bracketDepth = 0;
 	int inQuote = 0;
 	size_t k;
 
-	for (k = 0; k < nCur; k++) {
+	/* nRaw is the byte-scan bound; a leaked taint tag would over-read
+	 * ~256 MiB (deterministically caught here on a debug build). */
+	TH8_ASSERT_RAW_LEN(nRaw);
+	for (k = 0; k < nRaw; k++) {
 	    char c = zCur[k];
-	    if (c == '\\' && k + 1 < nCur) {
+	    if (c == '\\' && k + 1 < nRaw) {
 		k++;
 		continue;
 	    }
@@ -239,7 +255,7 @@ lappend_command(
 	    Th8_SetResult(interp, zErr, nErr);
 	    return TH8_ERROR;
 	}
-	Th8_StringAppend(interp, &zList, &nList, zCur, nCur);
+	TH8_STR_APPEND(interp, &zList, &nList, zCur, nCur);
     }
 
     for (i = 2; i < argc; i++) {
@@ -249,6 +265,11 @@ lappend_command(
     Th8_SetResult(interp, zList, nList);
     Th8_Free(interp, zList);
     return TH8_OK;
+
+oom:
+    /* A TH8_STR_APPEND growth failed; "out of memory" already set. */
+    Th8_Free(interp, zList);
+    return TH8_ERROR;
 }
 #  endif
 
@@ -476,14 +497,28 @@ lindex_command(
 static int
 list_command(
     Th8_Interp *interp, /* Interpreter. */
-    void *ctx,   /* Not used. */
-    int argc,   /* Number of arguments. */
-    const char **argv,  /* Argument values. */
-    size_t *argl)  /* Argument lengths. */
+    void *ctx, /* Not used. */
+    int argc, /* Number of arguments. */
+    const char **argv, /* Argument values. */
+    size_t *argl) /* Argument lengths. */
 {
     int nElem = argc - 1;
+    size_t nTag = 0; /* aggregate taint of the elements */
+    int t;
 
     (void)ctx;
+
+    /*
+     * A list built from any tainted element is tainted.  The list
+     * cache is keyed and stored on RAW bytes (taint-insensitive), so
+     * the aggregate taint is computed here and re-applied to the
+     * result on every path -- otherwise a clean cached entry would
+     * launder a later tainted call with the same bytes (and vice
+     * versa).
+     */
+    for (t = 1; t < argc; t++) {
+	nTag |= argl[t] & TH8_TAG_BITS;
+    }
 
     /*
      * Consult the list-to-string cache.  The key is the
@@ -499,7 +534,7 @@ list_command(
 	 * (pCached==NULL, OOM-class) out of the MC/DC denominator. */
 	if (pCached) {
 	    if (pCached->zData) {
-		Th8_SetResult(interp, pCached->zData, pCached->nData);
+		Th8_SetResult(interp, pCached->zData, pCached->nData | nTag);
 		return TH8_OK;
 	    }
 	}
@@ -532,7 +567,10 @@ list_command(
 	    }
 	}
 
-	Th8_SetResult(interp, zList, nList);
+	/* Th8_ListAppend already tainted nList from any tainted element;
+	 * OR nTag again for consistency with the cache-hit path (the
+	 * cached joined length is stored raw). */
+	Th8_SetResult(interp, zList, nList | nTag);
 	Th8_Free(interp, zList);
     }
     return TH8_OK;
@@ -565,10 +603,10 @@ list_command(
 static int
 llength_command(
     Th8_Interp *interp, /* Interpreter. */
-    void *ctx,   /* Not used. */
-    int argc,   /* Number of arguments. */
-    const char **argv,  /* Argument values. */
-    size_t *argl)  /* Argument lengths. */
+    void *ctx, /* Not used. */
+    int argc, /* Number of arguments. */
+    const char **argv, /* Argument values. */
+    size_t *argl) /* Argument lengths. */
 {
     int nCount;
     int rc;
@@ -1142,6 +1180,10 @@ lsort_command(
     const char *zCommand = 0;
     size_t nCommand = 0;
     int iIndex = -1;
+    /* Function-scope so the oom label can free the -command eval
+     * accumulator, which is built inside the sort's inner loop. */
+    char *zEval = 0;
+    size_t nEval = 0;
 
     if (argc < 2) {
 	return Th8_WrongNumArgs(interp, "lsort ?options? list");
@@ -1287,18 +1329,19 @@ lsort_command(
 		     * result is the comparison integer.
 		     */
 
-		    char *zEval = 0;
-		    size_t nEval = 0;
 		    int iResult;
 
-		    Th8_StringAppend(
+		    zEval = 0;
+		    nEval = 0;
+		    TH8_STR_APPEND(
 		        interp, &zEval, &nEval, zCommand, nCommand);
-		    Th8_StringAppend(interp, &zEval, &nEval, " ", 1);
+		    TH8_STR_APPEND(interp, &zEval, &nEval, " ", 1);
 		    Th8_ListAppend(interp, &zEval, &nEval, zA, nA);
-		    Th8_StringAppend(interp, &zEval, &nEval, " ", 1);
+		    TH8_STR_APPEND(interp, &zEval, &nEval, " ", 1);
 		    Th8_ListAppend(interp, &zEval, &nEval, zB, nB);
 		    rc = Th8_Eval(interp, 0, zEval, nEval, NULL, 0);
 		    Th8_Free(interp, zEval);
+		    zEval = 0;
 		    if (rc != TH8_OK) {
 			Th8_Free(interp, azElem);
 			return rc;
@@ -1392,7 +1435,7 @@ lsort_command(
 
 	    if (nA == nB &&
 	        0 == Th8_Memcmp(interp, azElem[i - 1], azElem[i], nA)) {
-		continue;  /* skip duplicate */
+		continue; /* skip duplicate */
 	    }
 	}
 	Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
@@ -1401,6 +1444,14 @@ lsort_command(
     Th8_Free(interp, zOut);
     Th8_Free(interp, azElem);
     return TH8_OK;
+
+oom:
+    /* A TH8_STR_APPEND growth failed (building the result or a
+     * -command eval buffer); "out of memory" already set. */
+    Th8_Free(interp, zEval);
+    Th8_Free(interp, zOut);
+    Th8_Free(interp, azElem);
+    return TH8_ERROR;
 }
 
 
@@ -1909,7 +1960,7 @@ th8DictSplit(
 	    if (pCached->u.splitlist.iValid) isHit = 1;
 	}
 	if (isHit) {
-        /*
+	    /*
 	 * Cache hit.  Copy the element arrays for the caller.
 	 */
 	    int nE = pCached->u.splitlist.nElem;
@@ -2335,7 +2386,7 @@ dict_filter_command(
 	}
 	for (i = 0; i < nDict; i += 2) {
 	    int bKeep;
-	    size_t nTag = argl[2] & TH8_TAINT_BIT;
+	    size_t nTag = argl[2] & TH8_TAG_BITS;
 
 	    /* Raw split arrays; the key/value the filter script sees carry
 	     * the source dict's taint. */
@@ -2381,7 +2432,7 @@ dict_filter_command(
     Th8_Free(interp, azDict);
     /* Output is built from the raw split arrays; a filtered subset of a
      * tainted dict stays tainted. */
-    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAINT_BIT));
+    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAG_BITS));
     Th8_Free(interp, zOut);
     return TH8_OK;
 }
@@ -2455,7 +2506,7 @@ dict_get_command(
      * copies work byte-exactly; re-apply the source dict's taint to the
      * value handed back to the script. */
     Th8_SetResult(
-        interp, azElem[iKey], anElem[iKey] | (argl[2] & TH8_TAINT_BIT));
+        interp, azElem[iKey], anElem[iKey] | (argl[2] & TH8_TAG_BITS));
     Th8_Free(interp, azElem);
     return TH8_OK;
 }
@@ -2493,6 +2544,9 @@ dict_info_command(
     size_t *anElem = 0;
     int nCount;
     int rc;
+    /* Function-scope so the oom label can free it. */
+    char *zInfo = 0;
+    size_t nInfo = 0;
 
     (void)ctx;
 
@@ -2504,23 +2558,26 @@ dict_info_command(
 
     Th8_Free(interp, azElem);
     {
-	char *zInfo = 0;
-	size_t nInfo = 0;
-
 	Th8_SetResultInt(interp, nCount / 2);
 	{
 	    size_t nN;
 	    const char *zN = Th8_GetResult(interp, &nN);
 
-	    Th8_StringAppend(interp, &zInfo, &nInfo, zN, nN);
+	    TH8_STR_APPEND(interp, &zInfo, &nInfo, zN, nN);
 	}
-	Th8_StringAppend(
+	TH8_STR_APPEND(
 	    interp, &zInfo, &nInfo, " entries, list representation",
 	    TH8_NOLEN);
 	Th8_SetResult(interp, zInfo, nInfo);
 	Th8_Free(interp, zInfo);
     }
     return TH8_OK;
+
+oom:
+    /* A TH8_STR_APPEND growth failed; "out of memory" already set.
+     * azElem was already released above. */
+    Th8_Free(interp, zInfo);
+    return TH8_ERROR;
 }
 
 /*
@@ -2584,7 +2641,7 @@ dict_keys_command(
 
     /* Keys are copied from raw split arrays; re-apply the source dict's
      * taint to the returned list. */
-    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAINT_BIT));
+    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAG_BITS));
     Th8_Free(interp, zOut);
     Th8_Free(interp, azElem);
     return TH8_OK;
@@ -2642,7 +2699,7 @@ dict_merge_command(
 
 	/* The split arrays are raw; a tainted input dict must still
 	 * taint the merged result. */
-	nTag |= argl[d] & TH8_TAINT_BIT;
+	nTag |= argl[d] & TH8_TAG_BITS;
 
 	rc = th8DictSplit(interp, argv[d], argl[d], &azD, &anD, &nD);
 	if (rc != TH8_OK) {
@@ -2777,7 +2834,7 @@ dict_remove_command(
 
     /* Retained pairs are copied from the raw split arrays; a tainted
      * source dict stays tainted. */
-    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAINT_BIT));
+    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAG_BITS));
     Th8_Free(interp, zOut);
     Th8_Free(interp, azElem);
     return TH8_OK;
@@ -2874,7 +2931,7 @@ dict_replace_command(
     /* Retained entries come from the raw split arrays (re-apply the
      * source dict's taint); replacement keys/values are appended with
      * their own tags, which Th8_ListAppend already propagates. */
-    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAINT_BIT));
+    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAG_BITS));
     Th8_Free(interp, zOut);
     Th8_Free(interp, azElem);
     return TH8_OK;
@@ -2986,7 +3043,7 @@ dict_values_command(
 
     /* Values are copied from raw split arrays; re-apply the source
      * dict's taint to the returned list. */
-    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAINT_BIT));
+    Th8_SetResult(interp, zOut ? zOut : "", nOut | (argl[2] & TH8_TAG_BITS));
     Th8_Free(interp, zOut);
     Th8_Free(interp, azElem);
     return TH8_OK;
@@ -3064,7 +3121,7 @@ th8DictVarPut(
     const char *zDict,
     size_t nDict)
 {
-    size_t nTag = nDict & TH8_TAINT_BIT;
+    size_t nTag = nDict & TH8_TAG_BITS;
 
     /* Capture the taint of the dict currently stored in the variable:
      * an in-place mutation rebuilds from the RAW split arrays (see
@@ -3077,7 +3134,7 @@ th8DictVarPut(
 	size_t nOld;
 
 	(void)Th8_GetResult(interp, &nOld);
-	nTag |= nOld & TH8_TAINT_BIT;
+	nTag |= nOld & TH8_TAG_BITS;
     }
     Th8_SetVar(interp, zVar, nVar, zDict, TH8_LEN(nDict) | nTag);
     Th8_SetResult(interp, zDict, TH8_LEN(nDict) | nTag);
@@ -3122,6 +3179,10 @@ dict_append_command(
     int i;
     char *zOut = 0;
     size_t nOut = 0;
+    /* Function-scope so the oom label can free the value accumulator,
+     * which is built in one of two mutually-exclusive blocks below. */
+    char *zVal = 0;
+    size_t nVal = 0;
 
     (void)ctx;
 
@@ -3140,17 +3201,17 @@ dict_append_command(
 	Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
 	if (i + 1 == iKey) {
 	    /* Append strings to existing value. */
-	    char *zVal = 0;
-	    size_t nVal = 0;
 	    int k;
 
-	    Th8_StringAppend(
-	        interp, &zVal, &nVal, azElem[iKey], anElem[iKey]);
+	    zVal = 0;
+	    nVal = 0;
+	    TH8_STR_APPEND(interp, &zVal, &nVal, azElem[iKey], anElem[iKey]);
 	    for (k = 4; k < argc; k++) {
-		Th8_StringAppend(interp, &zVal, &nVal, argv[k], argl[k]);
+		TH8_STR_APPEND(interp, &zVal, &nVal, argv[k], argl[k]);
 	    }
 	    Th8_ListAppend(interp, &zOut, &nOut, zVal, nVal);
 	    Th8_Free(interp, zVal);
+	    zVal = 0;
 	} else {
 	    Th8_ListAppend(
 	        interp, &zOut, &nOut, azElem[i + 1], anElem[i + 1]);
@@ -3159,22 +3220,30 @@ dict_append_command(
 
     if (iKey < 0) {
 	/* New key: concatenate all strings as the value. */
-	char *zVal = 0;
-	size_t nVal = 0;
 	int k;
 
+	zVal = 0;
+	nVal = 0;
 	for (k = 4; k < argc; k++) {
-	    Th8_StringAppend(interp, &zVal, &nVal, argv[k], argl[k]);
+	    TH8_STR_APPEND(interp, &zVal, &nVal, argv[k], argl[k]);
 	}
 	Th8_ListAppend(interp, &zOut, &nOut, argv[3], argl[3]);
 	Th8_ListAppend(interp, &zOut, &nOut, zVal ? zVal : "", nVal);
 	Th8_Free(interp, zVal);
+	zVal = 0;
     }
 
     Th8_Free(interp, azElem);
     rc = th8DictVarPut(interp, argv[2], argl[2], zOut, nOut);
     Th8_Free(interp, zOut);
     return rc;
+
+oom:
+    /* A TH8_STR_APPEND growth failed; "out of memory" already set. */
+    Th8_Free(interp, zVal);
+    Th8_Free(interp, zOut);
+    Th8_Free(interp, azElem);
+    return TH8_ERROR;
 }
 
 /*
@@ -3243,13 +3312,14 @@ dict_for_command(
 
     rc = TH8_OK;
     for (i = 0; i < nDict; i += 2) {
-	size_t nTag = argl[3] & TH8_TAINT_BIT;
+	size_t nTag = argl[3] & TH8_TAG_BITS;
 
 	/* Split arrays are raw; the key/value the body sees are derived
 	 * from the source dict, so they carry its taint. */
 	Th8_SetVar(interp, azVars[0], anVars[0], azDict[i], anDict[i] | nTag);
 	Th8_SetVar(
-	    interp, azVars[1], anVars[1], azDict[i + 1], anDict[i + 1] | nTag);
+	    interp, azVars[1], anVars[1], azDict[i + 1],
+	    anDict[i + 1] | nTag);
 
 	rc = Th8_Eval(interp, 0, argv[4], argl[4], NULL, 0);
 	if (rc == TH8_BREAK) {
@@ -3403,6 +3473,9 @@ dict_lappend_command(
     int i;
     char *zOut = 0;
     size_t nOut = 0;
+    /* Function-scope so the oom label can free the value accumulator. */
+    char *zVal = 0;
+    size_t nVal = 0;
 
     (void)ctx;
 
@@ -3421,17 +3494,17 @@ dict_lappend_command(
 	Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
 	if (i + 1 == iKey) {
 	    /* List-append values to existing value. */
-	    char *zVal = 0;
-	    size_t nVal = 0;
 	    int k;
 
-	    Th8_StringAppend(
-	        interp, &zVal, &nVal, azElem[iKey], anElem[iKey]);
+	    zVal = 0;
+	    nVal = 0;
+	    TH8_STR_APPEND(interp, &zVal, &nVal, azElem[iKey], anElem[iKey]);
 	    for (k = 4; k < argc; k++) {
 		Th8_ListAppend(interp, &zVal, &nVal, argv[k], argl[k]);
 	    }
 	    Th8_ListAppend(interp, &zOut, &nOut, zVal, nVal);
 	    Th8_Free(interp, zVal);
+	    zVal = 0;
 	} else {
 	    Th8_ListAppend(
 	        interp, &zOut, &nOut, azElem[i + 1], anElem[i + 1]);
@@ -3439,22 +3512,30 @@ dict_lappend_command(
     }
 
     if (iKey < 0) {
-	char *zVal = 0;
-	size_t nVal = 0;
 	int k;
 
+	zVal = 0;
+	nVal = 0;
 	for (k = 4; k < argc; k++) {
 	    Th8_ListAppend(interp, &zVal, &nVal, argv[k], argl[k]);
 	}
 	Th8_ListAppend(interp, &zOut, &nOut, argv[3], argl[3]);
 	Th8_ListAppend(interp, &zOut, &nOut, zVal ? zVal : "", nVal);
 	Th8_Free(interp, zVal);
+	zVal = 0;
     }
 
     Th8_Free(interp, azElem);
     rc = th8DictVarPut(interp, argv[2], argl[2], zOut, nOut);
     Th8_Free(interp, zOut);
     return rc;
+
+oom:
+    /* A TH8_STR_APPEND growth failed; "out of memory" already set. */
+    Th8_Free(interp, zVal);
+    Th8_Free(interp, zOut);
+    Th8_Free(interp, azElem);
+    return TH8_ERROR;
 }
 
 /*
@@ -3527,13 +3608,14 @@ dict_map_command(
     for (i = 0; i < nDict; i += 2) {
 	size_t nRes;
 	const char *zRes;
-	size_t nTag = argl[3] & TH8_TAINT_BIT;
+	size_t nTag = argl[3] & TH8_TAG_BITS;
 
 	/* Split arrays are raw; the key/value the body sees are derived
 	 * from the source dict and carry its taint. */
 	Th8_SetVar(interp, azVars[0], anVars[0], azDict[i], anDict[i] | nTag);
 	Th8_SetVar(
-	    interp, azVars[1], anVars[1], azDict[i + 1], anDict[i + 1] | nTag);
+	    interp, azVars[1], anVars[1], azDict[i + 1],
+	    anDict[i + 1] | nTag);
 
 	rc = Th8_Eval(interp, 0, argv[4], argl[4], NULL, 0);
 	if (rc == TH8_BREAK) {
@@ -3559,7 +3641,7 @@ dict_map_command(
 	 * values carry their own taint via Th8_ListAppend.  Re-apply the
 	 * source dict's taint for the keys. */
 	Th8_SetResult(
-	    interp, zOut ? zOut : "", nOut | (argl[3] & TH8_TAINT_BIT));
+	    interp, zOut ? zOut : "", nOut | (argl[3] & TH8_TAG_BITS));
     }
     Th8_Free(interp, zOut);
     return rc;
@@ -3611,7 +3693,7 @@ dict_set_command(
 	    interp, "dict set dictVar key ?key ...? value");
     }
 
-    nKeys = argc - 4;  /* Number of key arguments. */
+    nKeys = argc - 4; /* Number of key arguments. */
 
     if (nKeys == 1) {
 	/*
@@ -3665,7 +3747,7 @@ dict_set_command(
 	size_t nValue = argl[argc - 1];
 	const char **azKeyArgs = argv + 3;
 	size_t *anKeyArgs = argl + 3;
-	int depth = nKeys;  /* Number of key arguments. */
+	int depth = nKeys; /* Number of key arguments. */
 
 	/*
 	 * Arrays to hold saved dicts at each nesting level.
@@ -4087,7 +4169,7 @@ dict_update_command(
 	size_t nCur;
 
 	(void)Th8_GetResult(interp, &nCur);
-	nSrcTag = nCur & TH8_TAINT_BIT;
+	nSrcTag = nCur & TH8_TAG_BITS;
     }
 
     rc = th8DictVarGet(interp, argv[2], argl[2], &azElem, &anElem, &nCount);
@@ -4141,7 +4223,7 @@ dict_update_command(
 	    size_t nCur;
 
 	    (void)Th8_GetResult(interp, &nCur);
-	    nWbTag = nCur & TH8_TAINT_BIT;
+	    nWbTag = nCur & TH8_TAG_BITS;
 	}
 
 	rcVar = th8DictVarGet(
@@ -4269,6 +4351,11 @@ dict_with_command(
     size_t *anSavedKeys = 0;
     int nSavedKeys = 0;
 
+    /* Function-scope so the oom label can free the inside-out rebuild
+     * accumulator, which is built at the deepest nesting level below. */
+    char *zCur = 0;
+    size_t nCur = 0;
+
     (void)ctx;
 
     if (argc < 4) {
@@ -4277,7 +4364,7 @@ dict_with_command(
 
     zBody = argv[argc - 1];
     nBody = argl[argc - 1];
-    nNestedKeys = argc - 4;  /* Number of nested key args. */
+    nNestedKeys = argc - 4; /* Number of nested key args. */
 
     /*
      * Capture the taint of the whole dict variable: the local vars
@@ -4290,7 +4377,7 @@ dict_with_command(
 	size_t nCur;
 
 	(void)Th8_GetResult(interp, &nCur);
-	nSrcTag = nCur & TH8_TAINT_BIT;
+	nSrcTag = nCur & TH8_TAG_BITS;
     }
 
     /*
@@ -4363,7 +4450,10 @@ dict_with_command(
 	int k;
 
 	for (k = 0; k < nCount; k += 2) {
-	    nStrTotal += anElem[k] + 1;
+	    /* Mask the taint tag before using the key length as a byte
+	     * count: a tagged length is ~256 MiB and would blow up the
+	     * total (and, below, over-read/over-write). */
+	    nStrTotal += TH8_LEN(anElem[k]) + 1;
 	}
 	azSavedKeys = (char **)TH8_ALLOC_MUL_ADD2(
 	    interp, (size_t)nSavedKeys, sizeof(char *), (size_t)nSavedKeys,
@@ -4377,11 +4467,17 @@ dict_with_command(
 	zBuf = (char *)&anSavedKeys[nSavedKeys];
 	for (k = 0; k < nSavedKeys; k++) {
 	    int ki = k * 2;
+	    /* nRawKey is the byte count for the copy/index/advance below;
+	     * the tagged length is preserved in anSavedKeys for the
+	     * read-back Th8_GetVar (which masks internally). */
+	    size_t nRawKey = TH8_LEN(anElem[ki]);
+
+	    TH8_ASSERT_RAW_LEN(nRawKey);
 	    anSavedKeys[k] = anElem[ki];
 	    azSavedKeys[k] = zBuf;
-	    Th8_Memcpy(interp, zBuf, azElem[ki], anElem[ki]);
-	    zBuf[anElem[ki]] = '\0';
-	    zBuf += anElem[ki] + 1;
+	    Th8_Memcpy(interp, zBuf, azElem[ki], nRawKey);
+	    zBuf[nRawKey] = '\0';
+	    zBuf += nRawKey + 1;
 	}
     }
 
@@ -4492,15 +4588,15 @@ dict_with_command(
 				}
 			    }
 
-                    /*
+			    /*
 		     * Rebuild from inside out.
 		     */
 			    {
-				char *zCur = 0;
-				size_t nCur = 0;
+				zCur = 0;
+				nCur = 0;
 
 				/* Start with the inner dict we built. */
-				Th8_StringAppend(
+				TH8_STR_APPEND(
 				    interp, &zCur, &nCur, zInner, nInner);
 
 				for (d = nNestedKeys - 1; d >= 0; d--) {
@@ -4532,6 +4628,7 @@ dict_with_command(
 				    zCur ? zCur : "",
 				    zCur ? (nCur | nSrcTag) : 0);
 				Th8_Free(interp, zCur);
+				zCur = 0;
 			    }
 
 			    /* Free intermediate levels (not level 0). */
@@ -4571,6 +4668,20 @@ dict_with_command(
     }
 
     return rc;
+
+oom:
+    /* A TH8_STR_APPEND growth failed while rebuilding the nested dict
+     * (fault-injection-only path); "out of memory" already set.  Free
+     * the rebuild accumulator and the saved-key block.  The deeply
+     * nested per-level scratch arrays (aazLevel/aanLevel/anCountLvl,
+     * azOuter, zOut) are block-scoped and unreachable from here; they
+     * leak only on this OOM path.  Freeing them from this function-
+     * level label is avoided deliberately -- azOuter's ownership is
+     * ambiguous even on the success path, so a blind free here would
+     * risk a double-free, which is worse than a one-shot leak. */
+    Th8_Free(interp, zCur);
+    Th8_Free(interp, azSavedKeys);
+    return TH8_ERROR;
 }
 
 #  endif /* TH8_ENABLE_VARIABLES */

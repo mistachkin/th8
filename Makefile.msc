@@ -389,8 +389,11 @@ FEATURE_DEFS = $(REGEXP_DEFS) $(CURL_DEFS) $(BIGINT_DEFS) $(CRYPTOGRAPHY_DEFS) $
 # CFLAGS_DLL: for objects compiled into the DLL (dllexport).
 # CFLAGS_APP: for objects linked against the DLL (dllimport).
 #
-CFLAGS_DLL = $(CFLAGS_BASE) $(FEATURE_DEFS) /DTH8_BUILD_DLL /Od /Zi /Fd$(B)\ /MDd /DTH8_BENCHMARKING /DTH8_DEBUG
-CFLAGS_APP = $(CFLAGS_BASE) $(FEATURE_DEFS) /Od /Zi /Fd$(B)\ /MDd /DTH8_BENCHMARKING /DTH8_DEBUG
+# TH8_HEAP_CHECKS enables allocator-metadata validation on the libc path; the
+# macOS implementation (malloc_zone_check) is live today, a Win32 HeapValidate /
+# _CrtCheckMemory implementation is a pending follow-up (currently a no-op here).
+CFLAGS_DLL = $(CFLAGS_BASE) $(FEATURE_DEFS) /DTH8_BUILD_DLL /Od /Zi /Fd$(B)\ /MDd /DTH8_BENCHMARKING /DTH8_DEBUG /DTH8_HEAP_CHECKS
+CFLAGS_APP = $(CFLAGS_BASE) $(FEATURE_DEFS) /Od /Zi /Fd$(B)\ /MDd /DTH8_BENCHMARKING /DTH8_DEBUG /DTH8_HEAP_CHECKS
 LDFLAGS = /nologo /DEBUG
 !ELSE
 CFLAGS_DLL = $(CFLAGS_BASE) $(FEATURE_DEFS) /DTH8_BUILD_DLL /O2 /MD /DTH8_BENCHMARKING /DNDEBUG
@@ -577,11 +580,13 @@ stubs: $(STUBS_LIB)
 # (no dllimport thunks).  This avoids MSVC C4232 warnings.
 #
 
-$(B)\th8StubInit_standalone.obj: $(S)\th8StubInit.c $(S)\th8.h $(S)\th8Decls.h
+$(B)\th8StubInit_standalone.obj: $(S)\th8StubInit.c $(S)\th8.h \
+	$(S)\th8_hash.h $(S)\th8_plugin.h $(S)\th8Decls.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS_BASE) $(FEATURE_DEFS) /DTH8_API= /c /Fo$@ $(S)\th8StubInit.c
 
-$(B)\th8StubLib_standalone.obj: $(S)\th8StubLib.c $(S)\th8.h $(S)\th8Decls.h
+$(B)\th8StubLib_standalone.obj: $(S)\th8StubLib.c $(S)\th8.h $(S)\th8_hash.h \
+	$(S)\th8_plugin.h $(S)\th8Decls.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS_BASE) $(FEATURE_DEFS) /DTH8_API= /c /Fo$@ $(S)\th8StubLib.c
 
@@ -677,47 +682,63 @@ tommath_vendor:
 # Compilation rules.
 # ----------------------------------------------------------------
 
-$(B)\th8_core.obj: $(S)\th8_core.c $(CORE_HDR) tommath_vendor spilornis_vendor
+$(B)\th8_core.obj: $(S)\th8_core.c $(S)\th8.h $(S)\th8_bigint.h \
+	$(S)\th8_int.h $(S)\th8_int_core.h $(S)\th8_mem.h $(S)\th8_meta_defs.h \
+	$(S)\th8_meta_libc.h $(S)\th8_meta_posix.h $(S)\th8_plat.h \
+	$(S)\th8_plugin.h $(S)\th8_spilornis.h $(S)\th8_vars.h tommath_vendor \
+	spilornis_vendor
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_core.c
 
-$(B)\th8_channel.obj: $(S)\th8_channel.c $(CORE_HDR)
+$(B)\th8_channel.obj: $(S)\th8_channel.c $(S)\th8.h $(S)\th8_hash.h \
+	$(S)\th8_int.h $(S)\th8_int_core.h $(S)\th8_plat.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_channel.c
 
-$(B)\th8_protect.obj: $(S)\th8_protect.c $(CORE_HDR)
+$(B)\th8_protect.obj: $(S)\th8_protect.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_meta_defs.h $(S)\th8_meta_libc.h $(S)\th8_meta_msvc.h \
+	$(S)\th8_meta_posix.h $(S)\th8_meta_win32.h $(S)\th8_plat.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_protect.c
 
-$(B)\th8_plat.obj: $(S)\th8_plat.c $(CORE_HDR)
+$(B)\th8_plat.obj: $(S)\th8_plat.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_int_core.h $(S)\th8_meta_defs.h $(S)\th8_meta_libc.h \
+	$(S)\th8_meta_posix.h $(S)\th8_plat.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_plat.c
 
-$(B)\th8_hash.obj: $(S)\th8_hash.c $(CORE_HDR)
+$(B)\th8_hash.obj: $(S)\th8_hash.c $(S)\th8.h $(S)\th8_hash.h $(S)\th8_int.h \
+	$(S)\th8_mem.h $(S)\th8_meta_defs.h $(S)\th8_meta_libc.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_hash.c
 
-$(B)\th8_hash_standalone.obj: $(S)\th8_hash.c $(S)\th8_hash.h
+$(B)\th8_hash_standalone.obj: $(S)\th8_hash.c $(S)\th8.h $(S)\th8_hash.h \
+	$(S)\th8_int.h $(S)\th8_mem.h $(S)\th8_meta_defs.h $(S)\th8_meta_libc.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS_BASE) /DTH8_HASH_STANDALONE /I$(S) /c /Fo$@ $(S)\th8_hash.c
 
-$(B)\th8_util.obj: $(S)\th8_util.c $(CORE_HDR)
+$(B)\th8_util.obj: $(S)\th8_util.c $(S)\th8.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_util.c
 
-$(B)\th8_base64.obj: $(S)\th8_base64.c $(S)\th8.h $(S)\th8_util.h
+$(B)\th8_base64.obj: $(S)\th8_base64.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_base64.c
 
-$(B)\th8_expr.obj: $(S)\th8_expr.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_int_core.h $(S)\th8_expr.h tommath_vendor
+$(B)\th8_expr.obj: $(S)\th8_expr.c $(S)\th8.h $(S)\th8_bigint.h \
+	$(S)\th8_expr.h $(S)\th8_int.h $(S)\th8_int_core.h $(S)\th8_plat.h \
+	tommath_vendor
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_expr.c
 
-$(B)\th8_load.obj: $(S)\th8_load.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_int_core.h
+$(B)\th8_load.obj: $(S)\th8_load.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_int_core.h $(S)\th8_plat.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_load.c
 
-$(B)\th8_vars.obj: $(S)\th8_vars.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_int_core.h $(S)\th8_vars.h
+$(B)\th8_vars.obj: $(S)\th8_vars.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_int_core.h $(S)\th8_plat.h $(S)\th8_vars.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_vars.c
 
@@ -725,35 +746,44 @@ $(B)\th8_glob.obj: $(S)\th8_glob.c $(S)\th8.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_glob.c
 
-$(B)\th8_math.obj: $(S)\th8_math.c $(CORE_HDR) tommath_vendor
+$(B)\th8_math.obj: $(S)\th8_math.c $(S)\th8.h $(S)\th8_bigint.h \
+	$(S)\th8_int.h tommath_vendor
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_math.c
 
-$(B)\th8_cache.obj: $(S)\th8_cache.c $(CORE_HDR) $(S)\th8_int.h
+$(B)\th8_cache.obj: $(S)\th8_cache.c $(S)\th8.h $(S)\th8_hash.h \
+	$(S)\th8_int.h $(S)\th8_int_core.h $(S)\th8_meta_defs.h \
+	$(S)\th8_meta_libc.h $(S)\th8_plat.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_cache.c
 
-$(B)\th8_attrflags.obj: $(HARPY_PLUGIN_DIR)\th8_attrflags.c $(S)\th8.h
+$(B)\th8_attrflags.obj: $(HARPY_PLUGIN_DIR)\th8_attrflags.c $(S)\th8.h \
+	$(S)\th8_int.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_attrflags.c
 
-$(B)\th8_plugin.obj: $(S)\th8_plugin.c $(S)\th8_plugin.h $(S)\th8.h
+$(B)\th8_plugin.obj: $(S)\th8_plugin.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_plugin.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_plugin.c
 
-$(B)\th8_lang.obj: $(S)\th8_lang.c $(CORE_HDR)
+$(B)\th8_lang.obj: $(S)\th8_lang.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_plugin.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_lang.c
 
-$(B)\th8_xlib.obj: $(S)\th8_xlib.c $(S)\th8.h
+$(B)\th8_xlib.obj: $(S)\th8_xlib.c $(S)\th8.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_xlib.c
 
-$(B)\th8_fault.obj: $(S)\th8_fault.c $(S)\th8.h
+$(B)\th8_fault.obj: $(S)\th8_fault.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_int_core.h $(S)\th8_plat.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_fault.c
 
-$(B)\th8_env.obj: $(S)\th8_env.c $(S)\th8.h
+$(B)\th8_env.obj: $(S)\th8_env.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_meta_defs.h $(S)\th8_meta_libc.h $(S)\th8_meta_msvc.h \
+	$(S)\th8_meta_posix.h $(S)\th8_meta_win32.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_env.c
 
@@ -765,87 +795,111 @@ $(B)\th8_mem.obj: $(S)\th8_mem.c $(S)\th8.h $(S)\th8_int.h
 # Plugin compilation rules.
 # ----------------------------------------------------------------
 
-$(B)\th8_control.obj: $(S)\plugins\th8_control.c $(S)\th8.h $(S)\th8_util.h $(S)\th8_plugin.h
+$(B)\th8_control.obj: $(S)\plugins\th8_control.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_plugin.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_control.c
 
-$(B)\th8_events.obj: $(S)\plugins\th8_events.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+$(B)\th8_events.obj: $(S)\plugins\th8_events.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_plugin.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_events.c
 
-$(B)\th8_expressions.obj: $(S)\plugins\th8_expressions.c $(S)\th8.h $(S)\th8_plugin.h
+$(B)\th8_expressions.obj: $(S)\plugins\th8_expressions.c $(S)\th8.h \
+	$(S)\th8_int.h $(S)\th8_plugin.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_expressions.c
 
-$(B)\th8_extensibility.obj: $(S)\plugins\th8_extensibility.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+$(B)\th8_extensibility.obj: $(S)\plugins\th8_extensibility.c $(S)\th8.h \
+	$(S)\th8_int.h $(S)\th8_plugin.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_extensibility.c
 
-$(B)\th8_filesystems.obj: $(S)\plugins\th8_filesystems.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+$(B)\th8_filesystems.obj: $(S)\plugins\th8_filesystems.c $(S)\th8.h \
+	$(S)\th8_int.h $(S)\th8_meta_defs.h $(S)\th8_meta_libc.h $(S)\th8_plugin.h \
+	$(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_filesystems.c
 
-$(B)\th8_formatting.obj: $(S)\plugins\th8_formatting.c $(S)\th8.h $(S)\th8_util.h $(S)\th8_plugin.h
+$(B)\th8_formatting.obj: $(S)\plugins\th8_formatting.c $(S)\th8.h \
+	$(S)\th8_int.h $(S)\th8_plugin.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_formatting.c
 
-$(B)\th8_introspection.obj: $(S)\plugins\th8_introspection.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+$(B)\th8_introspection.obj: $(S)\plugins\th8_introspection.c $(S)\th8.h \
+	$(S)\th8_int.h $(S)\th8_plugin.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_introspection.c
 
-$(B)\th8_io.obj: $(S)\plugins\th8_io.c $(S)\th8.h $(S)\th8_util.h $(S)\th8_plugin.h
+$(B)\th8_io.obj: $(S)\plugins\th8_io.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_plugin.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_io.c
 
-$(B)\th8_lists.obj: $(S)\plugins\th8_lists.c $(CORE_HDR)
+$(B)\th8_lists.obj: $(S)\plugins\th8_lists.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_plugin.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_lists.c
 
-$(B)\th8_looping.obj: $(S)\plugins\th8_looping.c $(S)\th8.h $(S)\th8_plugin.h
+$(B)\th8_looping.obj: $(S)\plugins\th8_looping.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_plugin.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_looping.c
 
-$(B)\th8_management.obj: $(S)\plugins\th8_management.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+$(B)\th8_management.obj: $(S)\plugins\th8_management.c $(S)\th8.h \
+	$(S)\th8_int.h $(S)\th8_plugin.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_management.c
 
-$(B)\th8_procedures.obj: $(S)\plugins\th8_procedures.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+$(B)\th8_procedures.obj: $(S)\plugins\th8_procedures.c $(S)\th8.h \
+	$(S)\th8_int.h $(S)\th8_plugin.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_procedures.c
 
-$(B)\th8_strings.obj: $(S)\plugins\th8_strings.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_util.h $(S)\th8_plugin.h
+$(B)\th8_strings.obj: $(S)\plugins\th8_strings.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_plugin.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_strings.c
 
-$(B)\th8_timekeeping.obj: $(S)\plugins\th8_timekeeping.c $(S)\th8.h $(S)\th8_plugin.h
+$(B)\th8_timekeeping.obj: $(S)\plugins\th8_timekeeping.c $(S)\th8.h \
+	$(S)\th8_int.h $(S)\th8_plugin.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_timekeeping.c
 
-$(B)\th8_variables.obj: $(S)\plugins\th8_variables.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_vars.h $(S)\th8_util.h $(S)\th8_plugin.h
+$(B)\th8_variables.obj: $(S)\plugins\th8_variables.c $(S)\th8.h \
+	$(S)\th8_int.h $(S)\th8_plugin.h $(S)\th8_util.h $(S)\th8_vars.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_variables.c
 
-$(B)\th8_harpy_cmds.obj: $(S)\plugins\th8_harpy.c $(S)\th8.h $(S)\th8_util.h $(S)\th8_plugin.h
+$(B)\th8_harpy_cmds.obj: $(S)\plugins\th8_harpy.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_plugin.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\th8_harpy.c
 
-$(B)\th8_crypto_cmds.obj: $(CRYPTOGRAPHY_PLUGIN_DIR)\th8_crypto_cmds.c $(S)\th8.h $(S)\th8_util.h $(S)\th8_plugin.h
+$(B)\th8_crypto_cmds.obj: $(CRYPTOGRAPHY_PLUGIN_DIR)\th8_crypto_cmds.c \
+	$(S)\th8.h $(S)\th8_int.h $(S)\th8_plugin.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(CRYPTOGRAPHY_PLUGIN_DIR)\th8_crypto_cmds.c
 
-$(B)\th8_regex.obj: $(S)\plugins\regexp\th8_regex.c $(CORE_HDR)
+$(B)\th8_regex.obj: $(S)\plugins\regexp\th8_regex.c $(S)\th8.h \
+	$(S)\plugins\regexp\regex_th8.h $(S)\th8_int.h $(S)\th8_plugin.h \
+	$(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\plugins\regexp\th8_regex.c
 
-$(B)\th8_nullio.obj: $(S)\th8_nullio.c $(S)\th8.h
+$(B)\th8_nullio.obj: $(S)\th8_nullio.c $(S)\th8.h $(S)\th8_int.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_nullio.c
 
-$(B)\th8_win32.obj: $(S)\th8_win32.c $(CORE_HDR)
+$(B)\th8_win32.obj: $(S)\th8_win32.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_mem.h $(S)\th8_meta_defs.h $(S)\th8_meta_libc.h \
+	$(S)\th8_meta_msvc.h $(S)\th8_meta_win32.h $(S)\th8_unbound.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_win32.c
 
-$(B)\th8_libc.obj: $(S)\th8_libc.c $(S)\th8.h
+$(B)\th8_libc.obj: $(S)\th8_libc.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_mem.h \
+	$(S)\th8_meta_defs.h $(S)\th8_meta_libc.h $(S)\th8_meta_macos.h \
+	$(S)\th8_meta_msvc.h $(S)\th8_meta_posix.h $(S)\th8_meta_win32.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_libc.c
 
@@ -854,13 +908,15 @@ $(B)\th8_ctime.obj: $(S)\th8_ctime.c $(S)\th8.h
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_ctime.c
 
 !IF $(ENABLE_LIBCURL)
-$(B)\th8_curl.obj: $(S)\th8_curl.c $(S)\th8.h
+$(B)\th8_curl.obj: $(S)\th8_curl.c $(S)\th8.h $(S)\th8_int.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_curl.c
 !ENDIF
 
 !IF $(ENABLE_UNBOUND)
-$(B)\th8_unbound.obj: $(S)\th8_unbound.c $(S)\th8.h $(S)\th8_unbound.h
+$(B)\th8_unbound.obj: $(S)\th8_unbound.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_meta_defs.h $(S)\th8_meta_libc.h $(S)\th8_plat.h \
+	$(S)\th8_unbound.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_unbound.c
 !ENDIF
@@ -877,7 +933,8 @@ $(B)\tommath_amalg.c: externals\tommath\vendor\tommath.h tommath_vendor
 $(B)\tommath_amalg.obj: $(B)\tommath_amalg.c
 	$(CC) $(CFLAGS_BASE) $(FEATURE_DEFS) /I$(TOMMATH_BUILD) /c /Fo$@ $(B)\tommath_amalg.c
 
-$(B)\th8_bigint.obj: $(S)\th8_bigint.c $(S)\th8.h $(S)\th8_int.h $(S)\th8_bigint.h tommath_vendor
+$(B)\th8_bigint.obj: $(S)\th8_bigint.c $(S)\th8.h $(S)\th8_bigint.h \
+	$(S)\th8_int.h tommath_vendor
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_bigint.c
 !ENDIF
@@ -895,8 +952,11 @@ MI_INC = $(MIMALLOC_DIR)\include
 # CRT flag must match the main build (/MD for release, /MDd for debug).
 $(MIMALLOC_STATIC_OBJ): $(MI_SRC)\static.c
 	-if not exist "$(B)" mkdir "$(B)"
+# Debug uses the maximal detection level (MI_SECURE=5 encoded/guarded free
+# lists + metadata guard pages, MI_DEBUG=3 per-operation invariant checks,
+# MI_GUARDED sampled guard pages); release keeps /O2 with no extra checks.
 !IF $(DEBUG)
-	$(CC) /nologo /W3 /Od /MDd /DMI_STATIC_LIB /I$(MI_INC) /I$(MI_SRC) /c /Fo$@ $(MI_SRC)\static.c
+	$(CC) /nologo /W3 /Od /Zi /MDd /DMI_STATIC_LIB /DMI_SECURE=5 /DMI_DEBUG=3 /DMI_GUARDED=1 /I$(MI_INC) /I$(MI_SRC) /c /Fo$@ $(MI_SRC)\static.c
 !ELSE
 	$(CC) /nologo /W3 /O2 /MD /DMI_STATIC_LIB /I$(MI_INC) /I$(MI_SRC) /c /Fo$@ $(MI_SRC)\static.c
 !ENDIF
@@ -911,15 +971,18 @@ $(MIMALLOC_PLAT_OBJ): $(S)\th8_mimalloc.c $(S)\th8.h
 # ----------------------------------------------------------------
 
 !IF $(ENABLE_CRYPTOGRAPHY)
-$(B)\th8_snk.obj: $(HARPY_PLUGIN_DIR)\th8_snk.c $(S)\th8.h $(S)\th8_util.h
+$(B)\th8_snk.obj: $(HARPY_PLUGIN_DIR)\th8_snk.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_snk.c
 
-$(B)\th8_harpy.obj: $(HARPY_PLUGIN_DIR)\th8_harpy.c $(S)\th8.h $(S)\th8_util.h
+$(B)\th8_harpy.obj: $(HARPY_PLUGIN_DIR)\th8_harpy.c $(S)\th8.h \
+	$(S)\th8_int.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_harpy.c
 
-$(B)\th8_policy.obj: $(HARPY_PLUGIN_DIR)\th8_policy.c $(S)\th8.h
+$(B)\th8_policy.obj: $(HARPY_PLUGIN_DIR)\th8_policy.c $(S)\th8.h \
+	$(S)\th8_int.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_policy.c
 
@@ -943,11 +1006,16 @@ $(B)\th8_keyTest.obj: $(HARPY_PLUGIN_DIR)\th8_keyTest.c $(S)\th8.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_keyTest.c
 
-$(B)\th8_secure.obj: $(CRYPTOGRAPHY_PLUGIN_DIR)\th8_secure.c $(S)\th8.h $(S)\th8_util.h
+$(B)\th8_secure.obj: $(CRYPTOGRAPHY_PLUGIN_DIR)\th8_secure.c $(S)\th8.h \
+	$(S)\th8_int.h $(S)\th8_int_core.h $(S)\th8_meta_defs.h \
+	$(S)\th8_meta_libc.h $(S)\th8_meta_msvc.h $(S)\th8_meta_posix.h \
+	$(S)\th8_meta_win32.h $(S)\th8_plat.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(CRYPTOGRAPHY_PLUGIN_DIR)\th8_secure.c
 
-$(B)\th8_time.obj: $(HARPY_PLUGIN_DIR)\th8_time.c $(S)\th8.h $(S)\th8_util.h
+$(B)\th8_time.obj: $(HARPY_PLUGIN_DIR)\th8_time.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_meta_defs.h $(S)\th8_meta_libc.h $(S)\th8_meta_msvc.h \
+	$(S)\th8_meta_posix.h $(S)\th8_meta_win32.h $(S)\th8_plat.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_time.c
 !ENDIF
@@ -972,16 +1040,19 @@ $(B)\spilornis.obj: $(S)\th8_spilornis.h spilornis_vendor
 	$(CC) $(CFLAGS) $(SPILORNIS_CFLAGS) \
 	  /FIth8_spilornis.h /c /Fo$@ $(B)\Spilornis.c
 
-$(B)\th8StubInit.obj: $(S)\th8StubInit.c $(S)\th8.h $(S)\th8Decls.h
+$(B)\th8StubInit.obj: $(S)\th8StubInit.c $(S)\th8.h $(S)\th8_hash.h \
+	$(S)\th8_plugin.h $(S)\th8Decls.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8StubInit.c
 
 $(B)\th8InternalStubInit.obj: $(S)\th8InternalStubInit.c $(S)\th8.h \
-	    $(S)\th8_int.h $(S)\th8InternalDecls.h
+	$(S)\th8_int.h $(S)\th8_plugin.h $(S)\th8_spilornis.h $(S)\th8_vars.h \
+	$(S)\th8InternalDecls.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8InternalStubInit.c
 
-$(B)\th8StubLib.obj: $(S)\th8StubLib.c $(S)\th8.h $(S)\th8Decls.h
+$(B)\th8StubLib.obj: $(S)\th8StubLib.c $(S)\th8.h $(S)\th8_hash.h \
+	$(S)\th8_plugin.h $(S)\th8Decls.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8StubLib.c
 
@@ -995,15 +1066,22 @@ $(B)\ConvertUTF_v2.obj: $(UTF_DIR)\ConvertUTF_v2.c $(UTF_DIR)\ConvertUTF_v2.h
 # import library.
 #
 
-$(B)\th8sh.obj: $(S)\th8sh.c $(S)\th8_shell.h $(CORE_HDR)
+$(B)\th8sh.obj: $(S)\th8sh.c $(S)\th8.h $(S)\th8_mem.h $(S)\th8_meta_defs.h \
+	$(S)\th8_meta_libc.h $(S)\th8_shell.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS_APP) /c /Fo$@ $(S)\th8sh.c
 
-$(B)\th8_shell.obj: $(S)\th8_shell.c $(S)\th8_shell.h $(CORE_HDR)
+$(B)\th8_shell.obj: $(S)\th8_shell.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_mem.h $(S)\th8_meta_defs.h $(S)\th8_meta_libc.h \
+	$(S)\th8_meta_msvc.h $(S)\th8_meta_posix.h $(S)\th8_meta_win32.h \
+	$(S)\th8_shell.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS_APP) /c /Fo$@ $(S)\th8_shell.c
 
-$(B)\th8_shell_amal.obj: $(S)\th8_shell.c $(S)\th8_shell.h $(CORE_HDR)
+$(B)\th8_shell_amal.obj: $(S)\th8_shell.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_mem.h $(S)\th8_meta_defs.h $(S)\th8_meta_libc.h \
+	$(S)\th8_meta_msvc.h $(S)\th8_meta_posix.h $(S)\th8_meta_win32.h \
+	$(S)\th8_shell.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS_APP) /DTH8_BUILD_STATIC /c /Fo$@ $(S)\th8_shell.c
 
@@ -1071,7 +1149,11 @@ testlib: $(TESTLIB_TH8) $(TESTLIB_TCL)
 
 # TH8 test DLL (stubs-based).
 
-$(B)\th8_testlib_th8.obj: $(S)\test\th8_testlib.c $(S)\th8.h $(S)\th8Decls.h
+$(B)\th8_testlib_th8.obj: $(S)\test\th8_testlib.c $(S)\th8.h \
+	$(S)\test\th8_testlib.h $(S)\th8_hash.h $(S)\th8_int.h $(S)\th8_meta_defs.h \
+	$(S)\th8_meta_libc.h $(S)\th8_meta_msvc.h $(S)\th8_meta_posix.h \
+	$(S)\th8_meta_win32.h $(S)\th8_plugin.h $(S)\th8Decls.h \
+	$(S)\th8InternalDecls.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(TESTLIB_CFLAGS) /DTH8_TESTLIB_TH8 /DUSE_TH8_STUBS \
 	  /c /Fo$@ $(S)\test\th8_testlib.c
@@ -1081,7 +1163,11 @@ $(TESTLIB_TH8): $(B)\th8_testlib_th8.obj $(B)\ConvertUTF_v2.obj $(STUBS_LIB)
 
 # Tcl test DLL (stubs-based).
 
-$(B)\th8_testlib_tcl.obj: $(S)\test\th8_testlib.c $(S)\th8.h
+$(B)\th8_testlib_tcl.obj: $(S)\test\th8_testlib.c $(S)\th8.h \
+	$(S)\test\th8_testlib.h $(S)\th8_hash.h $(S)\th8_int.h $(S)\th8_meta_defs.h \
+	$(S)\th8_meta_libc.h $(S)\th8_meta_msvc.h $(S)\th8_meta_posix.h \
+	$(S)\th8_meta_win32.h $(S)\th8_plugin.h $(S)\th8Decls.h \
+	$(S)\th8InternalDecls.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(TESTLIB_CFLAGS) /DTH8_TESTLIB_TCL /DUSE_TCL_STUBS \
 	  /I$(TCL_INCLUDE) /c /Fo$@ $(S)\test\th8_testlib.c
@@ -1117,8 +1203,11 @@ SQLITE3_CFLAGS = $(CFLAGS) /I$(S)\sqlite3 /I$(SQLITE3_DIR) /DUSE_TH8_STUBS
 
 sqlite3-ext: stubs $(SQLITE3_EXT)
 
-$(B)\th8_sqlite3.obj: $(S)\sqlite3\th8_sqlite3.c $(S)\sqlite3\th8_sqlite3.h \
-    $(S)\th8.h $(S)\th8Decls.h $(SQLITE3_DIR)\sqlite3.h
+$(B)\th8_sqlite3.obj: $(S)\sqlite3\th8_sqlite3.c $(S)\th8.h \
+	$(S)\sqlite3\th8_sqlite3.h $(S)\th8_hash.h $(S)\th8_int.h \
+	$(S)\th8_meta_defs.h $(S)\th8_meta_libc.h $(S)\th8_meta_msvc.h \
+	$(S)\th8_meta_posix.h $(S)\th8_meta_win32.h $(S)\th8_plugin.h \
+	$(S)\th8Decls.h $(SQLITE3_DIR)\sqlite3.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(SQLITE3_CFLAGS) /c /Fo$@ $(S)\sqlite3\th8_sqlite3.c
 
@@ -1156,7 +1245,9 @@ BRIDGE_CFLAGS = $(CFLAGS) /wd4100
 
 # Bridge: TH8-in-Tcl mode (always buildable with bundled Tcl stubs).
 
-$(B)\th8_tcl_tclmode.obj: $(S)\test\th8_tcl.c $(S)\th8.h
+$(B)\th8_tcl_tclmode.obj: $(S)\test\th8_tcl.c $(S)\th8.h $(S)\test\th8_tcl.h \
+	$(S)\th8_hash.h $(S)\th8_meta_defs.h $(S)\th8_meta_libc.h $(S)\th8_plugin.h \
+	$(S)\th8Decls.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(BRIDGE_CFLAGS) /DTH8_TCL_BRIDGE_TCL \
 	  /I$(TCL_INCLUDE) /c /Fo$@ $(S)\test\th8_tcl.c
@@ -1177,7 +1268,9 @@ $(B)\th8_tcl_stubs.obj: $(B)\th8_tcl_stubs.c
 
 # Bridge: Tcl-in-TH8 mode (reverse stubs -- no tcl import library needed).
 
-$(B)\th8_tcl_th8mode.obj: $(S)\test\th8_tcl.c $(S)\th8.h $(S)\th8Decls.h
+$(B)\th8_tcl_th8mode.obj: $(S)\test\th8_tcl.c $(S)\th8.h $(S)\test\th8_tcl.h \
+	$(S)\th8_hash.h $(S)\th8_meta_defs.h $(S)\th8_meta_libc.h $(S)\th8_plugin.h \
+	$(S)\th8Decls.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(BRIDGE_CFLAGS) /DTH8_TCL_BRIDGE_TH8 /DUSE_TH8_STUBS \
 	  /c /Fo$@ $(S)\test\th8_tcl.c
@@ -1210,7 +1303,7 @@ $(B)\regex_amalg.c: regex_vendor
 	tclsh tools\regex_amalg.tcl $(B)\
 
 amalgamation: $(VERSIONHDR) $(B)\regex_amalg.c tommath_vendor spilornis_vendor
-	tclsh tools\mkamal.tcl -o $(AMAL_FILE)
+	tclsh tools\mkamal.tcl -line -o $(AMAL_FILE)
 	copy /Y $(S)\th8.h $(B)\th8.h
 
 $(B)\th8_amal.obj: amalgamation $(B)\th8.h
@@ -1265,9 +1358,20 @@ check-crt:
 # Mirrors the POSIX `audit` target.
 # ----------------------------------------------------------------
 
-audit:
+audit: check-deps
 	tclsh tools\audit_patterns.tcl source
 	tclsh tools\audit_patterns.tcl crt-objects $(B)
+
+#
+# Header-dependency audit.  Verifies that every object dependency line
+# in Makefile AND Makefile.msc lists exactly the in-tree (src/) headers
+# its source transitively #includes, keeping the explicit dependency
+# lists in lock-step with the real include graph (guards the Bug 62
+# mixed-layout / stale-offset class; see FINDINGS.md Finding 036).
+# Compiler-free: uses the static #include closure.
+#
+check-deps:
+	tclsh tools\check_deps.tcl
 
 #
 # Requirements-marker audit (tools/mkreq.tcl).  Catches:

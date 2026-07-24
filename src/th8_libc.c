@@ -53,6 +53,63 @@
 /*
  *----------------------------------------------------------------------
  *
+ * th8LibcHeapCheck (macOS, debug) --
+ *
+ *	Validate the default malloc zone's internal consistency -- the
+ *	system-malloc analogue of Win32 HeapValidate -- before each
+ *	libc xMalloc / xRealloc / xFree.  Gated on TH8_HEAP_CHECKS
+ *	(defined for debug builds).  Detects allocator-metadata
+ *	corruption (free-list / chunk-header damage) at the earliest
+ *	allocation boundary after it occurs; on failure it names the
+ *	operation and aborts so the fault is caught near its source.
+ *
+ *	Cost is O(heap) per check, so the frequency is tunable at
+ *	runtime via TH8_HEAP_CHECK_EVERY (check 1 in N calls; default
+ *	1 = every call).  We pass malloc_default_zone(), not NULL:
+ *	NULL checks ALL zones, but TH8's libc allocator lives in the
+ *	default (initial) zone.
+ *
+ *----------------------------------------------------------------------
+ */
+
+#  if defined(TH8_HEAP_CHECKS) && defined(__APPLE__)
+
+#    ifndef TH8_HEAP_CHECK_EVERY
+#      define TH8_HEAP_CHECK_EVERY 1
+#    endif
+
+static void
+th8LibcHeapCheck(const char *zWhere)
+{
+    static unsigned long nEvery = 0; /* 0 == not yet resolved */
+    static unsigned long nCount = 0;
+
+    if (nEvery == 0) {
+	const char *zEnv = getenv("TH8_HEAP_CHECK_EVERY");
+	unsigned long v = zEnv ? (unsigned long)strtoul(zEnv, NULL, 10) : 0;
+
+	nEvery = v ? v : (unsigned long)TH8_HEAP_CHECK_EVERY;
+    }
+    if ((++nCount % nEvery) != 0) return;
+    if (!malloc_zone_check(malloc_default_zone())) {
+	fprintf(
+	    stderr,
+	    "TH8_HEAP_CHECKS: default-zone corruption detected before "
+	    "%s (op #%lu)\n",
+	    zWhere, nCount);
+	fflush(stderr);
+	abort();
+    }
+}
+#    define TH8_LIBC_HEAP_CHECK(w) th8LibcHeapCheck((w))
+#  else
+#    define TH8_LIBC_HEAP_CHECK(w) ((void)0)
+#  endif
+
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8LibcMalloc --
  *
  *	Allocate zero-initialized memory via calloc.  Used as the
@@ -77,6 +134,7 @@ th8LibcMalloc(Th8_Interp *interp, void *pCtx, size_t nByte)
 {
     (void)interp;
     (void)pCtx;
+    TH8_LIBC_HEAP_CHECK("xMalloc");
     return th8_calloc(1, nByte);
 }
 
@@ -106,6 +164,7 @@ th8LibcRealloc(Th8_Interp *interp, void *pCtx, void *p, size_t nByte)
 {
     (void)interp;
     (void)pCtx;
+    TH8_LIBC_HEAP_CHECK("xRealloc");
     return th8_realloc(p, nByte);
 }
 
@@ -135,6 +194,7 @@ th8LibcFree(Th8_Interp *interp, void *pCtx, void *p)
 {
     (void)interp;
     (void)pCtx;
+    TH8_LIBC_HEAP_CHECK("xFree");
     th8_free(p);
 }
 

@@ -505,6 +505,26 @@ runTest {test taint-11.1 {
 } -result {1 none}}
 
 ###############################################################################
+
+runTest {test taint-11.2 {
+  A tainted substituted command name is ALSO rejected on the NRE /
+  command-substitution dispatch path.  The command text contains "["
+  (the "[::th8testlib::taint set]" substitution), which forces
+  th8NRCmdDispatch -- whose tainted-command-name check was previously
+  missing (Bug 64).  Rejected with no side effect, matching taint-11.1
+  (the synchronous path).
+} -constraints {
+    loadLib th8
+} -setup {
+  set ::taint_cmd_probe none
+} -body {
+  set rc [catch {[::th8testlib::taint set] ::taint_cmd_probe hit} msg]
+  list $rc $::taint_cmd_probe
+} -cleanup {
+  unset -nocomplain ::taint_cmd_probe rc msg
+} -result {1 none}}
+
+###############################################################################
 #
 # Section 12 -- dict derive commands retain the source dict's taint
 #
@@ -829,6 +849,112 @@ runTest {test taint-16.1 {
 } -body {
   ::th8testlib::result_sensitive_tainted secret
 } -result {1}}
+
+###############################################################################
+#
+# Section 17 -- lappend on a tainted variable: length-safe and
+# taint-preserving.  The structural-validation walk must mask the
+# tagged length before using it as a scan bound (a tagged length is
+# ~256 MiB and would over-read), while the append preserves taint.
+#
+###############################################################################
+
+runTest {test taint-17.1 {
+  lappend onto a tainted variable produces the correct list AND keeps
+  the result tainted.  The validation walk must not over-read on the
+  tagged length.
+} -constraints {
+    loadLib th8
+} -setup {
+  set v [::th8testlib::taint {a b c}]
+} -body {
+  lappend v d
+  list $v [string is tainted -strict $v]
+} -cleanup {
+  unset -nocomplain v
+} -result {{a b c d} 1}}
+
+###############################################################################
+
+runTest {test taint-17.2 {
+  lappend of a clean value onto a clean variable stays clean (no
+  spurious taint from the length-masking change).
+} -constraints {
+    loadLib th8
+} -setup {
+  set v {a b}
+} -body {
+  lappend v c
+  list $v [string is tainted -strict $v]
+} -cleanup {
+  unset -nocomplain v
+} -result {{a b c} 0}}
+
+###############################################################################
+#
+# Section 18 -- the [list] element cache must not launder taint.  The
+# cache is keyed and stored on RAW element bytes (taint-insensitive);
+# the aggregate element taint is re-applied to the result on every
+# hit/miss.  A tagged element length must never reach the cache's
+# hash / allocation / copy as a raw byte count.
+#
+# COVERAGE NOTE: these tests detect the taint-LAUNDERING regression
+# (masking the physical lengths but forgetting to re-apply the aggregate
+# taint) on any build -- 18.1/18.2 then fail because a cached value
+# crosses taint states.  The MEMORY-SAFETY regression (feeding the
+# tagged length straight to the cache hash/alloc/copy as a byte count)
+# is caught under AddressSanitizer only: on a normal build the ~256 MiB
+# over-read lands in adjacent mapped heap without faulting and the
+# correct result still comes from the Th8_ListAppend fallback, so the
+# assertion passes.  The sanitize suite runs taint.tcl, so the over-read
+# is covered there.
+#
+###############################################################################
+
+runTest {test taint-18.1 {
+  A clean [list] is cached, then a [list] of the SAME bytes with a
+  tainted element must still be tainted -- the clean cache entry must
+  not launder the tainted call.
+} -constraints {
+    loadLib th8
+} -body {
+  set clean [list alpha beta gamma]
+  set dirty [list [::th8testlib::taint alpha] beta gamma]
+  list [string is tainted -strict $clean] [string is tainted -strict $dirty]
+} -cleanup {
+  unset -nocomplain clean dirty
+} -result {0 1}}
+
+###############################################################################
+
+runTest {test taint-18.2 {
+  A tainted [list] is cached, then a [list] of the SAME bytes with all
+  clean elements must be clean -- the tainted call must not contaminate
+  the cache.
+} -constraints {
+    loadLib th8
+} -body {
+  set dirty [list [::th8testlib::taint one] two three]
+  set clean [list one two three]
+  list [string is tainted -strict $dirty] [string is tainted -strict $clean]
+} -cleanup {
+  unset -nocomplain dirty clean
+} -result {1 0}}
+
+###############################################################################
+
+runTest {test taint-18.3 {
+  A [list] with any tainted element is tainted regardless of position,
+  and the joined bytes are correct (no over-read/over-copy on the
+  tagged element length).
+} -constraints {
+    loadLib th8
+} -body {
+  set r [list a [::th8testlib::taint bcd] e]
+  list $r [string is tainted -strict $r]
+} -cleanup {
+  unset -nocomplain r
+} -result {{a bcd e} 1}}
 
 ###############################################################################
 

@@ -365,7 +365,7 @@ ENABLE_MIMALLOC ?= 1
 
 ifeq ($(ENABLE_MIMALLOC),1)
   MIMALLOC_DEFS    = -DTH8_USE_MIMALLOC
-  MIMALLOC_INC     = -Iexternals/mimalloc/include
+  MIMALLOC_INC     = -Iexternals/mimalloc/vendor/include
   MIMALLOC_OBJ     = $(B)th8_mimalloc.o $(B)mimalloc_static.o
   MIMALLOC_OBJ_PIC = $(B)th8_mimalloc.pic.o $(B)mimalloc_static.pic.o
 else
@@ -530,7 +530,7 @@ ifeq ($(PLUGIN_VARIABLES),1)
 endif
 
 CFLAGS_RELEASE = $(CFLAGS_BASE) $(REGEXP_DEFS) $(CURL_DEFS) $(BIGINT_DEFS) $(CRYPTOGRAPHY_DEFS) $(UNBOUND_DEFS) $(EXPR_DEFS) $(LOAD_DEFS) $(VARIABLES_DEFS) $(PLUGIN_DEFS) $(MIMALLOC_DEFS) $(BESTLINE_DEFS) $(TEST_DEFS) $(FAULT_DEFS) $(HARDEN_CFLAGS) -O2 -DTH8_BENCHMARKING -DNDEBUG
-CFLAGS_DEBUG   = $(CFLAGS_BASE) $(REGEXP_DEFS) $(CURL_DEFS) $(BIGINT_DEFS) $(CRYPTOGRAPHY_DEFS) $(UNBOUND_DEFS) $(EXPR_DEFS) $(LOAD_DEFS) $(VARIABLES_DEFS) $(PLUGIN_DEFS) $(MIMALLOC_DEFS) $(BESTLINE_DEFS) $(TEST_DEFS) $(FAULT_DEFS) $(HARDEN_CFLAGS) -g -O0 -DTH8_BENCHMARKING -DTH8_DEBUG
+CFLAGS_DEBUG   = $(CFLAGS_BASE) $(REGEXP_DEFS) $(CURL_DEFS) $(BIGINT_DEFS) $(CRYPTOGRAPHY_DEFS) $(UNBOUND_DEFS) $(EXPR_DEFS) $(LOAD_DEFS) $(VARIABLES_DEFS) $(PLUGIN_DEFS) $(MIMALLOC_DEFS) $(BESTLINE_DEFS) $(TEST_DEFS) $(FAULT_DEFS) $(HARDEN_CFLAGS) -g -O0 -DTH8_BENCHMARKING -DTH8_DEBUG -DTH8_HEAP_CHECKS
 
 EXTRA_CFLAGS  ?=
 EXTRA_LDFLAGS ?=
@@ -798,7 +798,8 @@ $(STATIC_LIB): $(CORE_OBJ) | $(B)
 
 stubs: $(STUBS_LIB)
 
-$(B)th8StubLib.o: $(S)th8StubLib.c $(S)th8.h $(S)th8Decls.h | $(B)
+$(B)th8StubLib.o: $(S)th8StubLib.c $(S)th8.h $(S)th8_hash.h $(S)th8_plugin.h \
+	    $(S)th8Decls.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -fPIC -DUSE_TH8_STUBS -c -o $@ $(S)th8StubLib.c
 
 $(STUBS_LIB): $(B)th8StubLib.o | $(B)
@@ -866,11 +867,14 @@ $(SHELL_BIN): $(SHELL_DEPS) | $(B)
 	  $(SHELL_RPATH) -o $@ $(B)th8sh.o $(B)th8_shell.o \
 	  $(B)bestline.o $(TH8_LIBS)
 
-$(B)th8sh.o: $(S)th8sh.c $(S)th8_shell.h $(CORE_HDR) | $(B)
+$(B)th8sh.o: $(S)th8sh.c $(S)th8.h $(S)th8_mem.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_shell.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) \
 	  -c -o $@ $(S)th8sh.c
 
-$(B)th8_shell.o: $(S)th8_shell.c $(S)th8_shell.h $(CORE_HDR) | bestline_vendor $(B)
+$(B)th8_shell.o: $(S)th8_shell.c $(S)th8.h $(S)th8_int.h $(S)th8_mem.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_meta_msvc.h \
+	    $(S)th8_meta_posix.h $(S)th8_meta_win32.h $(S)th8_shell.h | bestline_vendor $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) \
 	  -I$(BESTLINE_BUILD) -c -o $@ $(S)th8_shell.c
 
@@ -1145,178 +1149,237 @@ eagletest:
 # Static objects (no -fPIC).
 #
 
-$(B)th8_core.o: $(S)th8_core.c $(CORE_HDR) | tommath_vendor spilornis_vendor $(B)
+$(B)th8_core.o: $(S)th8_core.c $(S)th8.h $(S)th8_bigint.h $(S)th8_int.h \
+	    $(S)th8_int_core.h $(S)th8_mem.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_posix.h $(S)th8_plat.h \
+	    $(S)th8_plugin.h $(S)th8_spilornis.h $(S)th8_vars.h | tommath_vendor spilornis_vendor $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_core.c
 
-$(B)th8_plat.o: $(S)th8_plat.c $(CORE_HDR) | $(B)
+$(B)th8_plat.o: $(S)th8_plat.c $(S)th8.h $(S)th8_int.h $(S)th8_int_core.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_meta_posix.h \
+	    $(S)th8_plat.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_plat.c
 
-$(B)th8_hash.o: $(S)th8_hash.c $(CORE_HDR) | $(B)
+$(B)th8_hash.o: $(S)th8_hash.c $(S)th8.h $(S)th8_hash.h $(S)th8_int.h \
+	    $(S)th8_mem.h $(S)th8_meta_defs.h $(S)th8_meta_libc.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_hash.c
 
-$(B)th8_hash_standalone.o: $(S)th8_hash.c $(S)th8_hash.h | $(B)
+$(B)th8_hash_standalone.o: $(S)th8_hash.c $(S)th8.h $(S)th8_hash.h \
+	    $(S)th8_int.h $(S)th8_mem.h $(S)th8_meta_defs.h $(S)th8_meta_libc.h | $(B)
 	$(CC) $(CFLAGS) -DTH8_HASH_STANDALONE -I$(S) -c -o $@ $(S)th8_hash.c
 
-$(B)th8_util.o: $(S)th8_util.c $(CORE_HDR) | $(B)
+$(B)th8_util.o: $(S)th8_util.c $(S)th8.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_util.c
 
-$(B)th8_base64.o: $(S)th8_base64.c $(S)th8.h $(S)th8_util.h | $(B)
+$(B)th8_base64.o: $(S)th8_base64.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_base64.c
 
-$(B)th8_expr.o: $(S)th8_expr.c $(S)th8.h $(S)th8_int.h $(S)th8_expr.h | tommath_vendor $(B)
+$(B)th8_expr.o: $(S)th8_expr.c $(S)th8.h $(S)th8_bigint.h $(S)th8_expr.h \
+	    $(S)th8_int.h $(S)th8_int_core.h $(S)th8_plat.h | tommath_vendor $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_expr.c
 
-$(B)th8_expr.pic.o: $(S)th8_expr.c $(S)th8.h $(S)th8_int.h $(S)th8_expr.h | tommath_vendor $(B)
+$(B)th8_expr.pic.o: $(S)th8_expr.c $(S)th8.h $(S)th8_bigint.h $(S)th8_expr.h \
+	    $(S)th8_int.h $(S)th8_int_core.h $(S)th8_plat.h | tommath_vendor $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_expr.c
 
-$(B)th8_load.o: $(S)th8_load.c $(S)th8.h $(S)th8_int.h $(S)th8_int_core.h | $(B)
+$(B)th8_load.o: $(S)th8_load.c $(S)th8.h $(S)th8_int.h $(S)th8_int_core.h \
+	    $(S)th8_plat.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_load.c
 
-$(B)th8_load.pic.o: $(S)th8_load.c $(S)th8.h $(S)th8_int.h $(S)th8_int_core.h | $(B)
+$(B)th8_load.pic.o: $(S)th8_load.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_int_core.h $(S)th8_plat.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_load.c
 
-$(B)th8_vars.o: $(S)th8_vars.c $(S)th8.h $(S)th8_int.h $(S)th8_int_core.h $(S)th8_vars.h | $(B)
+$(B)th8_vars.o: $(S)th8_vars.c $(S)th8.h $(S)th8_int.h $(S)th8_int_core.h \
+	    $(S)th8_plat.h $(S)th8_vars.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_vars.c
 
-$(B)th8_vars.pic.o: $(S)th8_vars.c $(S)th8.h $(S)th8_int.h $(S)th8_int_core.h $(S)th8_vars.h | $(B)
+$(B)th8_vars.pic.o: $(S)th8_vars.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_int_core.h $(S)th8_plat.h $(S)th8_vars.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_vars.c
 
 $(B)th8_glob.o: $(S)th8_glob.c $(S)th8.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_glob.c
 
-$(B)th8_math.o: $(S)th8_math.c $(CORE_HDR) | tommath_vendor $(B)
+$(B)th8_math.o: $(S)th8_math.c $(S)th8.h $(S)th8_bigint.h $(S)th8_int.h | tommath_vendor $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_math.c
 
-$(B)th8_cache.o: $(S)th8_cache.c $(CORE_HDR) $(S)th8_int.h | $(B)
+$(B)th8_cache.o: $(S)th8_cache.c $(S)th8.h $(S)th8_hash.h $(S)th8_int.h \
+	    $(S)th8_int_core.h $(S)th8_meta_defs.h $(S)th8_meta_libc.h \
+	    $(S)th8_plat.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_cache.c
 
-$(B)th8_channel.o: $(S)th8_channel.c $(CORE_HDR) $(S)th8_int.h | $(B)
+$(B)th8_channel.o: $(S)th8_channel.c $(S)th8.h $(S)th8_hash.h $(S)th8_int.h \
+	    $(S)th8_int_core.h $(S)th8_plat.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_channel.c
 
-$(B)th8_attrflags.o: $(S)plugins/harpy/th8_attrflags.c $(S)th8.h | $(B)
+$(B)th8_attrflags.o: $(S)plugins/harpy/th8_attrflags.c $(S)th8.h \
+	    $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/harpy/th8_attrflags.c
 
-$(B)th8_attrflags.pic.o: $(S)plugins/harpy/th8_attrflags.c $(S)th8.h | $(B)
+$(B)th8_attrflags.pic.o: $(S)plugins/harpy/th8_attrflags.c $(S)th8.h \
+	    $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/harpy/th8_attrflags.c
 
-$(B)th8_plugin.o: $(S)th8_plugin.c $(S)th8_plugin.h $(S)th8.h | $(B)
+$(B)th8_plugin.o: $(S)th8_plugin.c $(S)th8.h $(S)th8_int.h $(S)th8_plugin.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_plugin.c
 
-$(B)th8_plugin.pic.o: $(S)th8_plugin.c $(S)th8_plugin.h $(S)th8.h | $(B)
+$(B)th8_plugin.pic.o: $(S)th8_plugin.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_plugin.c
 
-$(B)th8_binary.o: $(S)plugins/th8_binary.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_binary.o: $(S)plugins/th8_binary.c $(S)th8.h $(S)th8_bigint.h \
+	    $(S)th8_int.h $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_binary.c
 
-$(B)th8_binary.pic.o: $(S)plugins/th8_binary.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_binary.pic.o: $(S)plugins/th8_binary.c $(S)th8.h $(S)th8_bigint.h \
+	    $(S)th8_int.h $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_binary.c
 
-$(B)th8_control.o: $(S)plugins/th8_control.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_control.o: $(S)plugins/th8_control.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_control.c
 
-$(B)th8_control.pic.o: $(S)plugins/th8_control.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_control.pic.o: $(S)plugins/th8_control.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_control.c
 
-$(B)th8_events.o: $(S)plugins/th8_events.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_events.o: $(S)plugins/th8_events.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_events.c
 
-$(B)th8_events.pic.o: $(S)plugins/th8_events.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_events.pic.o: $(S)plugins/th8_events.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_events.c
 
-$(B)th8_expressions.o: $(S)plugins/th8_expressions.c $(S)th8.h $(S)th8_plugin.h | $(B)
+$(B)th8_expressions.o: $(S)plugins/th8_expressions.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_expressions.c
 
-$(B)th8_expressions.pic.o: $(S)plugins/th8_expressions.c $(S)th8.h $(S)th8_plugin.h | $(B)
+$(B)th8_expressions.pic.o: $(S)plugins/th8_expressions.c $(S)th8.h \
+	    $(S)th8_int.h $(S)th8_plugin.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_expressions.c
 
-$(B)th8_extensibility.o: $(S)plugins/th8_extensibility.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_extensibility.o: $(S)plugins/th8_extensibility.c $(S)th8.h \
+	    $(S)th8_int.h $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_extensibility.c
 
-$(B)th8_extensibility.pic.o: $(S)plugins/th8_extensibility.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_extensibility.pic.o: $(S)plugins/th8_extensibility.c $(S)th8.h \
+	    $(S)th8_int.h $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_extensibility.c
 
-$(B)th8_filesystems.o: $(S)plugins/th8_filesystems.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_filesystems.o: $(S)plugins/th8_filesystems.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_filesystems.c
 
-$(B)th8_filesystems.pic.o: $(S)plugins/th8_filesystems.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_filesystems.pic.o: $(S)plugins/th8_filesystems.c $(S)th8.h \
+	    $(S)th8_int.h $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_plugin.h \
+	    $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_filesystems.c
 
-$(B)th8_formatting.o: $(S)plugins/th8_formatting.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_formatting.o: $(S)plugins/th8_formatting.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_formatting.c
 
-$(B)th8_formatting.pic.o: $(S)plugins/th8_formatting.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_formatting.pic.o: $(S)plugins/th8_formatting.c $(S)th8.h \
+	    $(S)th8_int.h $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_formatting.c
 
-$(B)th8_introspection.o: $(S)plugins/th8_introspection.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_introspection.o: $(S)plugins/th8_introspection.c $(S)th8.h \
+	    $(S)th8_int.h $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_introspection.c
 
-$(B)th8_introspection.pic.o: $(S)plugins/th8_introspection.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_introspection.pic.o: $(S)plugins/th8_introspection.c $(S)th8.h \
+	    $(S)th8_int.h $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_introspection.c
 
-$(B)th8_io.o: $(S)plugins/th8_io.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_io.o: $(S)plugins/th8_io.c $(S)th8.h $(S)th8_int.h $(S)th8_plugin.h \
+	    $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_io.c
 
-$(B)th8_io.pic.o: $(S)plugins/th8_io.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_io.pic.o: $(S)plugins/th8_io.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_io.c
 
-$(B)th8_lists.o: $(S)plugins/th8_lists.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_lists.o: $(S)plugins/th8_lists.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_lists.c
 
-$(B)th8_lists.pic.o: $(S)plugins/th8_lists.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_lists.pic.o: $(S)plugins/th8_lists.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_lists.c
 
-$(B)th8_looping.o: $(S)plugins/th8_looping.c $(S)th8.h $(S)th8_plugin.h | $(B)
+$(B)th8_looping.o: $(S)plugins/th8_looping.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_looping.c
 
-$(B)th8_looping.pic.o: $(S)plugins/th8_looping.c $(S)th8.h $(S)th8_plugin.h | $(B)
+$(B)th8_looping.pic.o: $(S)plugins/th8_looping.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_looping.c
 
-$(B)th8_management.o: $(S)plugins/th8_management.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_management.o: $(S)plugins/th8_management.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_management.c
 
-$(B)th8_management.pic.o: $(S)plugins/th8_management.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_management.pic.o: $(S)plugins/th8_management.c $(S)th8.h \
+	    $(S)th8_int.h $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_management.c
 
-$(B)th8_procedures.o: $(S)plugins/th8_procedures.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_procedures.o: $(S)plugins/th8_procedures.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_procedures.c
 
-$(B)th8_procedures.pic.o: $(S)plugins/th8_procedures.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_procedures.pic.o: $(S)plugins/th8_procedures.c $(S)th8.h \
+	    $(S)th8_int.h $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_procedures.c
 
-$(B)th8_strings.o: $(S)plugins/th8_strings.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_strings.o: $(S)plugins/th8_strings.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_strings.c
 
-$(B)th8_strings.pic.o: $(S)plugins/th8_strings.c $(S)th8.h $(S)th8_int.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_strings.pic.o: $(S)plugins/th8_strings.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_strings.c
 
-$(B)th8_timekeeping.o: $(S)plugins/th8_timekeeping.c $(S)th8.h $(S)th8_plugin.h | $(B)
+$(B)th8_timekeeping.o: $(S)plugins/th8_timekeeping.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_timekeeping.c
 
-$(B)th8_timekeeping.pic.o: $(S)plugins/th8_timekeeping.c $(S)th8.h $(S)th8_plugin.h | $(B)
+$(B)th8_timekeeping.pic.o: $(S)plugins/th8_timekeeping.c $(S)th8.h \
+	    $(S)th8_int.h $(S)th8_plugin.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_timekeeping.c
 
-$(B)th8_variables.o: $(S)plugins/th8_variables.c $(S)th8.h $(S)th8_int.h $(S)th8_vars.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_variables.o: $(S)plugins/th8_variables.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h $(S)th8_vars.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_variables.c
 
-$(B)th8_variables.pic.o: $(S)plugins/th8_variables.c $(S)th8.h $(S)th8_int.h $(S)th8_vars.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_variables.pic.o: $(S)plugins/th8_variables.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h $(S)th8_vars.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_variables.c
 
-$(B)th8_lang.o: $(S)th8_lang.c $(CORE_HDR) | $(B)
+$(B)th8_lang.o: $(S)th8_lang.c $(S)th8.h $(S)th8_int.h $(S)th8_plugin.h \
+	    $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_lang.c
 
-$(B)th8_xlib.o: $(S)th8_xlib.c $(S)th8.h | $(B)
+$(B)th8_xlib.o: $(S)th8_xlib.c $(S)th8.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_xlib.c
 
-$(B)th8_fault.o: $(S)th8_fault.c $(S)th8.h | $(B)
+$(B)th8_fault.o: $(S)th8_fault.c $(S)th8.h $(S)th8_int.h $(S)th8_int_core.h \
+	    $(S)th8_plat.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_fault.c
 
-$(B)th8_fault.pic.o: $(S)th8_fault.c $(S)th8.h | $(B)
+$(B)th8_fault.pic.o: $(S)th8_fault.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_int_core.h $(S)th8_plat.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_fault.c
 
-$(B)th8_env.o: $(S)th8_env.c $(S)th8.h | $(B)
+$(B)th8_env.o: $(S)th8_env.c $(S)th8.h $(S)th8_int.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_msvc.h $(S)th8_meta_posix.h \
+	    $(S)th8_meta_win32.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_env.c
 
-$(B)th8_env.pic.o: $(S)th8_env.c $(S)th8.h | $(B)
+$(B)th8_env.pic.o: $(S)th8_env.c $(S)th8.h $(S)th8_int.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_msvc.h $(S)th8_meta_posix.h \
+	    $(S)th8_meta_win32.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_env.c
 
 $(B)th8_mem.o: $(S)th8_mem.c $(S)th8.h $(S)th8_int.h | $(B)
@@ -1325,60 +1388,86 @@ $(B)th8_mem.o: $(S)th8_mem.c $(S)th8.h $(S)th8_int.h | $(B)
 $(B)th8_mem.pic.o: $(S)th8_mem.c $(S)th8.h $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_mem.c
 
-$(B)th8_regex.o: $(S)plugins/regexp/th8_regex.c $(CORE_HDR) | $(B)
+$(B)th8_regex.o: $(S)plugins/regexp/th8_regex.c $(S)th8.h \
+	    $(S)plugins/regexp/regex_th8.h $(S)th8_int.h $(S)th8_plugin.h \
+	    $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/regexp/th8_regex.c
 
-$(B)th8_nullio.o: $(S)th8_nullio.c $(S)th8.h | $(B)
+$(B)th8_nullio.o: $(S)th8_nullio.c $(S)th8.h $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_nullio.c
 
 $(B)th8_ctime.o: $(S)th8_ctime.c $(S)th8.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_ctime.c
 
 ifeq ($(ENABLE_LIBCURL),1)
-$(B)th8_curl.o: $(S)th8_curl.c $(S)th8.h | $(B)
+$(B)th8_curl.o: $(S)th8_curl.c $(S)th8.h $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_curl.c
 endif
 
 ifeq ($(ENABLE_UNBOUND),1)
-$(B)th8_unbound.o: $(S)th8_unbound.c $(S)th8.h $(S)th8_unbound.h | $(B)
+$(B)th8_unbound.o: $(S)th8_unbound.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_plat.h \
+	    $(S)th8_unbound.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_unbound.c
 
-$(B)th8_unbound.pic.o: $(S)th8_unbound.c $(S)th8.h $(S)th8_unbound.h | $(B)
+$(B)th8_unbound.pic.o: $(S)th8_unbound.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_plat.h \
+	    $(S)th8_unbound.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -fPIC -c -o $@ $(S)th8_unbound.c
 endif
 
 ifeq ($(ENABLE_MIMALLOC),1)
-MI_SRC = externals/mimalloc/src
-MI_INC = externals/mimalloc/include
+MI_SRC = externals/mimalloc/vendor/src
+MI_INC = externals/mimalloc/vendor/include
 #
 # mimalloc's static.c includes all source files.  We suppress
 # warnings that conflict with TH8's -pedantic -Wall flags since
 # mimalloc uses GCC/Clang extensions internally.
 #
-MI_CFLAGS = -std=c11 -O2 -DNDEBUG -DMI_STATIC_LIB \
+#
+# Debug builds (-DTH8_DEBUG present in CFLAGS) compile mimalloc with the
+# maximal heap-corruption detection and diagnostics: MI_SECURE=5 (its
+# highest level -- per-page guard pages, allocation randomization,
+# encoded free lists checked on every free, double-free detection, and
+# metadata guard pages), MI_DEBUG=3 (extensive internal invariant
+# checking on every operation), and MI_GUARDED (sampled guard pages
+# behind allocations).  Expensive, but appropriate for hunting heap
+# corruption.  Release keeps -O2 -DNDEBUG.
+#
+ifneq (,$(findstring TH8_DEBUG,$(CFLAGS)))
+  MI_MODE_FLAGS = -O1 -g -DMI_SECURE=5 -DMI_DEBUG=3 -DMI_GUARDED=1
+else
+  MI_MODE_FLAGS = -O2 -DNDEBUG
+endif
+MI_CFLAGS = -std=c11 $(MI_MODE_FLAGS) -DMI_STATIC_LIB \
 	    -I$(MI_INC) -I$(MI_SRC) \
 	    -Wno-pedantic -Wno-long-long -Wno-unused-parameter \
 	    -Wno-strict-prototypes -Wno-missing-prototypes \
 	    -Wno-old-style-definition
 
-$(B)mimalloc_static.o: $(MI_SRC)/static.c | $(B)
+# NB: depend on Makefile so that changes to MI_CFLAGS / MI_MODE_FLAGS (the
+# mimalloc security/debug level) force a recompile.  Without this, editing the
+# flags and running an incremental build silently reuses a stale object built
+# with the old level -- which produces confusing ABI/assertion mismatches.
+$(B)mimalloc_static.o: $(MI_SRC)/static.c Makefile | $(B)
 	$(CC) $(MI_CFLAGS) -c -o $@ $(MI_SRC)/static.c
 
-$(B)mimalloc_static.pic.o: $(MI_SRC)/static.c | $(B)
+$(B)mimalloc_static.pic.o: $(MI_SRC)/static.c Makefile | $(B)
 	$(CC) $(MI_CFLAGS) -fPIC -c -o $@ $(MI_SRC)/static.c
 
-$(B)th8_mimalloc.o: $(S)th8_mimalloc.c $(S)th8.h | $(B)
+$(B)th8_mimalloc.o: $(S)th8_mimalloc.c $(S)th8.h $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_mimalloc.c
 
-$(B)th8_mimalloc.pic.o: $(S)th8_mimalloc.c $(S)th8.h | $(B)
+$(B)th8_mimalloc.pic.o: $(S)th8_mimalloc.c $(S)th8.h $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_mimalloc.c
 endif
 
 ifeq ($(ENABLE_BIGINT),1)
-$(B)th8_bigint.o: $(S)th8_bigint.c $(S)th8.h $(S)th8_bigint.h | tommath_vendor $(B)
+$(B)th8_bigint.o: $(S)th8_bigint.c $(S)th8.h $(S)th8_bigint.h $(S)th8_int.h | tommath_vendor $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_bigint.c
 
-$(B)th8_bigint.pic.o: $(S)th8_bigint.c $(S)th8.h $(S)th8_bigint.h | tommath_vendor $(B)
+$(B)th8_bigint.pic.o: $(S)th8_bigint.c $(S)th8.h $(S)th8_bigint.h \
+	    $(S)th8_int.h | tommath_vendor $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_bigint.c
 
 $(B)tommath_amalg.c: externals/tommath/vendor/tommath.h tools/tommath_amalg.tcl | tommath_vendor $(B)
@@ -1392,22 +1481,26 @@ $(B)tommath_amalg.pic.o: $(B)tommath_amalg.c | $(B)
 endif
 
 ifeq ($(ENABLE_CRYPTOGRAPHY),1)
-$(B)th8_snk.o: $(S)plugins/harpy/th8_snk.c $(S)th8.h $(S)th8_util.h | $(B)
+$(B)th8_snk.o: $(S)plugins/harpy/th8_snk.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/harpy/th8_snk.c
 
-$(B)th8_snk.pic.o: $(S)plugins/harpy/th8_snk.c $(S)th8.h $(S)th8_util.h | $(B)
+$(B)th8_snk.pic.o: $(S)plugins/harpy/th8_snk.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/harpy/th8_snk.c
 
-$(B)th8_harpy.o: $(S)plugins/harpy/th8_harpy.c $(S)th8.h $(S)th8_util.h | $(B)
+$(B)th8_harpy.o: $(S)plugins/harpy/th8_harpy.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/harpy/th8_harpy.c
 
-$(B)th8_harpy.pic.o: $(S)plugins/harpy/th8_harpy.c $(S)th8.h $(S)th8_util.h | $(B)
+$(B)th8_harpy.pic.o: $(S)plugins/harpy/th8_harpy.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/harpy/th8_harpy.c
 
-$(B)th8_policy.o: $(S)plugins/harpy/th8_policy.c $(S)th8.h | $(B)
+$(B)th8_policy.o: $(S)plugins/harpy/th8_policy.c $(S)th8.h $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/harpy/th8_policy.c
 
-$(B)th8_policy.pic.o: $(S)plugins/harpy/th8_policy.c $(S)th8.h | $(B)
+$(B)th8_policy.pic.o: $(S)plugins/harpy/th8_policy.c $(S)th8.h $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/harpy/th8_policy.c
 
 $(B)th8_keyRoot.o: $(S)plugins/harpy/th8_keyRoot.c $(S)th8.h | $(B)
@@ -1440,34 +1533,52 @@ $(B)th8_keyTest.o: $(S)plugins/harpy/th8_keyTest.c $(S)th8.h | $(B)
 $(B)th8_keyTest.pic.o: $(S)plugins/harpy/th8_keyTest.c $(S)th8.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/harpy/th8_keyTest.c
 
-$(B)th8_secure.o: $(S)plugins/crypto/th8_secure.c $(S)th8.h $(S)th8_util.h | $(B)
+$(B)th8_secure.o: $(S)plugins/crypto/th8_secure.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_int_core.h $(S)th8_meta_defs.h $(S)th8_meta_libc.h \
+	    $(S)th8_meta_msvc.h $(S)th8_meta_posix.h $(S)th8_meta_win32.h \
+	    $(S)th8_plat.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/crypto/th8_secure.c
 
-$(B)th8_secure.pic.o: $(S)plugins/crypto/th8_secure.c $(S)th8.h $(S)th8_util.h | $(B)
+$(B)th8_secure.pic.o: $(S)plugins/crypto/th8_secure.c $(S)th8.h \
+	    $(S)th8_int.h $(S)th8_int_core.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_msvc.h $(S)th8_meta_posix.h \
+	    $(S)th8_meta_win32.h $(S)th8_plat.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/crypto/th8_secure.c
 
-$(B)th8_protect.o: $(S)th8_protect.c $(S)th8.h | $(B)
+$(B)th8_protect.o: $(S)th8_protect.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_meta_msvc.h \
+	    $(S)th8_meta_posix.h $(S)th8_meta_win32.h $(S)th8_plat.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_protect.c
 
-$(B)th8_protect.pic.o: $(S)th8_protect.c $(S)th8.h | $(B)
+$(B)th8_protect.pic.o: $(S)th8_protect.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_meta_msvc.h \
+	    $(S)th8_meta_posix.h $(S)th8_meta_win32.h $(S)th8_plat.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_protect.c
 
-$(B)th8_time.o: $(S)plugins/harpy/th8_time.c $(S)th8.h $(S)th8_util.h | $(B)
+$(B)th8_time.o: $(S)plugins/harpy/th8_time.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_meta_msvc.h \
+	    $(S)th8_meta_posix.h $(S)th8_meta_win32.h $(S)th8_plat.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/harpy/th8_time.c
 
-$(B)th8_time.pic.o: $(S)plugins/harpy/th8_time.c $(S)th8.h $(S)th8_util.h | $(B)
+$(B)th8_time.pic.o: $(S)plugins/harpy/th8_time.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_meta_msvc.h \
+	    $(S)th8_meta_posix.h $(S)th8_meta_win32.h $(S)th8_plat.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/harpy/th8_time.c
 
-$(B)th8_crypto_cmds.o: $(S)plugins/crypto/th8_crypto_cmds.c $(S)th8.h $(S)th8_plugin.h | $(B)
+$(B)th8_crypto_cmds.o: $(S)plugins/crypto/th8_crypto_cmds.c $(S)th8.h \
+	    $(S)th8_int.h $(S)th8_plugin.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/crypto/th8_crypto_cmds.c
 
-$(B)th8_crypto_cmds.pic.o: $(S)plugins/crypto/th8_crypto_cmds.c $(S)th8.h $(S)th8_plugin.h | $(B)
+$(B)th8_crypto_cmds.pic.o: $(S)plugins/crypto/th8_crypto_cmds.c $(S)th8.h \
+	    $(S)th8_int.h $(S)th8_plugin.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/crypto/th8_crypto_cmds.c
 
-$(B)th8_harpy_cmds.o: $(S)plugins/th8_harpy.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_harpy_cmds.o: $(S)plugins/th8_harpy.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/th8_harpy.c
 
-$(B)th8_harpy_cmds.pic.o: $(S)plugins/th8_harpy.c $(S)th8.h $(S)th8_util.h $(S)th8_plugin.h | $(B)
+$(B)th8_harpy_cmds.pic.o: $(S)plugins/th8_harpy.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/th8_harpy.c
 endif
 
@@ -1478,11 +1589,13 @@ $(B)spilornis.o: $(B)Spilornis.c $(S)th8_spilornis.h | spilornis_vendor $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(SPILORNIS_CFLAGS) \
 	  -include $(S)th8_spilornis.h -c -o $@ $(B)Spilornis.c
 
-$(B)th8StubInit.o: $(S)th8StubInit.c $(S)th8.h $(S)th8Decls.h | $(B)
+$(B)th8StubInit.o: $(S)th8StubInit.c $(S)th8.h $(S)th8_hash.h \
+	    $(S)th8_plugin.h $(S)th8Decls.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8StubInit.c
 
-$(B)th8InternalStubInit.o: $(S)th8InternalStubInit.c $(S)th8.h \
-	    $(S)th8_int.h $(S)th8InternalDecls.h | $(B)
+$(B)th8InternalStubInit.o: $(S)th8InternalStubInit.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_plugin.h $(S)th8_spilornis.h $(S)th8_vars.h \
+	    $(S)th8InternalDecls.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8InternalStubInit.c
 
 $(B)ConvertUTF_v2.o: $(UTF_DIR)/ConvertUTF_v2.c $(UTF_DIR)/ConvertUTF_v2.h | $(B)
@@ -1498,50 +1611,63 @@ $(B)ConvertUTF_v2.o: $(UTF_DIR)/ConvertUTF_v2.c $(UTF_DIR)/ConvertUTF_v2.h | $(B
 
 PIC_DEFS = -DTH8_BUILD_DLL -fPIC -fvisibility=hidden
 
-$(B)th8_core.pic.o: $(S)th8_core.c $(CORE_HDR) | tommath_vendor spilornis_vendor $(B)
+$(B)th8_core.pic.o: $(S)th8_core.c $(S)th8.h $(S)th8_bigint.h $(S)th8_int.h \
+	    $(S)th8_int_core.h $(S)th8_mem.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_posix.h $(S)th8_plat.h \
+	    $(S)th8_plugin.h $(S)th8_spilornis.h $(S)th8_vars.h | tommath_vendor spilornis_vendor $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_core.c
 
-$(B)th8_plat.pic.o: $(S)th8_plat.c $(CORE_HDR) | $(B)
+$(B)th8_plat.pic.o: $(S)th8_plat.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_int_core.h $(S)th8_meta_defs.h $(S)th8_meta_libc.h \
+	    $(S)th8_meta_posix.h $(S)th8_plat.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_plat.c
 
-$(B)th8_hash.pic.o: $(S)th8_hash.c $(CORE_HDR) | $(B)
+$(B)th8_hash.pic.o: $(S)th8_hash.c $(S)th8.h $(S)th8_hash.h $(S)th8_int.h \
+	    $(S)th8_mem.h $(S)th8_meta_defs.h $(S)th8_meta_libc.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_hash.c
 
-$(B)th8_util.pic.o: $(S)th8_util.c $(CORE_HDR) | $(B)
+$(B)th8_util.pic.o: $(S)th8_util.c $(S)th8.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_util.c
 
-$(B)th8_base64.pic.o: $(S)th8_base64.c $(S)th8.h $(S)th8_util.h | $(B)
+$(B)th8_base64.pic.o: $(S)th8_base64.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_base64.c
 
 $(B)th8_glob.pic.o: $(S)th8_glob.c $(S)th8.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_glob.c
 
-$(B)th8_math.pic.o: $(S)th8_math.c $(CORE_HDR) | tommath_vendor $(B)
+$(B)th8_math.pic.o: $(S)th8_math.c $(S)th8.h $(S)th8_bigint.h $(S)th8_int.h | tommath_vendor $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_math.c
 
-$(B)th8_cache.pic.o: $(S)th8_cache.c $(CORE_HDR) $(S)th8_int.h | $(B)
+$(B)th8_cache.pic.o: $(S)th8_cache.c $(S)th8.h $(S)th8_hash.h $(S)th8_int.h \
+	    $(S)th8_int_core.h $(S)th8_meta_defs.h $(S)th8_meta_libc.h \
+	    $(S)th8_plat.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_cache.c
 
-$(B)th8_channel.pic.o: $(S)th8_channel.c $(CORE_HDR) $(S)th8_int.h | $(B)
+$(B)th8_channel.pic.o: $(S)th8_channel.c $(S)th8.h $(S)th8_hash.h \
+	    $(S)th8_int.h $(S)th8_int_core.h $(S)th8_plat.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_channel.c
 
-$(B)th8_lang.pic.o: $(S)th8_lang.c $(CORE_HDR) | $(B)
+$(B)th8_lang.pic.o: $(S)th8_lang.c $(S)th8.h $(S)th8_int.h $(S)th8_plugin.h \
+	    $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_lang.c
 
-$(B)th8_xlib.pic.o: $(S)th8_xlib.c $(S)th8.h | $(B)
+$(B)th8_xlib.pic.o: $(S)th8_xlib.c $(S)th8.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_xlib.c
 
-$(B)th8_regex.pic.o: $(S)plugins/regexp/th8_regex.c $(CORE_HDR) | $(B)
+$(B)th8_regex.pic.o: $(S)plugins/regexp/th8_regex.c $(S)th8.h \
+	    $(S)plugins/regexp/regex_th8.h $(S)th8_int.h $(S)th8_plugin.h \
+	    $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/regexp/th8_regex.c
 
-$(B)th8_nullio.pic.o: $(S)th8_nullio.c $(S)th8.h | $(B)
+$(B)th8_nullio.pic.o: $(S)th8_nullio.c $(S)th8.h $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_nullio.c
 
 $(B)th8_ctime.pic.o: $(S)th8_ctime.c $(S)th8.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_ctime.c
 
 ifeq ($(ENABLE_LIBCURL),1)
-$(B)th8_curl.pic.o: $(S)th8_curl.c $(S)th8.h | $(B)
+$(B)th8_curl.pic.o: $(S)th8_curl.c $(S)th8.h $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_curl.c
 endif
 
@@ -1552,15 +1678,19 @@ $(B)spilornis.pic.o: $(B)Spilornis.c $(S)th8_spilornis.h | spilornis_vendor $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(SPILORNIS_CFLAGS) \
 	  -include $(S)th8_spilornis.h $(PIC_DEFS) -c -o $@ $(B)Spilornis.c
 
-$(B)th8StubInit.pic.o: $(S)th8StubInit.c $(S)th8.h $(S)th8Decls.h | $(B)
+$(B)th8StubInit.pic.o: $(S)th8StubInit.c $(S)th8.h $(S)th8_hash.h \
+	    $(S)th8_plugin.h $(S)th8Decls.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8StubInit.c
 
 $(B)th8InternalStubInit.pic.o: $(S)th8InternalStubInit.c $(S)th8.h \
-	    $(S)th8_int.h $(S)th8InternalDecls.h | $(B)
+	    $(S)th8_int.h $(S)th8_plugin.h $(S)th8_spilornis.h $(S)th8_vars.h \
+	    $(S)th8InternalDecls.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ \
 	  $(S)th8InternalStubInit.c
 
-$(B)th8_libc.pic.o: $(S)th8_libc.c $(S)th8.h | $(B)
+$(B)th8_libc.pic.o: $(S)th8_libc.c $(S)th8.h $(S)th8_int.h $(S)th8_mem.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_meta_macos.h \
+	    $(S)th8_meta_msvc.h $(S)th8_meta_posix.h $(S)th8_meta_win32.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_libc.c
 
 $(B)ConvertUTF_v2.pic.o: $(UTF_DIR)/ConvertUTF_v2.c $(UTF_DIR)/ConvertUTF_v2.h | $(B)
@@ -1586,10 +1716,26 @@ genstubs:
 # line to suppress the check; see the tool header for details.
 #
 
-audit:
+audit: check-deps
 	$(TCLSH) tools/audit_patterns.tcl source
 	$(TCLSH) tools/audit_patterns.tcl crt-objects $(B)
 	$(TCLSH) tools/audit_patterns.tcl format
+
+#
+# Header-dependency audit.  Verifies that every object dependency line
+# in Makefile AND Makefile.msc lists exactly the in-tree (src/) headers
+# its source transitively #includes.  This keeps the hand-maintained,
+# explicit dependency lists in lock-step with the real include graph so
+# that editing a header (e.g. th8_int_core.h, which defines Th8_Interp)
+# always recompiles every object that bakes in that struct's layout.
+# A gap here re-introduces the Bug 62 mixed-layout / stale-offset class
+# (see doc/internal/FINDINGS.md Finding 036).  Compiler-free: uses the
+# static #include closure, so it runs identically on every host.
+#
+check-deps:
+	$(TCLSH) tools/check_deps.tcl
+
+.PHONY: check-deps
 
 #
 # Formatting check (clang-format).  Kept as a separate target for
@@ -1688,38 +1834,52 @@ $(B)regex_regerror.pic.o: | regex_vendor $(B)
 # Platform objects.
 #
 
-$(B)th8_posix.o: $(S)th8_posix.c $(CORE_HDR) | $(B)
+$(B)th8_posix.o: $(S)th8_posix.c $(S)th8.h $(S)th8_int.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_posix.h $(S)th8_plat.h \
+	    $(S)th8_unbound.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_posix.c
 
-$(B)th8_posix.pic.o: $(S)th8_posix.c $(CORE_HDR) | $(B)
+$(B)th8_posix.pic.o: $(S)th8_posix.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_meta_posix.h \
+	    $(S)th8_plat.h $(S)th8_unbound.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_posix.c
 
-$(B)th8_win32.o: $(S)th8_win32.c $(CORE_HDR) | $(B)
+$(B)th8_win32.o: $(S)th8_win32.c $(S)th8.h $(S)th8_int.h $(S)th8_mem.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_meta_msvc.h \
+	    $(S)th8_meta_win32.h $(S)th8_unbound.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_win32.c
 
-$(B)th8_macos.o: $(S)th8_macos.c $(CORE_HDR) | $(B)
+$(B)th8_macos.o: $(S)th8_macos.c $(S)th8.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_macos.h $(S)th8_meta_posix.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_macos.c
 
-$(B)th8_macos.pic.o: $(S)th8_macos.c $(CORE_HDR) | $(B)
+$(B)th8_macos.pic.o: $(S)th8_macos.c $(S)th8.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_macos.h $(S)th8_meta_posix.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_macos.c
 
-$(B)th8_ios.o: $(S)th8_ios.c $(CORE_HDR) | $(B)
+$(B)th8_ios.o: $(S)th8_ios.c $(S)th8.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_macos.h $(S)th8_meta_posix.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_ios.c
 
-$(B)th8_ios.pic.o: $(S)th8_ios.c $(CORE_HDR) | $(B)
+$(B)th8_ios.pic.o: $(S)th8_ios.c $(S)th8.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_macos.h $(S)th8_meta_posix.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_ios.c
 
-$(B)th8_android.o: $(S)th8_android.c $(CORE_HDR) | $(B)
+$(B)th8_android.o: $(S)th8_android.c $(S)th8.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_posix.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_android.c
 
-$(B)th8_android.pic.o: $(S)th8_android.c $(CORE_HDR) | $(B)
+$(B)th8_android.pic.o: $(S)th8_android.c $(S)th8.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_posix.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_android.c
 
 #
 # C runtime (optional; linked into shell).
 #
 
-$(B)th8_libc.o: $(S)th8_libc.c $(S)th8.h | $(B)
+$(B)th8_libc.o: $(S)th8_libc.c $(S)th8.h $(S)th8_int.h $(S)th8_mem.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_meta_macos.h \
+	    $(S)th8_meta_msvc.h $(S)th8_meta_posix.h $(S)th8_meta_win32.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_libc.c
 
 # ----------------------------------------------------------------
@@ -1923,8 +2083,11 @@ TESTLIB_CFLAGS = $(CFLAGS) $(INCLUDES) -I$(S)test -fPIC \
 # TH8 test library (always buildable).
 testlib: $(TESTLIB_TH8)
 
-$(B)th8_testlib_th8.pic.o: $(S)test/th8_testlib.c $(S)th8.h $(S)th8Decls.h \
-	$(UTF_DIR)/ConvertUTF_v2.h | $(B)
+$(B)th8_testlib_th8.pic.o: $(S)test/th8_testlib.c $(S)th8.h \
+	    $(S)test/th8_testlib.h $(S)th8_hash.h $(S)th8_int.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_msvc.h $(S)th8_meta_posix.h \
+	    $(S)th8_meta_win32.h $(S)th8_plugin.h $(S)th8Decls.h \
+	    $(S)th8InternalDecls.h $(UTF_DIR)/ConvertUTF_v2.h | $(B)
 	$(CC) $(TESTLIB_CFLAGS) -DTH8_TESTLIB_TH8 -DUSE_TH8_STUBS \
 	  -c -o $@ $(S)test/th8_testlib.c
 
@@ -1935,7 +2098,11 @@ $(TESTLIB_TH8): $(B)th8_testlib_th8.pic.o $(B)ConvertUTF_v2.pic.o stubs | $(B)
 ifneq ($(TCL_INCLUDE),)
 testlib: $(TESTLIB_TCL)
 
-$(B)th8_testlib_tcl.pic.o: $(S)test/th8_testlib.c $(S)th8.h | $(B)
+$(B)th8_testlib_tcl.pic.o: $(S)test/th8_testlib.c $(S)th8.h \
+	    $(S)test/th8_testlib.h $(S)th8_hash.h $(S)th8_int.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_msvc.h $(S)th8_meta_posix.h \
+	    $(S)th8_meta_win32.h $(S)th8_plugin.h $(S)th8Decls.h \
+	    $(S)th8InternalDecls.h | $(B)
 	$(CC) $(TESTLIB_CFLAGS) -DTH8_TESTLIB_TCL \
 	  -I$(TCL_INCLUDE) -c -o $@ $(S)test/th8_testlib.c
 
@@ -1980,8 +2147,11 @@ SQLITE3_OBJ_CFLAGS = -std=c99 -O2 -DNDEBUG $(SQLITE3_OPTS) -fPIC \
 
 sqlite3-ext: stubs $(SQLITE3_EXT)
 
-$(B)th8_sqlite3.pic.o: $(S)sqlite3/th8_sqlite3.c $(S)sqlite3/th8_sqlite3.h \
-    $(S)th8.h $(S)th8Decls.h $(SQLITE3_DIR)/sqlite3.h | $(B)
+$(B)th8_sqlite3.pic.o: $(S)sqlite3/th8_sqlite3.c $(S)th8.h \
+	    $(S)sqlite3/th8_sqlite3.h $(S)th8_hash.h $(S)th8_int.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_meta_msvc.h \
+	    $(S)th8_meta_posix.h $(S)th8_meta_win32.h $(S)th8_plugin.h \
+	    $(S)th8Decls.h $(SQLITE3_DIR)/sqlite3.h | $(B)
 	$(CC) $(SQLITE3_CFLAGS) -c -o $@ $(S)sqlite3/th8_sqlite3.c
 
 $(B)sqlite3.pic.o: $(SQLITE3_DIR)/sqlite3.c $(SQLITE3_DIR)/sqlite3.h | $(B)
@@ -2016,7 +2186,9 @@ ifneq ($(TCL_INCLUDE),)
 
 bridge: $(B)libth8bridge_tcl$(SHLIB_EXT)
 
-$(B)th8_tcl_tclmode.pic.o: $(S)test/th8_tcl.c $(S)th8.h | $(B)
+$(B)th8_tcl_tclmode.pic.o: $(S)test/th8_tcl.c $(S)th8.h $(S)test/th8_tcl.h \
+	    $(S)th8_hash.h $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_plugin.h \
+	    $(S)th8Decls.h | $(B)
 	$(CC) $(BRIDGE_CFLAGS) -DTH8_TCL_BRIDGE_TCL \
 	  -I$(TCL_INCLUDE) -c -o $@ $(S)test/th8_tcl.c
 
@@ -2039,7 +2211,9 @@ $(B)th8_tcl_stubs.pic.o: $(B)th8_tcl_stubs.c | $(B)
 
 bridge: $(B)libth8bridge_th8$(SHLIB_EXT)
 
-$(B)th8_tcl_th8mode.pic.o: $(S)test/th8_tcl.c $(S)th8.h $(S)th8Decls.h | $(B)
+$(B)th8_tcl_th8mode.pic.o: $(S)test/th8_tcl.c $(S)th8.h $(S)test/th8_tcl.h \
+	    $(S)th8_hash.h $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_plugin.h \
+	    $(S)th8Decls.h | $(B)
 	$(CC) $(BRIDGE_CFLAGS) -DTH8_TCL_BRIDGE_TH8 -DUSE_TH8_STUBS \
 	  -c -o $@ $(S)test/th8_tcl.c
 
@@ -2109,7 +2283,7 @@ $(B)Spilornis.c $(B)Spilornis.h $(B)SpilornisInt.h $(B)SpilornisDef.h: \
 spilornis_vendor: $(B)Spilornis.c
 
 amalgamation: $(VERSIONHDR) $(B)regex_amalg.c $(B)tommath_amalg.c spilornis_vendor
-	$(TCLSH) tools/mkamal.tcl -o $(AMAL_FILE)
+	$(TCLSH) tools/mkamal.tcl -line -o $(AMAL_FILE)
 	cp $(S)th8.h $(B)th8.h
 
 #

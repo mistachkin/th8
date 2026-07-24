@@ -71,13 +71,17 @@ expr_command(
 
 	for (i = 1; i < argc; i++) {
 	    if (i > 1) {
-		Th8_StringAppend(interp, &zExpr, &nExpr, " ", 1);
+		TH8_STR_APPEND(interp, &zExpr, &nExpr, " ", 1);
 	    }
-	    Th8_StringAppend(interp, &zExpr, &nExpr, argv[i], argl[i]);
+	    TH8_STR_APPEND(interp, &zExpr, &nExpr, argv[i], argl[i]);
 	}
 	rc = Th8_Expr(interp, zExpr, nExpr, NULL, 0);
 	Th8_Free(interp, zExpr);
 	return rc;
+
+oom:
+	Th8_Free(interp, zExpr);
+	return TH8_ERROR;
     }
 }
 

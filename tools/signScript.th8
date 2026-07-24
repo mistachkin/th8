@@ -14,7 +14,7 @@
 #     - ENABLE_CRYPTOGRAPHY in compileOptions
 #     - [harpy] command available
 #     - th8testlib (for load_snk key loading)
-#     - tests/helpers/testkey2048.snk (the test signing key)
+#     - tests/helpers/th8_test_key.snk (the test signing key)
 #
 # Copyright (c) 2026 by Joe Mistachkin.  All rights reserved.
 #
@@ -62,7 +62,7 @@ if {[llength [info commands th8testlib::load_snk]] == 0} then {
 # Load the test signing key into the policy and get its token.
 #
 
-set snkPath tests/helpers/testkey2048.snk
+set snkPath tests/helpers/th8_test_key.snk
 
 if {![file exists $snkPath]} then {
     puts stdout "signScript: key file not found: $snkPath"

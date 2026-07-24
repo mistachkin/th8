@@ -698,6 +698,8 @@ exit_command(
     size_t *argl)  /* Argument lengths. */
 {
     int exitCode = TH8_EXIT_DEMAND;
+    char *zMsg = 0;
+    size_t nMsg = 0;
 
     (void)ctx;
 
@@ -716,24 +718,21 @@ exit_command(
      */
 
     {
-	char *zMsg = 0;
-	size_t nMsg = 0;
-
-	Th8_StringAppend(interp, &zMsg, &nMsg, "[", TH8_NOLEN);
-	Th8_StringAppend(interp, &zMsg, &nMsg, argv[0], argl[0]);
-	Th8_StringAppend(interp, &zMsg, &nMsg, "]: ", TH8_NOLEN);
+	TH8_STR_APPEND(interp, &zMsg, &nMsg, "[", TH8_NOLEN);
+	TH8_STR_APPEND(interp, &zMsg, &nMsg, argv[0], argl[0]);
+	TH8_STR_APPEND(interp, &zMsg, &nMsg, "]: ", TH8_NOLEN);
 
 	if (argc == 2) {
-	    Th8_StringAppend(interp, &zMsg, &nMsg, argv[1], argl[1]);
+	    TH8_STR_APPEND(interp, &zMsg, &nMsg, argv[1], argl[1]);
 	} else {
 	    const char *zRes;
 	    size_t nRes = 0;
 	    Th8_SetResultDouble(interp, (double)TH8_EXIT_DEMAND);
 	    zRes = Th8_GetResult(interp, &nRes);
-	    Th8_StringAppend(interp, &zMsg, &nMsg, zRes, nRes);
+	    TH8_STR_APPEND(interp, &zMsg, &nMsg, zRes, nRes);
 	}
 
-	Th8_StringAppend(interp, &zMsg, &nMsg, "\n", 1);
+	TH8_STR_APPEND(interp, &zMsg, &nMsg, "\n", 1);
 	Th8_OutputError(interp, zMsg, nMsg);
 	Th8_Free(interp, zMsg);
     }
@@ -745,6 +744,10 @@ exit_command(
     Th8_Exit(interp);
     Th8_ClearResult(interp);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zMsg);
+    return TH8_ERROR;
 }
 
 
@@ -851,7 +854,7 @@ coroutine_command(
 
     for (i = 2; i < argc; i++) {
 	if (i > 2) {
-	    Th8_StringAppend(interp, &zBody, &nBody, " ", 1);
+	    TH8_STR_APPEND(interp, &zBody, &nBody, " ", 1);
 	}
 	Th8_ListAppend(interp, &zBody, &nBody, argv[i], argl[i]);
     }
@@ -859,6 +862,10 @@ coroutine_command(
     rc = Th8_CoroCreate(interp, argv[1], argl[1], zBody, nBody);
     Th8_Free(interp, zBody);
     return rc;
+
+oom:
+    Th8_Free(interp, zBody);
+    return TH8_ERROR;
 }
 
 
@@ -1038,13 +1045,17 @@ eval_command(
 
 	for (i = 1; i < argc; i++) {
 	    if (i > 1) {
-		Th8_StringAppend(interp, &zScript, &nScript, " ", 1);
+		TH8_STR_APPEND(interp, &zScript, &nScript, " ", 1);
 	    }
-	    Th8_StringAppend(interp, &zScript, &nScript, argv[i], argl[i]);
+	    TH8_STR_APPEND(interp, &zScript, &nScript, argv[i], argl[i]);
 	}
 
 	Th8_NRAddCallback(interp, th8EvalCleanup, (void *)zScript, 0, 0, 0);
 	return Th8_NREval(interp, zScript, nScript, NULL, 0);
+
+oom:
+	Th8_Free(interp, zScript);
+	return TH8_ERROR;
     }
 }
 

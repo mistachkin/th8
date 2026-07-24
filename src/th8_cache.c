@@ -76,11 +76,14 @@
 static th8_uint64_t
 th8CacheHashBytes(
     const char *z,  /* Input bytes. */
-    size_t n)   /* Byte count. */
+    size_t n)   /* Raw byte count (must NOT carry the taint bit). */
 {
     th8_uint64_t h = (th8_uint64_t)14695981039346656037ULL;
     size_t i;
 
+    /* Pure byte hasher: a taint-tagged length here would scan ~256 MiB
+     * past the input.  Callers must pass TH8_LEN()-masked lengths. */
+    TH8_ASSERT_RAW_LEN(n);
     for (i = 0; i < n; i++) {
 	h ^= (th8_uint64_t)(unsigned char)z[i];
 	h *= (th8_uint64_t)1099511628211ULL;
@@ -132,7 +135,12 @@ th8CacheHashList(
     for (i = 0; i < nElem; i++) {
 	/* Rotate left by 5 bits before XOR for order sensitivity. */
 	h = (h << 5) | (h >> 59);
-	h ^= th8CacheHashBytes(azElem[i], anElem[i]);
+	/* Element lengths may carry the taint bit; hash the RAW byte
+	 * count only.  The cache is keyed on element BYTES and is
+	 * taint-insensitive -- the caller re-applies aggregate taint to
+	 * the result.  A tagged length here would both over-read
+	 * (~256 MiB) and split the cache across taint states. */
+	h ^= th8CacheHashBytes(azElem[i], TH8_LEN(anElem[i]));
     }
     return h;
 }
@@ -991,13 +999,19 @@ th8FindListInCache(
 	    goto evict;
 	}
 	for (i = 0; i < nElem; i++) {
-	    /* Same rationale: per-element compare arms are
-	     * intrinsic-dead in the test corpus. */
-	    if (pCache->anListElem[i] != anElem[i]) {
+	    /* Compare RAW byte lengths: stored lengths are masked (see
+	     * the miss path below), so a tagged incoming length must be
+	     * masked too or an identical-bytes hit would spuriously
+	     * evict.  Same rationale on intrinsic-dead compare arms. */
+	    size_t nRaw = TH8_LEN(anElem[i]);
+
+	    /* Stored lengths are raw; compare on the masked length.
+	     * Guards against a regression that drops the mask. */
+	    TH8_ASSERT_RAW_LEN(pCache->anListElem[i]);
+	    if (pCache->anListElem[i] != nRaw) {
 		goto evict;
 	    }
-	    if (Th8_Memcmp(
-	            interp, pCache->azListElem[i], azElem[i], anElem[i]) !=
+	    if (Th8_Memcmp(interp, pCache->azListElem[i], azElem[i], nRaw) !=
 	        0) {
 		goto evict;
 	    }
@@ -1038,10 +1052,13 @@ evict:
 	pCache->cacheType = cacheType;
 
 	/*
-	 * Build a single-allocation block: [ptrs][lens][strings]
+	 * Build a single-allocation block: [ptrs][lens][strings].
+	 * Size on RAW byte lengths -- a tagged length would compute a
+	 * ~256 MiB allocation.
 	 */
 	for (i = 0; i < nElem; i++) {
-	    nStrTotal += anElem[i] + 1;
+	    TH8_ASSERT_RAW_LEN(TH8_LEN(anElem[i]));
+	    nStrTotal += TH8_LEN(anElem[i]) + 1;
 	}
 	{
 	    size_t nPtrs;
@@ -1083,11 +1100,18 @@ evict:
 	zBuf = (char *)&anNew[nElem];
 
 	for (i = 0; i < nElem; i++) {
-	    anNew[i] = anElem[i];
+	    /* Store RAW element lengths; the cache is taint-insensitive
+	     * and the caller re-applies aggregate taint at the boundary.
+	     * Using the tagged length as a memcpy count / buffer index
+	     * would over-copy and write out of bounds. */
+	    size_t nRaw = TH8_LEN(anElem[i]);
+
+	    TH8_ASSERT_RAW_LEN(nRaw);
+	    anNew[i] = nRaw;
 	    azNew[i] = zBuf;
-	    Th8_Memcpy(interp, zBuf, azElem[i], anElem[i]);
-	    zBuf[anElem[i]] = '\0';
-	    zBuf += anElem[i] + 1;
+	    Th8_Memcpy(interp, zBuf, azElem[i], nRaw);
+	    zBuf[nRaw] = '\0';
+	    zBuf += nRaw + 1;
 	}
 
 	pCache->azListElem = azNew;
@@ -1160,7 +1184,18 @@ th8SetCacheString(
     if (!pVal) return;
     if (!z) return;
     if (pVal->zData) return; /* Already has a string. */
-    if (n == TH8_NOLEN) n = Th8_Strlen(interp, z);
+    if (n == TH8_NOLEN) {
+	n = Th8_Strlen(interp, z);
+    } else {
+	/* Store a RAW length: the cache holds bytes, not trust state.
+	 * A tainted joined string would otherwise bake taint into the
+	 * shared entry and launder it onto later clean hits (or falsely
+	 * taint them).  The caller re-applies aggregate taint to the
+	 * result on every hit/miss.  Resolve TH8_NOLEN first so the tag
+	 * mask does not corrupt the sentinel. */
+	n = TH8_LEN(n);
+    }
+    TH8_ASSERT_RAW_LEN(n);
 
     /*
      * Recover the enclosing Th8_CacheEntry from the

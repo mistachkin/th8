@@ -294,7 +294,7 @@ update_step(Th8_Interp *interp, void *pData[], int rc)
      * after each callback keeps the NRE chain shape consistent
      * (matches the per-tick design used by vwait_step and means
      * a [yield] inside the callback can save the chain at a
-     * coherent boundary). */
+     * coherent boundary; see event-5.1 / R-47665-55162). */
     drainRc = th8DrainAll(interp, 1, &drained);
     if (drainRc != TH8_OK) {
 	update_state_free(interp, p);
@@ -303,8 +303,9 @@ update_step(Th8_Interp *interp, void *pData[], int rc)
     p->nProcessed += drained;
 
     /* (e) re-arm.  If [yield] fired inside the event's callback,
-     * NRE state has already been saved with our previous push on
-     * top -- coroutine resume re-enters update_step cleanly. */
+     * NRE state has already been saved (the coroutine resume
+     * re-attaches the suspended chain), so re-entry continues the
+     * drain cleanly. */
     Th8_NRAddCallback(interp, update_step, p, NULL, NULL, NULL);
     return TH8_OK;
 }
@@ -611,11 +612,10 @@ vwait_step(Th8_Interp *interp, void *pData[], int rc)
 	    vwait_state_free(interp, p);
 	    return drainRc;
 	}
-	/* Re-arm: push ourselves so the trampoline picks us
-	 * up next.  If a [yield] fired inside the event's
-	 * callback, NRE state has already been saved with our
-	 * push from the PREVIOUS iteration on top -- so the
-	 * coroutine resume re-enters vwait_step cleanly.  */
+	/* Re-arm.  A [yield] inside the event callback saves the
+	 * in-flight chain via the coroutine resume machinery, so
+	 * re-entry continues the vwait drain cleanly (event-5.1 /
+	 * R-47665-55162). */
 	(void)drained;
 	Th8_NRAddCallback(interp, vwait_step, p, NULL, NULL, NULL);
 	return TH8_OK;

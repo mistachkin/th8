@@ -382,6 +382,56 @@ th8CurlGetData(
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
 
     /*
+     * Security: pin a minimum TLS version of 1.2.  Older protocol
+     * versions have known weaknesses; set the floor explicitly rather
+     * than relying on the (backend-dependent) library default.
+     */
+
+#  if defined(CURL_SSLVERSION_TLSv1_2)
+    curl_easy_setopt(curl, CURLOPT_SSLVERSION, (long)CURL_SSLVERSION_TLSv1_2);
+#  endif
+
+    /*
+     * Security: trust-root source.  Ask the TLS backend to consult the
+     * operating system's native certificate store where it can (e.g.
+     * the Windows CryptoAPI store under the OpenSSL/Schannel backends);
+     * this is a no-op for macOS SecureTransport, which already uses the
+     * keychain.  It keeps trust behaviour aligned with the host's
+     * browsers instead of relying on a stale or absent compiled-in CA
+     * bundle.  Deployments that ship their own bundle can override the
+     * CA file at runtime via the conventional CURL_CA_BUNDLE
+     * environment variable (libcurl does not read it on its own).
+     */
+
+#  if defined(CURLSSLOPT_NATIVE_CA)
+    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, (long)CURLSSLOPT_NATIVE_CA);
+#  endif
+    {
+	char *zCaBundle = Th8_GetEnv(interp, "CURL_CA_BUNDLE");
+
+	if (zCaBundle) {
+	    /* CURLOPT_CAINFO copies the string, so free our copy now. */
+	    curl_easy_setopt(curl, CURLOPT_CAINFO, zCaBundle);
+	    Th8_Free(interp, zCaBundle);
+	}
+    }
+
+    /*
+     * Security: restrict redirects to HTTPS only.  FOLLOWLOCATION is
+     * enabled above; without this an attacker-controlled or
+     * misconfigured redirect could downgrade a security-sensitive
+     * fetch (signed scripts, public-key tokens, trusted time) from
+     * https to cleartext http.  Forbid every scheme but https on
+     * redirects (the initial request scheme is unaffected).
+     */
+
+#  if LIBCURL_VERSION_NUM >= 0x075500 /* 7.85.0: string form */
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
+#  else
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, (long)CURLPROTO_HTTPS);
+#  endif
+
+    /*
      * Security: DNSSEC-validated DNS pre-resolution via libunbound.
      *
      * Extract the hostname from the URI, resolve it with full
@@ -537,17 +587,26 @@ th8CurlGetData(
 #    define TH8_CURL_DOH_URL "https://1.1.1.1/dns-query"
 #  endif
 
-#  if LIBCURL_VERSION_NUM >= 0x073e00  /* 7.62.0 */
+#  if LIBCURL_VERSION_NUM >= 0x073e00 /* 7.62.0 */
     curl_easy_setopt(curl, CURLOPT_DOH_URL, TH8_CURL_DOH_URL);
 #  endif
 
-#  if LIBCURL_VERSION_NUM >= 0x075500  /* 7.85.0 */
+#  if LIBCURL_VERSION_NUM >= 0x075500 /* 7.85.0 */
     /*
      * Verify the DoH server's TLS certificate as strictly
-     * as the target connection's certificate.
+     * as the target connection's certificate.  VERIFYSTATUS
+     * additionally requires a valid stapled OCSP response
+     * (the DoH resolver, Cloudflare's 1.1.1.1 by default,
+     * staples one); a backend without OCSP-stapling support
+     * treats it as a no-op rather than an error.  The
+     * trust-root options set for the main transfer above
+     * (CURLSSLOPT_NATIVE_CA / CURL_CA_BUNDLE -> CAINFO) are
+     * inherited by the DoH sub-transfer automatically, so no
+     * separate DoH CA configuration is needed.
      */
     curl_easy_setopt(curl, CURLOPT_DOH_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_DOH_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_DOH_SSL_VERIFYSTATUS, 1L);
 #  endif
 
     /*
@@ -616,7 +675,7 @@ th8CurlGetData(
  */
 
 static Th8_Platform th8CurlPlatformData = {
-    4,   /* nVersion */
+    4, /* nVersion */
     0, 0, 0, 0, /* xInitialize, xFinalize, xPreDeleteInterp, xDeleteInterp */
 
     /* Memory */

@@ -9,7 +9,7 @@
 #     A Git clone does NOT contain everything the build needs (unlike a
 #     Fossil checkout of the full tree).  This script supplies the gaps:
 #
-#       * Git submodules -- externals/mimalloc and
+#       * Git submodules -- externals/mimalloc/vendor and
 #         externals/tommath/vendor (see .gitmodules).  Initialized here
 #         with `git submodule update --init --recursive`.  The tommath
 #         amalgamation the build consumes is generated from that
@@ -28,8 +28,9 @@
 #
 #     NOT handled here (secret / opt-in / platform-specific):
 #
-#       * The test signing key tests/helpers/testkey2048.snk (secret,
-#         git-ignored) needed only for ENABLE_TEST_KEY=1 builds.
+#       * The test signing key tests/helpers/th8_test_key.snk
+#         (semi-secret, git-ignored) only needed for (DEBUG)
+#         builds that set ENABLE_TEST_KEY=1.
 #       * The Cosmopolitan toolchain -- opt in via
 #         tools/bootstrap_cosmo.sh.
 #       * The Win32 / MSVC third-party libraries -- see
@@ -232,7 +233,7 @@ init_submodules() {
         return 0
     fi
 
-    say "Initializing Git submodules (externals/mimalloc, externals/tommath/vendor)"
+    say "Initializing Git submodules (externals/mimalloc/vendor, externals/tommath/vendor)"
     git -C "$REPO_ROOT" submodule update --init --recursive
 }
 
@@ -264,4 +265,4 @@ report_status || true
 echo
 say "Setup complete.  Build with:  make fresh   (or: make static shell)"
 say "For ENABLE_TEST_KEY=1 builds you also need the (secret, git-ignored)"
-say "test key tests/helpers/testkey2048.snk, which this script does not install."
+say "test key tests/helpers/th8_test_key.snk, which this script does not install."

@@ -150,10 +150,14 @@ proc_call_nr(Th8_Interp *interp, void *pData[], int rc)
 	char *zUsage = 0;
 	size_t nUsage = 0;
 
-	Th8_StringAppend(interp, &zUsage, &nUsage, argv[0], argl[0]);
-	Th8_StringAppend(interp, &zUsage, &nUsage, p->zUsage, p->nUsage);
-	Th8_StringAppend(interp, &zUsage, &nUsage, "", 1);
+	TH8_STR_APPEND(interp, &zUsage, &nUsage, argv[0], argl[0]);
+	TH8_STR_APPEND(interp, &zUsage, &nUsage, p->zUsage, p->nUsage);
+	TH8_STR_APPEND(interp, &zUsage, &nUsage, "", 1);
 	Th8_WrongNumArgs(interp, zUsage);
+	Th8_Free(interp, zUsage);
+	return TH8_ERROR;
+
+oom:
 	Th8_Free(interp, zUsage);
 	return TH8_ERROR;
     }
@@ -556,7 +560,7 @@ proc_command(
     /* Store the tagged body length: a tainted body is rejected when the
      * proc runs (Th8_NREval -> the evaluation gate).  Pointer/space
      * arithmetic below uses the raw length. */
-    p->nProgram = TH8_LEN(argl[3]) | (argl[3] & TH8_TAINT_BIT);
+    p->nProgram = TH8_LEN(argl[3]) | (argl[3] & TH8_TAG_BITS);
     zSpace = &p->zProgram[TH8_LEN(p->nProgram)];
 
     /*
@@ -600,23 +604,23 @@ proc_command(
 	 * Build usage message.
 	 */
 
-	Th8_StringAppend(interp, &zUsage, &nUsage, " ", 1);
+	TH8_STR_APPEND(interp, &zUsage, &nUsage, " ", 1);
 	if (n == 2) {
-	    Th8_StringAppend(interp, &zUsage, &nUsage, "?", 1);
+	    TH8_STR_APPEND(interp, &zUsage, &nUsage, "?", 1);
 	    if (az) {
-		Th8_StringAppend(interp, &zUsage, &nUsage, az[0], an[0]);
+		TH8_STR_APPEND(interp, &zUsage, &nUsage, az[0], an[0]);
 	    }
-	    Th8_StringAppend(interp, &zUsage, &nUsage, "?", 1);
+	    TH8_STR_APPEND(interp, &zUsage, &nUsage, "?", 1);
 	} else {
 	    if (az) {
-		Th8_StringAppend(interp, &zUsage, &nUsage, az[0], an[0]);
+		TH8_STR_APPEND(interp, &zUsage, &nUsage, az[0], an[0]);
 	    }
 	}
 
 	Th8_Free(interp, az);
     }
     if (p->hasArgs) {
-	Th8_StringAppend(interp, &zUsage, &nUsage, " ?args...?", TH8_NOLEN);
+	TH8_STR_APPEND(interp, &zUsage, &nUsage, " ?args...?", TH8_NOLEN);
     }
     p->zUsage = zUsage;
     p->nUsage = nUsage;
@@ -634,6 +638,9 @@ error_out:
     Th8_Free(interp, zUsage);
     Th8_Free(interp, p);
     return TH8_ERROR;
+
+oom:
+    goto error_out;
 }
 
 
@@ -747,6 +754,10 @@ apply_command(
 	char **azParam = 0;
 	size_t *anParam = 0;
 	int i;
+	char *zNs = 0;
+	size_t nNs = 0;
+	char *zErr = 0;
+	size_t nErr = 0;
 
 	/*
 	 * Parse the arglist from the lambda.
@@ -784,7 +795,7 @@ apply_command(
 	Th8_Memcpy(interp, p->zProgram, azLambda[1], TH8_LEN(anLambda[1]));
 	/* Tagged body length -- a tainted lambda body is rejected at
 	 * evaluation; raw length is used for pointer arithmetic. */
-	p->nProgram = TH8_LEN(anLambda[1]) | (anLambda[1] & TH8_TAINT_BIT);
+	p->nProgram = TH8_LEN(anLambda[1]) | (anLambda[1] & TH8_TAG_BITS);
 
 	/*
 	 * Check for "args" as last parameter.
@@ -823,13 +834,10 @@ apply_command(
 	 * namespace even if it doesn't start with "::".
 	 */
 	if (nLambda == 3 && anLambda[2] > 0) {
-	    char *zNs = 0;
-	    size_t nNs = 0;
-
 	    if (azLambda[2][0] != ':' || azLambda[2][1] != ':') {
-		Th8_StringAppend(interp, &zNs, &nNs, "::", 2);
+		TH8_STR_APPEND(interp, &zNs, &nNs, "::", 2);
 	    }
-	    Th8_StringAppend(interp, &zNs, &nNs, azLambda[2], anLambda[2]);
+	    TH8_STR_APPEND(interp, &zNs, &nNs, azLambda[2], anLambda[2]);
 	    /*
 	     * Per Tcl, the lambda's namespace must already exist;
 	     * resolve find-only (bCreate=0).  Auto-creating it
@@ -840,13 +848,10 @@ apply_command(
 	     */
 	    p->pDefNs = (void *)th8FindNamespace(interp, zNs, nNs, 0);
 	    if (!p->pDefNs) {
-		char *zErr = 0;
-		size_t nErr = 0;
-
-		Th8_StringAppend(
+		TH8_STR_APPEND(
 		    interp, &zErr, &nErr, "namespace \"", TH8_NOLEN);
-		Th8_StringAppend(interp, &zErr, &nErr, zNs, nNs);
-		Th8_StringAppend(
+		TH8_STR_APPEND(interp, &zErr, &nErr, zNs, nNs);
+		TH8_STR_APPEND(
 		    interp, &zErr, &nErr, "\" not found", TH8_NOLEN);
 		Th8_SetResult(interp, zErr, nErr);
 		Th8_Free(interp, zErr);
@@ -873,6 +878,14 @@ apply_command(
 	return th8NRInFrame(
 	    interp, proc_call_nr, (void *)p, (void *)&argv[1],
 	    (void *)&argl[1], TH8_INT2PTR(argc - 1));
+
+oom:
+	Th8_Free(interp, zErr);
+	Th8_Free(interp, zNs);
+	Th8_Free(interp, p);
+	Th8_Free(interp, azParam);
+	Th8_Free(interp, azLambda);
+	return TH8_ERROR;
     }
 }
 
@@ -1056,13 +1069,18 @@ nproc_call_nr(Th8_Interp *interp, void *pData[], int rc)
 	    }
 	    /* Use C string length to exclude embedded NULs. */
 	    nCmd = Th8_Strlen(interp, zCmd);
-	    Th8_StringAppend(interp, &zMsg, &nMsg, "procedure \"", 11);
-	    Th8_StringAppend(interp, &zMsg, &nMsg, zCmd, nCmd);
-	    Th8_StringAppend(
+	    TH8_STR_APPEND(interp, &zMsg, &nMsg, "procedure \"", 11);
+	    TH8_STR_APPEND(interp, &zMsg, &nMsg, zCmd, nCmd);
+	    TH8_STR_APPEND(
 	        interp, &zMsg, &nMsg, "\" unsupported argument named \"", 30);
-	    Th8_StringAppend(interp, &zMsg, &nMsg, zArgName, nArgName);
-	    Th8_StringAppend(interp, &zMsg, &nMsg, "\"", 1);
+	    TH8_STR_APPEND(interp, &zMsg, &nMsg, zArgName, nArgName);
+	    TH8_STR_APPEND(interp, &zMsg, &nMsg, "\"", 1);
 	    Th8_SetResult(interp, zMsg, nMsg);
+	    Th8_Free(interp, zMsg);
+	    Th8_Free(interp, aBound);
+	    return TH8_ERROR;
+
+oom:
 	    Th8_Free(interp, zMsg);
 	    Th8_Free(interp, aBound);
 	    return TH8_ERROR;
@@ -1228,7 +1246,7 @@ nproc_command(
     Th8_Memcpy(interp, p->zProgram, argv[3], TH8_LEN(argl[3]));
     /* Tagged body length (rejected at evaluation if tainted); raw
      * length for pointer arithmetic. */
-    p->nProgram = TH8_LEN(argl[3]) | (argl[3] & TH8_TAINT_BIT);
+    p->nProgram = TH8_LEN(argl[3]) | (argl[3] & TH8_TAG_BITS);
     zSpace = &p->zProgram[TH8_LEN(p->nProgram)];
 
     for (i = 0; i < nParam && ALWAYS(azParam); i++) {
@@ -1385,7 +1403,7 @@ napply_command(
 	p->zProgram = (char *)&p->anDefault[nParam];
 	Th8_Memcpy(interp, p->zProgram, azLambda[1], TH8_LEN(anLambda[1]));
 	/* Tagged body length (rejected at evaluation if tainted). */
-	p->nProgram = TH8_LEN(anLambda[1]) | (anLambda[1] & TH8_TAINT_BIT);
+	p->nProgram = TH8_LEN(anLambda[1]) | (anLambda[1] & TH8_TAG_BITS);
 
 	if (nParam > 0 && ALWAYS(azParam) &&
 	    TH8_LEN(anParam[nParam - 1]) == 4 &&

@@ -51,6 +51,7 @@ setupCommonConstraints
 
 runAllTests {
   after.tcl
+  apicontract.tcl
   append.tcl
   arrayops.tcl
   base64.tcl
@@ -302,6 +303,7 @@ runAllTests {
   switch.tcl
   taint.tcl
   try.tcl
+  unknown.tcl
   unset.tcl
   variable.tcl
   varsystem.tcl

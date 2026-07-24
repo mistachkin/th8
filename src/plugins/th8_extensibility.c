@@ -492,6 +492,8 @@ package_require_command(
 {
     Th8_HashEntry *pEntry;
     Th8_PkgInfo *pPkg;
+    char *zCmd = 0;
+    size_t nCmd = 0;
 
     if (argc < 3 || argc > 5) {
 	return Th8_WrongNumArgs(
@@ -584,16 +586,14 @@ package_require_command(
 
 	    zUnk = Th8_GetPackageUnknown(interp);
 	    if (ALWAYS(zUnk) && zUnk[0]) {
-		char *zCmd = 0;
-		size_t nCmd = 0;
 		int rc;
 
-		Th8_StringAppend(interp, &zCmd, &nCmd, zUnk, TH8_NOLEN);
-		Th8_StringAppend(interp, &zCmd, &nCmd, " ", 1);
+		TH8_STR_APPEND(interp, &zCmd, &nCmd, zUnk, TH8_NOLEN);
+		TH8_STR_APPEND(interp, &zCmd, &nCmd, " ", 1);
 		Th8_ListAppend(
 		    interp, &zCmd, &nCmd, argv[iName], argl[iName]);
 		if (iName + 1 < argc) {
-		    Th8_StringAppend(interp, &zCmd, &nCmd, " ", 1);
+		    TH8_STR_APPEND(interp, &zCmd, &nCmd, " ", 1);
 		    Th8_ListAppend(
 		        interp, &zCmd, &nCmd, argv[iName + 1],
 		        argl[iName + 1]);
@@ -621,6 +621,10 @@ package_require_command(
 	    interp, "can't find package", argv[iName], argl[iName]);
 	return TH8_ERROR;
     }
+
+oom:
+    Th8_Free(interp, zCmd);
+    return TH8_ERROR;
 }
 
 

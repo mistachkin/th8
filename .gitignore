@@ -109,8 +109,8 @@ externals/bestline/build/
 externals/spilornis/vendor/
 
 # development team key
-tests/helpers/testkey2048.snk
-tests/helpers/testkey2048.snk.b64sig
+tests/helpers/th8_test_key.snk
+tests/helpers/th8_test_key.snk.b64sig
 
 # ---------------------------------------------------------------------
 # Editor / OS noise

@@ -294,13 +294,17 @@ namespace_eval_command(
 
 	for (i = 3; i < argc; i++) {
 	    if (i > 3) {
-		Th8_StringAppend(interp, &zScript, &nScript, " ", 1);
+		TH8_STR_APPEND(interp, &zScript, &nScript, " ", 1);
 	    }
-	    Th8_StringAppend(interp, &zScript, &nScript, argv[i], argl[i]);
+	    TH8_STR_APPEND(interp, &zScript, &nScript, argv[i], argl[i]);
 	}
 	rc = Th8_NsEval(interp, argv[2], argl[2], zScript, nScript);
 	Th8_Free(interp, zScript);
 	return rc;
+
+oom:
+	Th8_Free(interp, zScript);
+	return TH8_ERROR;
     }
 }
 
@@ -535,14 +539,18 @@ namespace_code_command(
      * evaluates it in the current namespace.
      */
 
-    Th8_StringAppend(interp, &zOut, &nOut, "::namespace eval ", TH8_NOLEN);
-    Th8_StringAppend(
+    TH8_STR_APPEND(interp, &zOut, &nOut, "::namespace eval ", TH8_NOLEN);
+    TH8_STR_APPEND(
         interp, &zOut, &nOut, Th8_GetCurrentNamespace(interp), TH8_NOLEN);
-    Th8_StringAppend(interp, &zOut, &nOut, " ", 1);
+    TH8_STR_APPEND(interp, &zOut, &nOut, " ", 1);
     Th8_ListAppend(interp, &zOut, &nOut, argv[2], argl[2]);
     Th8_SetResult(interp, zOut, nOut);
     Th8_Free(interp, zOut);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zOut);
+    return TH8_ERROR;
 }
 
 
@@ -707,17 +715,17 @@ namespace_origin_command(
      * Otherwise prepend the current namespace.
      */
     if (argl[2] > 2 && argv[2][0] == ':' && argv[2][1] == ':') {
-	Th8_StringAppend(interp, &zFull, &nFull, argv[2], argl[2]);
+	TH8_STR_APPEND(interp, &zFull, &nFull, argv[2], argl[2]);
     } else {
 	zNs = Th8_GetCurrentNamespace(interp);
 	if (ALWAYS(zNs[0] == ':') && ALWAYS(zNs[1] == ':') &&
 	    zNs[2] == '\0') {
-	    Th8_StringAppend(interp, &zFull, &nFull, "::", 2);
+	    TH8_STR_APPEND(interp, &zFull, &nFull, "::", 2);
 	} else {
-	    Th8_StringAppend(interp, &zFull, &nFull, zNs, TH8_NOLEN);
-	    Th8_StringAppend(interp, &zFull, &nFull, "::", 2);
+	    TH8_STR_APPEND(interp, &zFull, &nFull, zNs, TH8_NOLEN);
+	    TH8_STR_APPEND(interp, &zFull, &nFull, "::", 2);
 	}
-	Th8_StringAppend(interp, &zFull, &nFull, argv[2], argl[2]);
+	TH8_STR_APPEND(interp, &zFull, &nFull, argv[2], argl[2]);
     }
 
     {
@@ -746,6 +754,10 @@ namespace_origin_command(
     }
     Th8_Free(interp, zFull);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zFull);
+    return TH8_ERROR;
 }
 
 
@@ -805,17 +817,17 @@ namespace_which_command(
      * Build the fully qualified name.
      */
     if (argl[iArg] > 2 && argv[iArg][0] == ':' && argv[iArg][1] == ':') {
-	Th8_StringAppend(interp, &zFull, &nFull, argv[iArg], argl[iArg]);
+	TH8_STR_APPEND(interp, &zFull, &nFull, argv[iArg], argl[iArg]);
     } else {
 	zNs = Th8_GetCurrentNamespace(interp);
 	if (ALWAYS(zNs[0] == ':') && ALWAYS(zNs[1] == ':') &&
 	    zNs[2] == '\0') {
-	    Th8_StringAppend(interp, &zFull, &nFull, "::", 2);
+	    TH8_STR_APPEND(interp, &zFull, &nFull, "::", 2);
 	} else {
-	    Th8_StringAppend(interp, &zFull, &nFull, zNs, TH8_NOLEN);
-	    Th8_StringAppend(interp, &zFull, &nFull, "::", 2);
+	    TH8_STR_APPEND(interp, &zFull, &nFull, zNs, TH8_NOLEN);
+	    TH8_STR_APPEND(interp, &zFull, &nFull, "::", 2);
 	}
-	Th8_StringAppend(interp, &zFull, &nFull, argv[iArg], argl[iArg]);
+	TH8_STR_APPEND(interp, &zFull, &nFull, argv[iArg], argl[iArg]);
     }
 
     if (isVar) {
@@ -853,6 +865,10 @@ namespace_which_command(
     }
     Th8_Free(interp, zFull);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zFull);
+    return TH8_ERROR;
 }
 
 

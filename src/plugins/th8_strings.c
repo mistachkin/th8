@@ -455,8 +455,7 @@ string_range_command(
     /* The substring retains bytes of the input, so it inherits the
      * input's taint. */
     Th8_SetResult(
-        interp, zStart,
-        (size_t)(zEnd - zStart) | (argl[2] & TH8_TAINT_BIT));
+        interp, zStart, (size_t)(zEnd - zStart) | (argl[2] & TH8_TAG_BITS));
     return TH8_OK;
 }
 
@@ -1272,7 +1271,7 @@ string_map_command(
 		             interp, &argv[iArg + 1][i], azMap[j], nKey));
 		}
 		if (match) {
-		    Th8_StringAppend(
+		    TH8_STR_APPEND(
 		        interp, &zOut, &nOut, azMap[j + 1], anMap[j + 1]);
 		    i += nKey;
 		    found = 1;
@@ -1281,7 +1280,7 @@ string_map_command(
 	    }
 	}
 	if (!found) {
-	    Th8_StringAppend(interp, &zOut, &nOut, &argv[iArg + 1][i], 1);
+	    TH8_STR_APPEND(interp, &zOut, &nOut, &argv[iArg + 1][i], 1);
 	    i++;
 	}
 
@@ -1306,6 +1305,11 @@ string_map_command(
     Th8_Free(interp, zOut);
     Th8_Free(interp, azMap);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zOut);
+    Th8_Free(interp, azMap);
+    return TH8_ERROR;
 }
 
 
@@ -1399,25 +1403,29 @@ string_replace_command(
 
 	/* Prefix: bytes before iFirst. */
 	if (pFirst > zStr) {
-	    Th8_StringAppend(
+	    TH8_STR_APPEND(
 	        interp, &zOut, &nOut, zStr, (size_t)(pFirst - zStr));
 	}
 	/* Replacement (if given). */
 	if (argc == 6) {
-	    Th8_StringAppend(interp, &zOut, &nOut, argv[5], argl[5]);
+	    TH8_STR_APPEND(interp, &zOut, &nOut, argv[5], argl[5]);
 	}
 	/* Suffix: bytes after iLast. */
 	if (pAfterLast) {
 	    size_t nSuffix = nStr - (size_t)(pAfterLast - zStr);
 
 	    if (nSuffix > 0) {
-		Th8_StringAppend(interp, &zOut, &nOut, pAfterLast, nSuffix);
+		TH8_STR_APPEND(interp, &zOut, &nOut, pAfterLast, nSuffix);
 	    }
 	}
     }
     Th8_SetResult(interp, zOut, nOut);
     Th8_Free(interp, zOut);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zOut);
+    return TH8_ERROR;
 }
 
 
@@ -1714,12 +1722,16 @@ string_reverse_command(
 
 	if (!pNext) pNext = argv[2] + argl[2];
 	if (p) {
-	    Th8_StringAppend(interp, &zOut, &nOut, p, (size_t)(pNext - p));
+	    TH8_STR_APPEND(interp, &zOut, &nOut, p, (size_t)(pNext - p));
 	}
     }
     Th8_SetResult(interp, zOut, nOut);
     Th8_Free(interp, zOut);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zOut);
+    return TH8_ERROR;
 }
 
 
@@ -1831,7 +1843,7 @@ string_case_command(
     }
     /* Case conversion retains the input's bytes, so the result
      * inherits the input's taint. */
-    Th8_SetResult(interp, zOut, nStr | (argl[2] & TH8_TAINT_BIT));
+    Th8_SetResult(interp, zOut, nStr | (argl[2] & TH8_TAG_BITS));
     Th8_Free(interp, zOut);
     return TH8_OK;
 }
@@ -2076,14 +2088,18 @@ concat_command(
 	 * Append a space separator if the result is non-empty.
 	 */
 	if (nResult > 0) {
-	    Th8_StringAppend(interp, &zResult, &nResult, " ", 1);
+	    TH8_STR_APPEND(interp, &zResult, &nResult, " ", 1);
 	}
-	Th8_StringAppend(interp, &zResult, &nResult, &z[start], end - start);
+	TH8_STR_APPEND(interp, &zResult, &nResult, &z[start], end - start);
     }
 
     Th8_SetResult(interp, zResult ? zResult : "", nResult);
     Th8_Free(interp, zResult);
     return TH8_OK;
+
+oom:
+    Th8_Free(interp, zResult);
+    return TH8_ERROR;
 }
 
 
