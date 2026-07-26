@@ -383,20 +383,6 @@ regc_wc_tolower(chr c)
  * regcomp.c).  We do NOT define it here. */
 
 
-/*
- * regc_ctype_get_cache -- Build a cvec of matching characters.
- *
- * PostgreSQL caches these; TH8 builds them on-demand.
- * We scan characters 0..MAX_SIMPLE_CHR (0x7FF) through the
- * probe function and construct a cvec.  This is called once
- * per character class per regex compilation.
- *
- * Returns a pointer to a cvec, or NULL on memory failure.
- * The cvec is allocated via getcvec (defined in regc_cvec.c,
- * included earlier by regcomp.c) which uses the vars struct's
- * memory management.
- */
-
 typedef int (*pg_wc_probefunc)(chr c);
 
 /*
@@ -410,6 +396,39 @@ typedef int (*pg_wc_probefunc)(chr c);
  * We need v to call getcvec().  The caller passes it
  * indirectly -- we add a v parameter and adjust the call
  * site via a macro.
+ */
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * regc_ctype_get_cache_impl --
+ *
+ *	Build a cvec containing every character in 0..MAX_SIMPLE_CHR
+ *	(0x7FF) for which `probefunc` returns true, i.e. the members
+ *	of a POSIX character class.
+ *
+ * Why / How:
+ *	PostgreSQL caches these vecs; TH8 builds them on demand, once
+ *	per character class per regex compilation.  A first pass
+ *	counts matches to size the cvec, getcvec (from regc_cvec.c,
+ *	using the `vars` struct's memory management) allocates it,
+ *	then a second pass fills it.  An empty match set returns a
+ *	valid empty cvec rather than NULL, since NULL signals
+ *	out-of-memory to the caller.
+ *
+ * Parameters:
+ *	v          -- regex compile vars (for getcvec allocation).
+ *	probefunc  -- per-character class-membership predicate.
+ *	cclasscode -- class code; accepted for call-site symmetry
+ *		      but not consulted by the scan.
+ *
+ * Returns:
+ *	A cvec of matching characters, or NULL on memory failure.
+ *
+ * Side effects:
+ *	Allocates a cvec via the vars struct's memory management.
+ *
+ *----------------------------------------------------------------------
  */
 
 static struct cvec *

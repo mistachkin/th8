@@ -545,6 +545,7 @@ typedef struct Th8InternalStubsTable {
         int nServers,
         int timeoutMs,
         int maxDisagreeSec,
+        int attempts,
         th8_int64_t *pEpochSec);
     int (*th8_ProtectedAlloc)(
         Th8_Interp *interp,
@@ -923,6 +924,25 @@ typedef struct Th8InternalStubsTable {
         th8_int64_t *pEpochSec);
 #endif
 
+    /*
+     * th8_memtrack.c allocation-tracker dump, exposed so the test
+     * library's "th8_test_memory_dump" command can drive it.  Always
+     * present (never gated): in a non-TH8_MEM_DEBUG build the target is
+     * a fail-soft stub that reports a debug build is required.
+     */
+    int (*th8_MemTrackDump)(
+        Th8_Interp *interp,
+        const char *zPath,
+        size_t nPath);
+
+    /*
+     * th8_memtrack.c reset: frees all tracker bookkeeping and zeroes the
+     * static tables.  Exposed for the test library's
+     * "th8_test_memory_reset" command.  Always present; a no-op success
+     * off-debug.
+     */
+    int (*th8_MemTrackReset)(Th8_Interp *interp);
+
 } Th8InternalStubsTable;
 
 /*
@@ -931,7 +951,7 @@ typedef struct Th8InternalStubsTable {
  */
 
 #define TH8_INTERNAL_STUBS_MAGIC   (0x54483849)  /* "TH8I" */
-#define TH8_INTERNAL_STUBS_VERSION (52)
+#define TH8_INTERNAL_STUBS_VERSION (55)
 
 /*
  * Optional macro-redirection for plugins.  When

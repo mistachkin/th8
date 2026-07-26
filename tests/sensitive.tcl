@@ -179,5 +179,32 @@ runTest {test sensitive-5.3 {
 } -result {0}}
 
 ###############################################################################
+#
+# Section 6 -- sensitive values SHALL NOT egress as plaintext (R-26595-38386)
+#
+###############################################################################
+
+runTest {test sensitive-6.1 {
+  R-26595-38386: writing a sensitive value via [puts] is rejected before any
+                 output, with a fixed diagnostic that discloses no plaintext.
+} -constraints {
+    th8 crypto_testlib
+} -setup {
+  catch {secure delete _sens_6_1}
+  secure create _sens_6_1 "topsecret"
+} -body {
+  #
+  # The puts argument is the sensitive secure value; the write must be
+  # refused (rc == 1), the message must be the fixed egress diagnostic,
+  # and it must NOT contain the plaintext "topsecret".
+  #
+  set rc [catch {puts $_sens_6_1} m]
+  list $rc $m [string match "*topsecret*" $m]
+} -cleanup {
+  catch {secure delete _sens_6_1}
+  unset -nocomplain rc m
+} -result {1 {sensitive value cannot be written} 0}}
+
+###############################################################################
 
 source tests/epilogue.tcl

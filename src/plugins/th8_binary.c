@@ -90,6 +90,27 @@
  *----------------------------------------------------------------------
  */
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryWriteU8 --
+ *
+ *	Store the low 8 bits of `v` to `p[0]`.  A single-byte
+ *	write, so byte order does not apply; provided for
+ *	symmetry with the multi-byte writers.
+ *
+ * Parameters:
+ *	p -- one-byte output buffer (caller guarantees space).
+ *	v -- source value; only the low 8 bits are used.
+ *
+ * Returns:
+ *	None.
+ *
+ * Side effects:
+ *	Overwrites `p[0]`.
+ *
+ *----------------------------------------------------------------------
+ */
 static void
 th8BinaryWriteU8(unsigned char *p, th8_uint64_t v)
 {
@@ -560,6 +581,34 @@ typedef int Th8_BinaryAssertFloat64[(sizeof(double) == 8) ? 1 : -1];
 #  define TH8_BINARY_NAN_F32 ((th8_uint64_t)0x7FC00000u)
 #  define TH8_BINARY_NAN_F64 ((th8_uint64_t)0x7FF8000000000000ULL)
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryIsNaN32 --
+ *
+ *	Classify an IEEE 754 binary32 bit pattern as NaN.
+ *	A pattern is a NaN iff:
+ *	  * the exponent field (bits 30..23) is all-ones
+ *	    (`0xFF`), AND
+ *	  * the mantissa field (bits 22..0) is non-zero
+ *	    (else the pattern is +/-Infinity).
+ *
+ *	The sign bit is irrelevant for the classification.
+ *	Mirror of `th8BinaryIsNaN64`.
+ *
+ * Parameters:
+ *	bits -- 32-bit pattern held in a 64-bit accumulator
+ *		(typically from `th8BinaryFloat32Bits`); only the
+ *		low 32 bits are inspected.
+ *
+ * Returns:
+ *	1 if `bits` denotes a NaN; 0 otherwise.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
 static int
 th8BinaryIsNaN32(th8_uint64_t bits)
 {
@@ -891,6 +940,30 @@ th8BinaryOpFor(int letter)
  *----------------------------------------------------------------------
  */
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryErrBadFormat --
+ *
+ *	Set the interpreter result to the standard "bad field
+ *	specifier" diagnostic naming the offending format letter
+ *	and return `TH8_ERROR`.  Raised by `th8BinaryNextToken`
+ *	when a format byte has no op-table entry.  A
+ *	non-printable letter is rendered as `?` so the message
+ *	stays clean for control bytes.
+ *
+ * Parameters:
+ *	interp -- live interpreter (receives the message).
+ *	letter -- the rejected format letter (byte value).
+ *
+ * Returns:
+ *	`TH8_ERROR` unconditionally.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
 static int
 th8BinaryErrBadFormat(Th8_Interp *interp, int letter)
 {
@@ -1008,6 +1081,26 @@ th8BinaryErrStarFormat(Th8_Interp *interp)
  *----------------------------------------------------------------------
  */
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryIsDigit --
+ *
+ *	ASCII decimal-digit predicate used by the binary-format
+ *	tokeniser to parse the count modifier that may follow a
+ *	format letter.
+ *
+ * Parameters:
+ *	c -- byte value (typically promoted from `unsigned char`).
+ *
+ * Returns:
+ *	1 if `c` is one of `'0'..'9'`; 0 otherwise.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
 static int
 th8BinaryIsDigit(int c)
 {
@@ -1456,7 +1549,27 @@ th8BinaryWriteFloat64(
  *----------------------------------------------------------------------
  */
 
-/* th8BinaryStrPadByte: pick the pad byte for `a` (NUL) vs `A` (' '). */
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryStrPadByte --
+ *
+ *	Pick the byte used to pad the tail of an `a`/`A` string
+ *	field when the source is shorter than the field count:
+ *	NUL for `a` (KIND_STR_NUL) and space for `A`
+ *	(KIND_STR_SP).
+ *
+ * Parameters:
+ *	kind -- the op kind (TH8_BINARY_KIND_STR_NUL or _STR_SP).
+ *
+ * Returns:
+ *	`' '` for TH8_BINARY_KIND_STR_SP; `0` (NUL) otherwise.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
 static unsigned char
 th8BinaryStrPadByte(unsigned char kind)
 {
@@ -1491,8 +1604,24 @@ th8BinaryFormatStr(
 }
 
 /*
- * Bit / hex helpers.  Tcl 8.6 treats any non-`0`/`1` char as `1`
- * for b/B, and any non-hex char as 0 for h/H.
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryBitValue --
+ *
+ *	Map one character of a `b`/`B` bit-string field to its
+ *	bit value.  Per Tcl 8.6, only `'0'` denotes a zero bit;
+ *	every other character is treated as a one bit.
+ *
+ * Parameters:
+ *	c -- byte value taken from the source bit string.
+ *
+ * Returns:
+ *	0 if `c` is `'0'`; 1 otherwise.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
  */
 static int
 th8BinaryBitValue(int c)

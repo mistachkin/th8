@@ -296,6 +296,10 @@ static const Th8InternalStubsTable th8InternalStubsTableData = {
     0,
     0,
 #endif
+
+    /* th8_memtrack.c dump + reset (always present; fail-soft off-debug). */
+    th8MemTrackDump,
+    th8MemTrackReset,
 };
 
 /*

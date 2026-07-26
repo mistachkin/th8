@@ -1664,11 +1664,31 @@ oom:
  */
 
 /*
- * Skip empty buckets starting at *piBucket; advance until we find a
- * non-NULL bucket or reach the end of the table.  On entry, *piBucket
- * is the bucket index to start from; *ppCursor is set to that bucket's
- * head entry by the caller.  On return, *ppCursor is either a valid
- * entry pointer or NULL (iteration exhausted).
+ *----------------------------------------------------------------------
+ *
+ * th8ArraySearchSkipEmpty --
+ *
+ *	Advance a hash-table iteration cursor past empty buckets.
+ *	While `*ppCursor` is NULL, step to the next bucket and
+ *	load its head entry, stopping at the first non-empty
+ *	bucket or when the table is exhausted.  Backs the
+ *	`[array nextelement]` walk.
+ *
+ * Parameters:
+ *	pHash    -- the array's element hash being iterated.
+ *	piBucket -- in/out current bucket index; the caller has
+ *		set `*ppCursor` to this bucket's head entry.
+ *	ppCursor -- in/out cursor; NULL on entry means the current
+ *		bucket is empty.  Set to a valid entry, or to NULL
+ *		when iteration is exhausted, on return.
+ *
+ * Returns:
+ *	None.
+ *
+ * Side effects:
+ *	Advances `*piBucket` and rewrites `*ppCursor`.
+ *
+ *----------------------------------------------------------------------
  */
 static void
 th8ArraySearchSkipEmpty(
@@ -1686,14 +1706,40 @@ th8ArraySearchSkipEmpty(
 }
 
 /*
- * Validate a search by SID and array-name pair, returning the search
- * record on success or NULL on any failure.  Does NOT raise an error
- * directly -- callers craft their own error message based on context.
+ *----------------------------------------------------------------------
  *
- * On NULL return with *pbInvalidated == 1, the search was found but
- * is no longer usable (epoch mismatch or array destroyed/recreated)
- * AND has been removed from the search hash; the caller should
- * surface "couldn't find search" since the SID is now defunct.
+ * th8ArraySearchFind --
+ *
+ *	Look up an `[array startsearch]` cursor by search id and
+ *	validate it against the named array: the owning
+ *	interpreter, the registered array name, array liveness,
+ *	and the generation + epoch counters must all match so a
+ *	stale or guessed search id cannot drive a re-bound array.
+ *	Does NOT raise an error directly -- callers craft their
+ *	own message based on context.
+ *
+ *	The generation counter (rather than a bare pointer
+ *	compare on the array hash) avoids the Bug 9 / arrsearch-4.3
+ *	flake where the allocator reused a freed hash address
+ *	after `array unset` + `array set` of the same name.
+ *
+ * Parameters:
+ *	interp -- live interpreter (owns the search hash).
+ *	zSid   -- search id (the hash key).
+ *	nSid   -- search-id length.
+ *	zArray -- array name the search must be bound to.
+ *	nArray -- array-name length.
+ *
+ * Returns:
+ *	The matching th8ArraySearch on success; NULL on any
+ *	mismatch or if the search was found but invalidated.
+ *
+ * Side effects:
+ *	On invalidation, removes the entry from the search hash
+ *	and frees the search record and its owned `zArray` copy,
+ *	so the caller can report "couldn't find search".
+ *
+ *----------------------------------------------------------------------
  */
 static th8ArraySearch *
 th8ArraySearchFind(
@@ -1761,8 +1807,29 @@ invalidate:
 }
 
 /*
- * Free a single search record (used both as Th8_HashIterate callback
- * during interp teardown, and from donesearch via the release path).
+ *----------------------------------------------------------------------
+ *
+ * th8ArraySearchFreeEntry --
+ *
+ *	Free a single array-search record.  Used both as the
+ *	Th8_HashIterate callback during interpreter teardown and
+ *	from `[array donesearch]` via the release path.  NULL-safe
+ *	in `pEntry` and `pEntry->pData` (Bug 26): a tombstoned or
+ *	absent entry is a no-op.
+ *
+ * Parameters:
+ *	pEntry -- hash entry whose pData is the th8ArraySearch,
+ *		or NULL.
+ *	pCtx   -- the owning Th8_Interp (hash-iterate context).
+ *
+ * Returns:
+ *	TH8_OK unconditionally.
+ *
+ * Side effects:
+ *	Frees the search record and its owned `zArray` copy, then
+ *	clears `pEntry->pData`.
+ *
+ *----------------------------------------------------------------------
  */
 int
 th8ArraySearchFreeEntry(Th8_HashEntry *pEntry, void *pCtx)

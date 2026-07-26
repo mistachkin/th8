@@ -275,6 +275,7 @@ runAllTests {
   lsearch.tcl
   lsort.tcl
   mathfunc2.tcl
+  memtrack.tcl
   namespace.tcl
   newcmds.tcl
   newfeatures.tcl

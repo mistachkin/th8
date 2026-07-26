@@ -1392,7 +1392,7 @@ th8EnvKeyValue(
  */
 
 static Th8_Platform th8EnvPlatformData = {
-    4,   /* nVersion */
+    5,   /* nVersion */
     0,
     0,
     0,
@@ -1476,6 +1476,7 @@ static Th8_Platform th8EnvPlatformData = {
     0,   /* xRandomBytes */
     0,
     0,  /* xDnsResolve, xDnsResolveFree */
+    0,  /* xStackBackTrace */
     0   /* pCtx */
 };
 

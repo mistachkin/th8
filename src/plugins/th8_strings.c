@@ -378,6 +378,18 @@ string_index_command(
 
 
 /*
+ * th8ParseIndex is now in th8_util.c (th8_util.h).
+ *
+ * It parses an index argument that can be:
+ *   - "end"     -> returns nCount - 1
+ *   - "end-N"   -> returns nCount - 1 - N
+ *   - integer   -> returns the integer value
+ *
+ * Used by string range, lrange, lreplace, and string case commands
+ * for consistent index handling.
+ */
+
+/*
  *----------------------------------------------------------------------
  *
  * string_range_command --
@@ -401,20 +413,6 @@ string_index_command(
  *
  *----------------------------------------------------------------------
  */
-
-/*
- * th8ParseIndex is now in th8_util.c (th8_util.h).
- *
- * It parses an index argument that can be:
- *   - "end"     -> returns nCount - 1
- *   - "end-N"   -> returns nCount - 1 - N
- *   - integer   -> returns the integer value
- *
- * Used by string range, lrange, lreplace, and string case commands
- * for consistent index handling.
- */
-
-
 static int
 string_range_command(
     Th8_Interp *interp,
@@ -463,9 +461,11 @@ string_range_command(
 /*
  *----------------------------------------------------------------------
  *
- * string_first_command / string_last_command --
+ * string_first_command --
  *
- *	Find first/last occurrence of needle in haystack.
+ *	Find the first occurrence of a needle in a haystack.
+ *
+ *	string first NEEDLE HAYSTACK ?STARTINDEX?
  *
  * Why / How:
  *	Implements [string first].  Performs byte-level search from
@@ -1533,15 +1533,15 @@ string_totitle_command(
 /*
  *----------------------------------------------------------------------
  *
- * string_wordend_command / string_wordstart_command --
+ * string_wordend_command --
  *
  *	string wordend STRING INDEX
- *	string wordstart STRING INDEX
  *
- *	Return the index of the character just after (wordend) or
- *	just before (wordstart) the word containing the character
- *	at INDEX.  A "word" is a contiguous run of alphanumeric
- *	characters (ASCII).
+ *	Return the index of the character just after the word
+ *	containing the character at INDEX.  A "word" is a
+ *	contiguous run of alphanumeric characters (ASCII).
+ *	`string_wordstart_command` is the backward-scanning
+ *	mirror of this routine.
  *
  * Why / How:
  *	Implements [string wordend] and [string wordstart].  Scans

@@ -867,10 +867,24 @@ th8ChrToUtf8(
 /*
  *----------------------------------------------------------------------
  *
- * th8RegexSetup / th8RegexTeardown --
+ * th8RegexSetup --
  *
- *	Set up and tear down the global regex bridge state before
- *	and after each regex operation.
+ *	Set up the global regex bridge state before a regex
+ *	operation.
+ *
+ * Why / How:
+ *	Acquires the global regex mutex (the engine relies on
+ *	file-scope state that is not re-entrant), then publishes the
+ *	active interpreter pointer and clears the OOM flag so the
+ *	engine's allocation hooks resolve to this interp.  Paired
+ *	with th8RegexTeardown, which must run on every exit path.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Enters the global mutex and sets th8_regex_interp /
+ *	th8_regex_oom_flag.
  *
  *----------------------------------------------------------------------
  */

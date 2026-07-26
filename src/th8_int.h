@@ -1301,6 +1301,7 @@ TH8_INTERNAL int th8NtpQuery(
     int nServers,
     int timeoutMs,
     int maxDisagreeSec,
+    int attempts,
     th8_int64_t *pEpochSec);
 /*
  * Validate a received NTP packet (const void * = 48-byte
@@ -1323,5 +1324,33 @@ TH8_INTERNAL void th8SetLastNtpSec(Th8_Interp *interp, th8_int64_t sec);
 TH8_INTERNAL th8_int64_t th8GetLastLocalMs(Th8_Interp *interp);
 TH8_INTERNAL void th8SetLastLocalMs(Th8_Interp *interp, th8_int64_t ms);
 #endif
+
+/*
+ * Compiler-runtime (unwind) platform (th8_unwind.c).  Supplies the
+ * xStackBackTrace callback via _Unwind_Backtrace; merged by
+ * Th8_UseDefaultPlatform.  Internal -- not part of the public
+ * Th8_Get*Platform surface.
+ */
+TH8_INTERNAL const Th8_Platform *th8GetUnwindPlatform(void);
+
+/*
+ * Allocation-site memory tracker (th8_memtrack.c).  The Alloc/Realloc/
+ * Free hooks exist only under TH8_MEM_DEBUG and are invoked from the
+ * allocation funnel in th8_core.c under the same gate.  th8MemTrackDump
+ * and th8MemTrackReset are always declared: in a non-TH8_MEM_DEBUG build
+ * they are fail-soft stubs, so the test-library commands resolve (the dump
+ * reports that a debug build is required; the reset is a successful no-op).
+ * See docs/internal/design_notes_memtrack.md.
+ */
+#if defined(TH8_MEM_DEBUG)
+TH8_INTERNAL void
+th8MemTrackAlloc(Th8_Interp *interp, void *pAddr, size_t nByte);
+TH8_INTERNAL void
+th8MemTrackRealloc(Th8_Interp *interp, void *pOld, void *pNew, size_t nByte);
+TH8_INTERNAL void th8MemTrackFree(Th8_Interp *interp, void *pAddr);
+#endif
+TH8_INTERNAL int
+th8MemTrackDump(Th8_Interp *interp, const char *zPath, size_t nPath);
+TH8_INTERNAL int th8MemTrackReset(Th8_Interp *interp);
 
 #endif /* TH8_INT_H */

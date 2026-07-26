@@ -2261,19 +2261,17 @@ Th8_RandomBytes(
 /*
  *----------------------------------------------------------------------
  *
- * Th8_DnsResolve / Th8_DnsResolveFree --
+ * Th8_DnsResolve --
  *
- *	Thin wrappers over the platform's xDnsResolve and
- *	xDnsResolveFree callbacks.  Used by the libcurl
- *	integration to validate DNS via DNSSEC before pinning
- *	an IP address into curl's resolve list.
+ *	Thin wrapper over the platform's xDnsResolve callback.
+ *	Used by the libcurl integration to validate DNS via
+ *	DNSSEC before pinning an IP address into curl's resolve
+ *	list.
  *
- *	If xDnsResolve is NULL, Th8_DnsResolve returns
- *	TH8_ERROR -- the caller is expected to fall back to a
- *	non-pinned resolution path or fail closed.
- *
- *	Th8_DnsResolveFree is a no-op when xDnsResolveFree is
- *	NULL or pResult is NULL.
+ *	If interp or ppResult is NULL, or xDnsResolve is NULL,
+ *	Th8_DnsResolve returns TH8_ERROR -- the caller is
+ *	expected to fall back to a non-pinned resolution path or
+ *	fail closed.
  *
  * Results:
  *	TH8_OK on success (check pResult->bogus for DNSSEC
@@ -2664,6 +2662,10 @@ Th8_IntCmpXchg(
 }
 
 
+#if defined(__OpenBSD__)
+#  include <unistd.h>
+#endif
+
 /*
  *----------------------------------------------------------------------
  *
@@ -2690,10 +2692,6 @@ Th8_IntCmpXchg(
  *
  *----------------------------------------------------------------------
  */
-
-#if defined(__OpenBSD__)
-#  include <unistd.h>
-#endif
 
 int
 Th8_Pledge(
@@ -2896,6 +2894,20 @@ Th8_UseDefaultPlatform(Th8_Platform *pPlatform)
     *pPlatform = *Th8_GetWin32Platform();
 #  endif
 #endif /* TH8_USE_MIMALLOC */
+
+    /*
+     * Compiler-runtime layer, merged AFTER the OS layers but BEFORE libc
+     * (most-specific to least-specific).  It supplies xStackBackTrace via
+     * _Unwind_Backtrace: a native OS stack walk (e.g. Win32
+     * RtlCaptureStackBackTrace, merged with the OS layers above) already
+     * won the slot where one exists; otherwise this fills it.  It is more
+     * specific than libc (it provides a capability ANSI C cannot) but less
+     * specific than the OS, so it sits just above libc, which remains the
+     * final least-specific base.
+     */
+    if (Th8_MergePlatform(pPlatform, th8GetUnwindPlatform()) != TH8_OK) {
+	return TH8_ERROR;
+    }
 
     if (Th8_MergePlatform(pPlatform, Th8_GetLibcPlatform()) != TH8_OK) {
 	return TH8_ERROR;

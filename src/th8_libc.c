@@ -1123,7 +1123,7 @@ Th8_GetLibcPlatform(void)
     static int bInit = 0;
 
     if (!bInit) {
-	sLibc.nVersion = 4;
+	sLibc.nVersion = 5;
 
 	/* Memory allocation */
 	sLibc.xMalloc = th8LibcMalloc;
@@ -1152,6 +1152,10 @@ Th8_GetLibcPlatform(void)
 
 	/* Math */
 	sLibc.xMathFunc = th8LibcMathFunc;
+
+	/* nVersion 5 adds xStackBackTrace, but that is a compiler-runtime
+	 * facility (not ANSI C), so it lives in th8_unwind.c and is supplied
+	 * by merging th8GetUnwindPlatform(); libc leaves the slot NULL. */
 
 	bInit = 1;
     }

@@ -30,9 +30,32 @@
 
 #  if defined(TH8_ENABLE_VARIABLES)
 /*
- * Capture current variable value into pzCap/pnCap.  pzCap is
- * malloc'd if pVar exists; otherwise *pzCap is NULL and *pbExisted
- * is 0.  Caller frees *pzCap.                                     */
+ *----------------------------------------------------------------------
+ *
+ * events_capture_value --
+ *
+ *	Snapshot the current value of a script variable so that a
+ *	later [vwait]/[update] callback can detect whether it
+ *	changed.
+ *
+ * Why / How:
+ *	Reads the variable via Th8_GetVar and copies the interp
+ *	result into a freshly allocated buffer (*pzCap), recording
+ *	its length in *pnCap and whether the variable existed in
+ *	*pbExisted.  A variable that exists but cannot be read (e.g.
+ *	a bare array) is reported as existing with empty content so
+ *	comparison stays well-defined.  The caller owns *pzCap and
+ *	must free it.
+ *
+ * Results:
+ *	TH8_OK on success (including the not-exists case), TH8_ERROR
+ *	if the capture buffer could not be allocated.
+ *
+ * Side effects:
+ *	Allocates *pzCap on the heap and clears the interp result.
+ *
+ *----------------------------------------------------------------------
+ */
 static int
 events_capture_value(
     Th8_Interp *interp,
@@ -78,9 +101,30 @@ events_capture_value(
     return TH8_OK;
 }
 
-/* Returns 1 if the named variable's current state differs from
- * the captured (zCap, nCap, bExisted), 0 if unchanged, -1 on
- * unrecoverable error.                                       */
+/*
+ *----------------------------------------------------------------------
+ *
+ * events_value_changed --
+ *
+ *	Determine whether a watched variable's current state differs
+ *	from a snapshot previously taken by events_capture_value.
+ *
+ * Why / How:
+ *	Compares present existence against bExisted (a create or
+ *	unset counts as a change), then, when the variable still
+ *	exists, compares the current value bytes against the captured
+ *	(zCap, nCap).  An unreadable-but-existing variable is treated
+ *	as unchanged so a transient read failure does not spuriously
+ *	wake a [vwait].
+ *
+ * Results:
+ *	1 if the state changed, 0 if unchanged.
+ *
+ * Side effects:
+ *	Clears the interp result.
+ *
+ *----------------------------------------------------------------------
+ */
 static int
 events_value_changed(
     Th8_Interp *interp,

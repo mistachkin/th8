@@ -102,4 +102,21 @@ runTest {test clockext-2.2 {
 
 ###############################################################################
 
+runTest {test clockext-3.1 {
+  R-39982-49558: clock ntp accepts the -attempts retry option; a
+                 non-numeric value is rejected at option-parse time,
+                 before any network query (deterministic, network-free).
+} -constraints {
+    th8 crypto_testlib
+} -body {
+  #
+  # The bad -attempts value fails in Th8_ToWideInt during option
+  # parsing, so this exercises the -attempts wiring without depending
+  # on a live NTP exchange.  catch returns 1 (error caught).
+  #
+  catch {clock ntp -attempts notanumber}
+} -result {1}}
+
+###############################################################################
+
 source tests/epilogue.tcl

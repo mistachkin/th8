@@ -1430,8 +1430,22 @@ Th8Shell_EmitResult(Th8_Interp *interp, int rc)
 	fprintf(pFile, "error, line %d: ", Th8_GetErrorLine(interp));
 	nOutput++;
     }
-    if (nResult > 0) {
-	fwrite(zResult, 1, nResult, pFile);
+    /*
+     * Sensitivity boundary: the REPL must never echo a sensitive result
+     * as plaintext to the terminal.  Emit a fixed redaction that
+     * discloses no bytes of the value.
+     *
+     * The length must also be masked with TH8_LEN before fwrite: the
+     * result length returned by Th8_GetResult carries the taint and
+     * sensitivity tag bits in its high bits, so an unmasked count would
+     * be enormous (a wild over-read) for any tagged result.
+     */
+    if (Th8_IsResultSensitive(interp)) {
+	static const char zRedacted[] = "<sensitive value withheld>";
+	fwrite(zRedacted, 1, sizeof(zRedacted) - 1, pFile);
+	nOutput++;
+    } else if (TH8_LEN(nResult) > 0) {
+	fwrite(zResult, 1, TH8_LEN(nResult), pFile);
 	nOutput++;
     }
     if (nOutput > 0) {

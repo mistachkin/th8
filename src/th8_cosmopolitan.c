@@ -131,7 +131,7 @@ th8CosmopolitanMemorySize(Th8_Interp *interp, void *pCtx, void *p)
  */
 
 static Th8_Platform th8CosmopolitanPlatformData = {
-    4,   /* nVersion */
+    5,   /* nVersion */
     0,   /* xInitialize (filled by POSIX merge) */
     0,   /* xFinalize (filled by POSIX merge) */
 
@@ -260,8 +260,11 @@ static Th8_Platform th8CosmopolitanPlatformData = {
     /* DNS (filled by POSIX merge) */
     0, 0,  /* xDnsResolve, xDnsResolveFree */
 
+    /* Diagnostics (nVersion 5) -- the th8_unwind (compiler-runtime) layer supplies xStackBackTrace. */
+    0, /* xStackBackTrace */
+
     /* Host context */
-    0   /* pCtx */
+    0 /* pCtx */
 };
 
 

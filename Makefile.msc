@@ -466,9 +466,10 @@ CORE_OBJ = $(B)\th8_core.obj $(B)\th8_channel.obj $(B)\th8_protect.obj \
            $(B)\th8_timekeeping.obj $(B)\th8_variables.obj \
            $(B)\th8_harpy_cmds.obj $(B)\th8_crypto_cmds.obj \
            $(B)\th8_lang.obj $(B)\th8_xlib.obj $(B)\th8_fault.obj \
-           $(B)\th8_env.obj $(B)\th8_mem.obj \
+           $(B)\th8_env.obj $(B)\th8_mem.obj $(B)\th8_memtrack.obj \
            $(B)\th8_regex.obj \
-           $(B)\th8_nullio.obj $(B)\th8_win32.obj $(B)\th8_libc.obj \
+           $(B)\th8_nullio.obj $(B)\th8_unwind.obj \
+           $(B)\th8_win32.obj $(B)\th8_libc.obj \
            $(B)\th8_ctime.obj $(CURL_OBJ) $(BIGINT_OBJ) $(CRYPTOGRAPHY_OBJ) \
            $(MIMALLOC_PLAT_OBJ) $(MIMALLOC_STATIC_OBJ) $(UNBOUND_OBJ) \
            $(B)\th8_spilornis.obj $(B)\spilornis.obj \
@@ -791,6 +792,12 @@ $(B)\th8_mem.obj: $(S)\th8_mem.c $(S)\th8.h $(S)\th8_int.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_mem.c
 
+$(B)\th8_memtrack.obj: $(S)\th8_memtrack.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_int_core.h $(S)\th8_plat.h $(S)\th8_meta_defs.h \
+	$(S)\th8_meta_libc.h $(S)\th8_meta_posix.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_memtrack.c
+
 # ----------------------------------------------------------------
 # Plugin compilation rules.
 # ----------------------------------------------------------------
@@ -890,6 +897,11 @@ $(B)\th8_regex.obj: $(S)\plugins\regexp\th8_regex.c $(S)\th8.h \
 $(B)\th8_nullio.obj: $(S)\th8_nullio.c $(S)\th8.h $(S)\th8_int.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_nullio.c
+
+$(B)\th8_unwind.obj: $(S)\th8_unwind.c $(S)\th8.h $(S)\th8_int.h \
+	$(S)\th8_meta_defs.h $(S)\th8_meta_libc.h
+	-if not exist "$(B)" mkdir "$(B)"
+	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_unwind.c
 
 $(B)\th8_win32.obj: $(S)\th8_win32.c $(S)\th8.h $(S)\th8_int.h \
 	$(S)\th8_mem.h $(S)\th8_meta_defs.h $(S)\th8_meta_libc.h \

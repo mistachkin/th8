@@ -1465,7 +1465,7 @@ th8SqliteOpenAndPrepare(Th8_Interp *interp, Th8_SQLiteKvCtx *ctx)
  */
 
 static Th8_Platform th8SqlitePlatformData = {
-    4, /* nVersion */
+    5, /* nVersion */
     0,
     0,
     0,
@@ -1541,6 +1541,7 @@ static Th8_Platform th8SqlitePlatformData = {
     0, /* xRandomBytes */
     0,
     0, /* xDnsResolve, xDnsResolveFree */
+    0, /* xStackBackTrace */
     0 /* pCtx -- set dynamically in _Init */
 };
 

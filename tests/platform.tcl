@@ -66,6 +66,39 @@ runTest {test platform-1.4 {
 } -result {0}}
 
 ###############################################################################
+
+runTest {test platform-1.5 {
+  R-49723-00529: a UTF-16 surrogate codepoint encoded as UTF-8 is rejected
+} -constraints {
+    loadLib th8
+} -body {
+  #
+  # 0xED 0xA0 0x80 is the (ill-formed) three-byte UTF-8 encoding of
+  # U+D800, the first high surrogate.  Surrogates are valid only inside
+  # UTF-16 and MUST NOT appear in UTF-8; accepting them enables
+  # surrogate-smuggling (WTF-8 / CESU-8) attacks.  Exercises the
+  # `cp >= 0xD800 && cp <= 0xDFFF` reject path.
+  #
+  th8testlib::utf8validate "\xED\xA0\x80"
+} -result {1}}
+
+###############################################################################
+
+runTest {test platform-1.6 {
+  R-49723-00529: the codepoint just past the surrogate range (U+E000) is valid
+} -constraints {
+    loadLib th8
+} -body {
+  #
+  # 0xEE 0x80 0x80 encodes U+E000, the first codepoint above the
+  # surrogate block.  It satisfies `cp >= 0xD800` but not
+  # `cp <= 0xDFFF`, so the surrogate guard falls through and the byte
+  # sequence validates -- the upper boundary of the reject range.
+  #
+  th8testlib::utf8validate "\xEE\x80\x80"
+} -result {0}}
+
+###############################################################################
 #
 # Section 2 -- Platform initialization lifecycle (Section 29)
 #

@@ -66,6 +66,31 @@
 #  if defined(TH8_ENABLE_FAULT_INJECTION)
 extern struct Th8_FaultConfig *th8FaultActiveCfg;
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8SnkOsslFaultTrip --
+ *
+ *	Predicate used by the OSSL_CALL / OSSL_CALL_PTR wrappers to
+ *	decide whether a given OpenSSL call site should be forced to
+ *	report failure instead of invoking OpenSSL.
+ *
+ * Why / How:
+ *	Returns true only when a fault config is active and the bit
+ *	for `op` is armed in th8FaultActiveCfg->nFailOsslMask, letting
+ *	tests drive the otherwise-unreachable error arms of OpenSSL
+ *	calls for MC/DC coverage without altering the surrounding
+ *	decision structure.
+ *
+ * Results:
+ *	Non-zero if op's failure bit is armed, 0 otherwise.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
+
 static int
 th8SnkOsslFaultTrip(int op)
 {
@@ -1222,6 +1247,21 @@ Th8_RsaKeyTokenHex(Th8_Interp *interp, const Th8_RsaKey *pKey, char zOut[17])
     return TH8_OK;
 }
 
+#  include <openssl/evp.h>
+#  include <openssl/rsa.h>
+#  include <openssl/param_build.h>
+#  include <openssl/core_names.h>
+
+/*
+ * Maximum RSA signature size in bytes.  Accommodates RSA keys up to
+ * 65536 bits (8192-byte modulus) plus a 64-byte margin for encoding.
+ * Override at compile time with -DTH8_RSA_MAX_SIG_BYTES=N.
+ */
+
+#  ifndef TH8_RSA_MAX_SIG_BYTES
+#    define TH8_RSA_MAX_SIG_BYTES 16448 /* 131072-bit key + 64 margin */
+#  endif
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1253,21 +1293,6 @@ Th8_RsaKeyTokenHex(Th8_Interp *interp, const Th8_RsaKey *pKey, char zOut[17])
  *
  *----------------------------------------------------------------------
  */
-
-#  include <openssl/evp.h>
-#  include <openssl/rsa.h>
-#  include <openssl/param_build.h>
-#  include <openssl/core_names.h>
-
-/*
- * Maximum RSA signature size in bytes.  Accommodates RSA keys up to
- * 65536 bits (8192-byte modulus) plus a 64-byte margin for encoding.
- * Override at compile time with -DTH8_RSA_MAX_SIG_BYTES=N.
- */
-
-#  ifndef TH8_RSA_MAX_SIG_BYTES
-#    define TH8_RSA_MAX_SIG_BYTES 16448 /* 131072-bit key + 64 margin */
-#  endif
 
 int
 Th8_RsaVerify(
@@ -1993,17 +2018,28 @@ cleanup:
 /*
  *----------------------------------------------------------------------
  *
- * th8TestRsaKeyClearPubBlob / th8TestRsaKeyRestorePubBlob --
+ * th8TestRsaKeyClearPubBlob --
  *
- *	Test-only helpers exposed via the internal stubs table for
- *	driving the C2-Pair (F,T) vector at Th8_RsaKeyToken's L1117
- *	`if (!pKey || !pKey->zPubBlob)`.  th8_snk.c is the only
- *	translation unit that can see the Th8_RsaKey layout, so
- *	testlib cannot directly null/restore zPubBlob.
+ *	Test-only helper (exposed via the internal stubs table) that
+ *	captures a `Th8_RsaKey`'s public-key blob pointer/length and
+ *	then nulls them, driving the C2-Pair (F,T) vector at
+ *	Th8_RsaKeyToken's L1117 `if (!pKey || !pKey->zPubBlob)`.
  *
- *	Pattern of use: save -> null -> call Th8_RsaKeyToken
- *	(drives F,T) -> restore.  The save/restore protects the
+ * Why / How:
+ *	th8_snk.c is the only translation unit that can see the
+ *	Th8_RsaKey layout, so testlib cannot directly null/restore
+ *	zPubBlob.  Pattern of use: save -> null -> call
+ *	Th8_RsaKeyToken (drives F,T) -> restore (via the paired
+ *	th8TestRsaKeyRestorePubBlob).  Saving first protects the
  *	caller's key from corruption.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Stores the original (zPubBlob, nPubBlob) into the caller's
+ *	out-parameters and sets pKey->zPubBlob/nPubBlob to NULL/0.
+ *	No-op if any pointer argument is NULL.
  *
  *----------------------------------------------------------------------
  */

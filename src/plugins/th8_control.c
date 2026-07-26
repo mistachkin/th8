@@ -57,36 +57,33 @@ typedef struct TryState {
 /*
  *----------------------------------------------------------------------
  *
- * catch_command / catch_posteval --
+ * catch_command --
  *
- *	Evaluate a script and catch its return code (NRE).
+ *	Front half of the Tcl [catch] command: evaluate a script and
+ *	catch its return code using the NRE trampoline.
  *
  *	catch SCRIPT ?VARNAME?
  *
  * Why / How:
- *	Implements the Tcl [catch] command.  Uses a two-phase NRE
- *	callback chain: catch_command pushes catch_posteval and
- *	NREvals the script; catch_posteval receives the return code,
- *	optionally stores the result in VARNAME, and sets the
- *	interpreter result to the return code integer.
+ *	Validates the argument count, then pushes catch_posteval as
+ *	an NRE callback and NREvals SCRIPT.  The trampoline runs
+ *	SCRIPT to completion and later invokes catch_posteval with
+ *	the return code, which optionally stores the result in
+ *	VARNAME and sets the interpreter result to the return-code
+ *	integer.
  *
- *	NRE callback chain:
- *	  1. catch_command pushes catch_posteval, then NREvals SCRIPT.
- *	  2. The trampoline evaluates SCRIPT to completion.
- *	  3. catch_posteval receives the return code (rc) from SCRIPT.
- *
- *	pData layout for catch_posteval:
+ *	pData layout handed to catch_posteval:
  *	  [0] = argv   (const char **) -- for VARNAME access
  *	  [1] = argl   (size_t *)      -- for VARNAME length
  *	  [2] = argc   (as th8_int64_t)
  *	  [3] = unused
  *
- *	Cancel-unwind interaction: if the script returned TH8_ERROR
- *	and the interpreter has -unwind cancellation active (set via
- *	[interp cancel -unwind]), catch must NOT intercept the error.
- *	Instead it propagates TH8_ERROR so the script unwinds all
- *	the way to the top-level Th8_Eval caller.  Without this
- *	check, [catch] would silently swallow cancellation errors.
+ * Results:
+ *	The return code of Th8_NREval on SCRIPT, or a wrong-num-args
+ *	error when argc is not 2 or 3.
+ *
+ * Side effects:
+ *	Registers an NRE callback and begins evaluating SCRIPT.
  *
  *----------------------------------------------------------------------
  */
@@ -979,10 +976,12 @@ if_command(
 }
 
 
+/* th8EvalCleanup declared in th8_int.h (non-static, shared) */
+
 /*
  *----------------------------------------------------------------------
  *
- * eval_command / th8EvalCleanup --
+ * eval_command --
  *
  *	Concatenate arguments and evaluate the result as a script.
  *
@@ -991,9 +990,9 @@ if_command(
  * Why / How:
  *	Implements the Tcl [eval] command.  For a single argument,
  *	uses a zero-copy fast path via Th8_NREval.  For multiple
- *	arguments, concatenates them with spaces and pushes an NRE
- *	cleanup callback to free the concatenated buffer after
- *	evaluation completes.
+ *	arguments, concatenates them with spaces and pushes the
+ *	th8EvalCleanup NRE callback to free the concatenated buffer
+ *	after evaluation completes.
  *
  *	When argc == 2, the single argument is NREval'd directly
  *	(zero-copy fast path).  When argc > 2, all arguments are
@@ -1018,8 +1017,6 @@ if_command(
  *
  *----------------------------------------------------------------------
  */
-
-/* th8EvalCleanup declared in th8_int.h (non-static, shared) */
 
 static int
 eval_command(

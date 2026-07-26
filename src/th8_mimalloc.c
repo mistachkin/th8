@@ -216,8 +216,10 @@ th8MimallocMalloc(Th8_Interp *interp, void *pCtx, size_t nByte)
 
     if (!th8MiHeap) th8MiHeapInit();
     if (!th8MiHeap) {
-	/* Heap creation failed; fall back to the thread's default. */
-	return mi_heap_calloc(mi_heap_get_default(), 1, nByte);
+	/* Heap creation failed; fall back to the thread's default heap.
+	 * mi_calloc allocates from that heap and is stable across mimalloc
+	 * 2.x/3.x, whereas mi_heap_get_default() was removed in 3.x. */
+	return mi_calloc(1, nByte);
     }
     return mi_heap_calloc(th8MiHeap, 1, nByte);
 }
@@ -256,8 +258,10 @@ th8MimallocRealloc(Th8_Interp *interp, void *pCtx, void *p, size_t nByte)
 
     if (!th8MiHeap) th8MiHeapInit();
     if (!th8MiHeap) {
-	mi_heap_t *h = mi_heap_get_default();
-	return p ? mi_heap_realloc(h, p, nByte) : mi_heap_calloc(h, 1, nByte);
+	/* Heap creation failed; fall back to the thread's default heap via
+	 * the top-level mi_realloc/mi_calloc (stable across mimalloc 2.x/3.x;
+	 * mi_heap_get_default() was removed in 3.x). */
+	return p ? mi_realloc(p, nByte) : mi_calloc(1, nByte);
     }
     if (!p) {
 	return mi_heap_calloc(th8MiHeap, 1, nByte);
@@ -339,7 +343,7 @@ th8MimallocMemorySize(Th8_Interp *interp, void *pCtx, void *p)
  */
 
 static Th8_Platform th8MimallocPlatformData = {
-    4,    /* nVersion */
+    5,    /* nVersion */
     th8MimallocInit,  /* xInitialize */
     th8MimallocFinal,  /* xFinalize */
 
@@ -468,8 +472,11 @@ static Th8_Platform th8MimallocPlatformData = {
     /* DNS */
     0, 0,  /* xDnsResolve, xDnsResolveFree */
 
+    /* Diagnostics (nVersion 5) -- the th8_unwind (compiler-runtime) layer supplies xStackBackTrace. */
+    0, /* xStackBackTrace */
+
     /* Host context */
-    0   /* pCtx */
+    0 /* pCtx */
 };
 
 

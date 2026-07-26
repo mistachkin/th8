@@ -33,7 +33,7 @@
  *	Query NTP servers for authenticated wall-clock time.
  *	Used as a subcommand of [clock] via the timekeeping plugin.
  *
- *	clock ntp ?-server HOST? ?-timeout MS?
+ *	clock ntp ?-server HOST? ?-timeout MS? ?-attempts N?
  *
  *----------------------------------------------------------------------
  */
@@ -49,6 +49,7 @@ th8HarpyClockNtpCommand(
     const char *azServers[8];
     int nServers = 0;
     int timeoutMs = 0;
+    int attempts = 0; /* 0 -> NTP_DEFAULT_ATTEMPTS; 1 disables retries */
     int i;
     th8_int64_t epochSec;
     int rc;
@@ -59,8 +60,8 @@ th8HarpyClockNtpCommand(
 	if (argl[i] == 7 && Th8_Memcmp(interp, argv[i], "-server", 7) == 0) {
 	    if (i + 1 >= argc) {
 		return Th8_WrongNumArgs(
-		    interp, "clock ntp ?-server host? "
-		            "?-timeout ms?");
+		    interp, "clock ntp ?-server host? ?-timeout ms? "
+		            "?-attempts n?");
 	    }
 	    i++;
 	    if (nServers < 8) {
@@ -70,8 +71,8 @@ th8HarpyClockNtpCommand(
 	    argl[i] == 8 && Th8_Memcmp(interp, argv[i], "-timeout", 8) == 0) {
 	    if (i + 1 >= argc) {
 		return Th8_WrongNumArgs(
-		    interp, "clock ntp ?-server host? "
-		            "?-timeout ms?");
+		    interp, "clock ntp ?-server host? ?-timeout ms? "
+		            "?-attempts n?");
 	    }
 	    i++;
 	    {
@@ -82,6 +83,23 @@ th8HarpyClockNtpCommand(
 		}
 		timeoutMs = (int)v;
 	    }
+	} else if (
+	    argl[i] == 9 &&
+	    Th8_Memcmp(interp, argv[i], "-attempts", 9) == 0) {
+	    if (i + 1 >= argc) {
+		return Th8_WrongNumArgs(
+		    interp, "clock ntp ?-server host? ?-timeout ms? "
+		            "?-attempts n?");
+	    }
+	    i++;
+	    {
+		th8_int64_t v;
+
+		if (Th8_ToWideInt(interp, argv[i], argl[i], &v) != TH8_OK) {
+		    return TH8_ERROR;
+		}
+		attempts = (int)v;
+	    }
 	} else {
 	    Th8_ErrorMessage(
 	        interp, "clock ntp: unknown option \"", argv[i], argl[i]);
@@ -91,7 +109,7 @@ th8HarpyClockNtpCommand(
 
     rc = th8NtpQuery(
         interp, nServers > 0 ? azServers : NULL, nServers, timeoutMs, 0,
-        &epochSec);
+        attempts, &epochSec);
     if (rc != TH8_OK) return rc;
 
     return Th8_SetResultWideInt(interp, epochSec);

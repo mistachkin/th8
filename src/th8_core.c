@@ -1163,6 +1163,9 @@ th8MallocCommon(
 	} else {
 	    interp->nAllocBytes += nByte;
 	}
+#if defined(TH8_MEM_DEBUG)
+	th8MemTrackAlloc(interp, p, nByte);
+#endif
     }
     if (!p) {
 	TH8_TRACE_ERR(interp, "memory allocation failed");
@@ -1691,6 +1694,10 @@ Th8_Free(
 	xFree = interp->pPlatform->xFree;
 	if (xFree) {
 	    size_t (*xMemorySize)(Th8_Interp *, void *, void *) = NULL;
+#if defined(TH8_MEM_DEBUG)
+	    /* Untrack while the address is still valid, before xFree. */
+	    th8MemTrackFree(interp, p);
+#endif
 	    xMemorySize = interp->pPlatform->xMemorySize;
 	    if (xMemorySize) {
 		size_t
@@ -1779,6 +1786,9 @@ th8ReallocCommon(
 	} else {
 	    interp->nAllocBytes += nByte;
 	}
+#if defined(TH8_MEM_DEBUG)
+	th8MemTrackRealloc(interp, p, pNew, nByte);
+#endif
     }
     if (!pNew) {
 	TH8_TRACE_ERR(interp, "memory allocation failed");
@@ -2933,15 +2943,29 @@ Th8_QueueEvent(void *pStateAny, int (*xCallback)(Th8_Interp *, void *))
 /*
  *----------------------------------------------------------------------
  *
- * Th8_IterateArraySearches --
+ * th8ArraySearchIterEntry --
  *
- *	Public diagnostic enumeration of pending array searches.
+ *	Th8_HashIterate visitor for Th8_IterateArraySearches.  For
+ *	one array-search hash entry, unwraps the th8ArraySearch and
+ *	forwards the (arrayName, searchId) pair to the user callback.
  *
  * Why / How:
- *	The array search hash and th8ArraySearch struct are both
- *	internal.  This API exposes only the (arrayName, searchId)
- *	pair via a callback so that test/diagnostic code can
- *	enumerate searches without seeing implementation details.
+ *	Th8_HashIterate speaks in raw Th8_HashEntry pointers; this
+ *	adapter translates each entry into the public callback's
+ *	(zArray, nArray, zKey, nKey, pCtx) signature and stashes the
+ *	user callback's result in the shared th8ArraySearchIterCtx so
+ *	the outer loop can propagate it.  Tombstoned entries (NULL
+ *	pEntry / pData) are skipped with a plain guard that survives
+ *	TH8_OMIT, per Bug 26.
+ *
+ * Results:
+ *	TH8_OK to continue iterating (including for skipped entries or
+ *	when the user callback returned TH8_OK); TH8_ERROR to stop when
+ *	the user callback returned non-TH8_OK.
+ *
+ * Side effects:
+ *	Stores the user callback's return code in the context's rc
+ *	field; otherwise whatever the user callback does.
  *
  *----------------------------------------------------------------------
  */
@@ -6701,40 +6725,30 @@ Th8_IsBigintEnabled(Th8_Interp *interp)
 /*
  *----------------------------------------------------------------------
  *
- * Th8_GetExprFeatures / Th8_SetExprFeatures --
+ * Th8_GetExprFeatures --
  *
- *	Read / write the per-interpreter expression-grammar feature
- *	flag set.  Default is TH8_EXPR_NONE (strict Tcl 8.6 expr(n)
+ *	Read the per-interpreter expression-grammar feature flag
+ *	set.  Default is TH8_EXPR_NONE (strict Tcl 8.6 expr(n)
  *	compliance).  See th8.h for the flag definitions and
  *	semantic guarantees.
  *
  * Why / How:
  *	The flag set is stored in a plain int field on the
  *	Th8_Interp struct (interp->nExprFeatures), zero-initialised
- *	by Th8_CreateInterp via xMemset.  Set masks `flags` against
- *	TH8_EXPR_ALL before storing so that unrecognised bits from
- *	a future-released embedder calling an older library are
- *	silently dropped (forward-compatible no-op rather than a
- *	silently-enabled-but-unimplemented feature).
- *
- *	Get is a simple read; Set returns the previous value to
- *	support the scoped save-and-restore idiom documented in
- *	th8.h.
- *
- *	Unlike Th8_EnableLoad / Th8_EnableBigint, this API does
- *	NOT use the random-token gate pattern.  The features
- *	gated here are syntactic extensions; a memory corruption
- *	that flipped a flag bit at worst makes the parser accept
- *	an extra operator the embedder did not opt into, which is
- *	not a privilege escalation.  The cheap scalar field keeps
- *	the read/write paths trivial.
+ *	by Th8_CreateInterp via xMemset, so this is a trivial
+ *	guarded read.  Unlike Th8_EnableLoad / Th8_EnableBigint,
+ *	the expr-feature API does NOT use the random-token gate
+ *	pattern: the features it exposes are syntactic extensions,
+ *	so a corrupted flag bit at worst makes the parser accept
+ *	an operator the embedder did not opt into, which is not a
+ *	privilege escalation.
  *
  * Results:
- *	Get returns the current flag set (0 = strict).  Set
- *	returns the PREVIOUS flag set.
+ *	The current flag set (TH8_EXPR_NONE / 0 = strict), or
+ *	TH8_EXPR_NONE when `interp` is NULL (Bug 26 / Bug 31 guard).
  *
  * Side effects:
- *	Set writes interp->nExprFeatures.
+ *	None.
  *
  *----------------------------------------------------------------------
  */
@@ -7278,6 +7292,23 @@ Th8_ErrorMessage(
     char cLast;
 
     if (!interp) return TH8_ERROR;
+
+    /*
+     * Sensitivity boundary: an error diagnostic is user-visible egress.
+     * If the detail value is sensitive (the tag bit rides in the length
+     * n, which callers pass straight from argl[]), redact it so no
+     * plaintext byte leaks into the message.  The prefix is always a
+     * fixed literal and is never redacted.
+     *
+     * TH8_NOLEN ((size_t)-1) must be excluded: it is the "compute the
+     * NUL-terminated length" sentinel, and being all-ones it has the
+     * sensitive tag bit set incidentally -- it is NOT a sensitive
+     * value.  Only a real length carrying the bit means sensitive.
+     */
+    if (n != TH8_NOLEN && TH8_SENSITIVE(n)) {
+	z = "<sensitive value withheld>";
+	n = TH8_NOLEN;
+    }
 
 #if defined(TH8_ENABLE_VARIABLES)
     Th8_SetVar(interp, "::errorInfo", TH8_NOLEN, "", 0);
@@ -8767,6 +8798,8 @@ Th8_CoroCreate(
 }
 
 
+static int th8CheckCancel(Th8_Interp *interp); /* forward */
+
 /*
  *----------------------------------------------------------------------
  *
@@ -8788,8 +8821,6 @@ Th8_CoroCreate(
  *
  *----------------------------------------------------------------------
  */
-
-static int th8CheckCancel(Th8_Interp *interp); /* forward */
 
 int
 Th8_IsCanceled(
@@ -8846,6 +8877,8 @@ Th8_IsBeingUnwound(Th8_Interp *interp) /* Interpreter. */
 }
 
 
+static void th8ClearCancel(Th8_Interp *interp); /* forward */
+
 /*
  *----------------------------------------------------------------------
  *
@@ -8861,10 +8894,14 @@ Th8_IsBeingUnwound(Th8_Interp *interp) /* Interpreter. */
  *	used by embedders (e.g., LadyBird's event loop) and by the
  *	debugger resume path.
  *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Clears all cancellation flags and frees interp->zCancelMsg.
+ *
  *----------------------------------------------------------------------
  */
-
-static void th8ClearCancel(Th8_Interp *interp); /* forward */
 
 void
 Th8_ResetCancel(Th8_Interp *interp)
@@ -11335,6 +11372,31 @@ th8XorInterpSecurePersistOk(Th8_Interp *interp, th8_int64_t mask)
  * coverage is lost by moving the mutation here.
  */
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8AsyncStateXorBMutexReady --
+ *
+ *	Test-only perturber for the async-state `bMutexReady`
+ *	flag.  XORs `mask` into `pState->bMutexReady`, letting
+ *	testlib toggle the flag into (and back out of) the
+ *	partial-init / mid-teardown window that drives the
+ *	`!pState->bMutexReady` and `bMutexReady && xMutexFinal`
+ *	defensive guards.
+ *
+ * Parameters:
+ *	pState -- async state to perturb.  Must be non-NULL.
+ *	mask   -- XOR mask applied to bMutexReady.
+ *
+ * Returns:
+ *	The previous value of `bMutexReady`, so the caller can
+ *	restore or assert on it.
+ *
+ * Side effects:
+ *	`pState->bMutexReady ^= mask`.
+ *
+ *----------------------------------------------------------------------
+ */
 TH8_INTERNAL int
 th8AsyncStateXorBMutexReady(Th8_AsyncState *pState, int mask)
 {
@@ -11817,6 +11879,36 @@ th8NextVarName(
  *----------------------------------------------------------------------
  */
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8ParseStackInit --
+ *
+ *	Initialise a Th8ParseStack to empty, backed by its caller-
+ *	provided inline buffer.  Must be called before any
+ *	th8ParseStackPush so the parsers start with a valid,
+ *	heap-free stack.
+ *
+ * Why / How:
+ *	Points `s->p` at the inline array embedded in the struct,
+ *	sets `s->cap` to TH8_PARSE_NEST_INLINE, and clears `s->top`
+ *	to zero.  No allocation occurs; the shallow-nesting common
+ *	case therefore touches only stack memory (th8ParseStackPush
+ *	promotes to a heap buffer only when this capacity is
+ *	exceeded).
+ *
+ * Parameters:
+ *	s -- parse stack to initialise.  Must be non-NULL and own a
+ *	     valid `inlineBuf`.
+ *
+ * Returns:
+ *	None.
+ *
+ * Side effects:
+ *	Sets `s->p`, `s->cap`, and `s->top`.  Does not allocate.
+ *
+ *----------------------------------------------------------------------
+ */
 static void
 th8ParseStackInit(Th8ParseStack *s)
 {
@@ -21593,6 +21685,9 @@ Th8_MergePlatform(
     /* DNS (DNSSEC-validating resolver, libunbound on POSIX) */
     MERGE_SLOT(xDnsResolve);
     MERGE_SLOT(xDnsResolveFree);
+
+    /* Diagnostics (nVersion 5) */
+    MERGE_SLOT(xStackBackTrace);
     return TH8_OK;
 }
 

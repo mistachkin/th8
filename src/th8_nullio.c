@@ -252,15 +252,14 @@ th8NullInput(
 /*
  *----------------------------------------------------------------------
  *
- * th8NullOutput / th8NullOutputError --
+ * th8NullOutput --
  *
- *	Accept output but discard it.  Returns TH8_OK.
+ *	Accept standard output but discard it.  Returns TH8_OK.
  *
  * Why / How:
- *	Implement the Th8_Platform.xOutput and xOutputError callbacks
- *	for the null I/O platform.  Both functions accept any data
- *	but silently discard it, making [puts] succeed without
- *	producing visible output.
+ *	Implements the Th8_Platform.xOutput callback for the null I/O
+ *	platform.  Accepts any data but silently discards it, making
+ *	[puts] succeed without producing visible output.
  *
  * Results:
  *	TH8_OK unconditionally.
@@ -436,7 +435,7 @@ th8NullGetCwd(
  */
 
 static Th8_Platform th8NullIoPlatformData = {
-    4,   /* nVersion */
+    5,   /* nVersion */
     0,   /* xInitialize */
     0,   /* xFinalize */
 
@@ -565,8 +564,11 @@ static Th8_Platform th8NullIoPlatformData = {
     /* DNS (none) */
     0, 0,  /* xDnsResolve, xDnsResolveFree */
 
+    /* Diagnostics (nVersion 5) -- the th8_unwind (compiler-runtime) layer supplies xStackBackTrace. */
+    0, /* xStackBackTrace */
+
     /* Host context */
-    0   /* pCtx */
+    0 /* pCtx */
 };
 
 

@@ -985,6 +985,33 @@ Th8_SetPreLoadCallback(
  * Bigint / Signed token equivalents are in th8_core.c.
  */
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8XorInterpLoadToken --
+ *
+ *	Internal helper used by the dual-field random-token
+ *	pattern that gates `[load]`.  XORs `mask` into the
+ *	current value of `interp->nLoadToken`.  Pair with the
+ *	matching `nLoadOk` XOR (in `th8_core.c`) to atomically
+ *	toggle both fields between a known and an unknown state.
+ *
+ *	Exposed via the internal-stubs table so the test library
+ *	can drive the gate from C without going through the
+ *	public enable / disable wrappers.
+ *
+ * Parameters:
+ *	interp -- live interpreter.
+ *	mask   -- XOR mask to apply.
+ *
+ * Returns:
+ *	None.
+ *
+ * Side effects:
+ *	Mutates `interp->nLoadToken`.
+ *
+ *----------------------------------------------------------------------
+ */
 TH8_INTERNAL void
 th8XorInterpLoadToken(Th8_Interp *interp, th8_int64_t mask)
 {

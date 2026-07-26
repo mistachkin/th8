@@ -740,7 +740,7 @@ th8PolicyCheckAnnotations(
 	    }
 	} else {
 	    bHaveRemoteTime =
-	        (th8NtpQuery(interp, NULL, 0, 5000, 0, &nowSec) == TH8_OK);
+	        (th8NtpQuery(interp, NULL, 0, 5000, 0, 0, &nowSec) == TH8_OK);
 	}
 
 	/*

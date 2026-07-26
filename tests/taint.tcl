@@ -712,10 +712,9 @@ runTest {test taint-13.7 {
   dict update on a NON-EXISTENT variable creates it from the clean
   arguments and the result is clean (the write-back must not fabricate
   taint when there is no tainted source; exercises the var-absent path).
+  fu is unique to this test, so it is absent without a -setup guard.
 } -constraints {
     loadLib th8
-} -setup {
-  unset -nocomplain fu
 } -body {
   dict update fu k lv {set lv NEW}
   list [dict get $fu k] [string is tainted -strict $fu]
@@ -728,10 +727,9 @@ runTest {test taint-13.7 {
 runTest {test taint-13.8 {
   dict with on a NON-EXISTENT variable creates a clean (empty) dict
   (var-absent path); the result carries no spurious taint.
+  fw is unique to this test, so it is absent without a -setup guard.
 } -constraints {
     loadLib th8
-} -setup {
-  unset -nocomplain fw
 } -body {
   dict with fw {set nk val}
   list [info exists fw] [string is tainted -strict $fw]

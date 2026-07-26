@@ -76,6 +76,17 @@ typedef int ntp_socket_t;
 #  define NTP_DEFAULT_TIMEOUT_MS   3000
 #  define NTP_DEFAULT_MAX_DISAGREE 5 /* seconds */
 #  define NTP_MAX_SERVERS          8
+/*
+ * Per-server send/receive attempts.  NTP runs over UDP, so a lost
+ * request or reply is expected rather than exceptional; a single shot
+ * would fail the whole query on any transient loss.  Only transient
+ * failures (timeout / short read / send error) are retried -- a
+ * response that arrives but fails validation is never retried.  A
+ * caller may pass a value <= 0 to accept this default, or 1 to disable
+ * retries.
+ */
+#  define NTP_DEFAULT_ATTEMPTS 3
+#  define NTP_MAX_ATTEMPTS     10
 
 static const char *th8NtpDefaultServers[] = {"urn.to", NULL};
 
@@ -329,6 +340,7 @@ th8NtpQueryOne(
     Th8_Interp *interp,
     const char *zServer,
     int timeoutMs,
+    int attempts,
     th8_int64_t *pEpochSec)
 {
     struct addrinfo hints, *res = NULL;
@@ -337,6 +349,7 @@ th8NtpQueryOne(
     th8_int64_t localMs = 0;
     th8_uint64_t t1Sec;
     int rc = TH8_ERROR;
+    int attempt;
 
     *pEpochSec = 0;
 
@@ -498,73 +511,86 @@ th8NtpQueryOne(
     }
 
     /*
-     * Build the NTP client request.
+     * Query loop.  Each attempt builds a FRESH request (a new origin
+     * timestamp) and does exactly one send / receive.  Transient
+     * failures -- a sendto error, a receive timeout (a lost request or
+     * reply), or a short response -- are retried up to `attempts`
+     * times, because NTP runs over UDP and packet loss is expected.  A
+     * response that arrives but fails validation is NOT retried: a bad
+     * stratum or an origin-timestamp mismatch is a misbehaving- or
+     * hostile-server signal, and retrying would only paper over it.
+     * Rebuilding the request each attempt keeps the anti-spoof origin-
+     * timestamp check in th8NtpValidateResponse sound per attempt.
      */
 
-    Th8_Memset(interp, &req, 0, sizeof(req));
-    req.flags = (unsigned char)((NTP_VERSION << 3) | NTP_MODE_CLIENT);
+    if (attempts < 1) attempts = 1;
 
-    /* Set T1 (origin timestamp) from local clock. */
-    Th8_GetTimeMs(interp, &localMs);
-    t1Sec = (th8_uint64_t)(localMs / 1000) + NTP_EPOCH_DELTA;
-    th8NtpWriteTs(req.txTs, t1Sec);
+    for (attempt = 0; attempt < attempts; attempt++) {
+	Th8_Memset(interp, &req, 0, sizeof(req));
+	req.flags = (unsigned char)((NTP_VERSION << 3) | NTP_MODE_CLIENT);
 
-    /*
-     * Send request.
-     */
+	/* Set T1 (origin timestamp) from local clock. */
+	Th8_GetTimeMs(interp, &localMs);
+	t1Sec = (th8_uint64_t)(localMs / 1000) + NTP_EPOCH_DELTA;
+	th8NtpWriteTs(req.txTs, t1Sec);
 
-    if (sendto(
-            sock, (const char *)&req, NTP_PACKET_SIZE, 0, res->ai_addr,
-            (int)res->ai_addrlen) != NTP_PACKET_SIZE) {
-	TH8_TRACE_ERR(interp, "NTP sendto failed");
-	Th8_ErrorMessage(
-	    interp, "clock ntp: sendto failed for \"", zServer,
-	    Th8_Strlen(interp, zServer));
+	if (sendto(
+	        sock, (const char *)&req, NTP_PACKET_SIZE, 0, res->ai_addr,
+	        (int)res->ai_addrlen) != NTP_PACKET_SIZE) {
+	    TH8_TRACE_ERR(interp, "NTP sendto failed");
+	    Th8_ErrorMessage(
+	        interp, "clock ntp: sendto failed for \"", zServer,
+	        Th8_Strlen(interp, zServer));
+	    continue; /* transient -- retry */
+	}
+
+#  if !defined(_WIN32)
+	{
+	    struct pollfd pfd;
+
+	    pfd.fd = sock;
+	    pfd.events = POLLIN;
+	    if (ntp_poll(&pfd, 1, timeoutMs) <= 0) {
+		Th8_ErrorMessage(
+		    interp, "clock ntp: timeout from \"", zServer,
+		    Th8_Strlen(interp, zServer));
+		continue; /* lost packet -- retry */
+	    }
+	}
+#  endif
+
+	Th8_Memset(interp, &resp, 0, sizeof(resp));
+	{
+	    int nRecv = (int)
+	        recvfrom(sock, (char *)&resp, NTP_PACKET_SIZE, 0, NULL, NULL);
+
+	    if (nRecv < NTP_PACKET_SIZE) {
+		TH8_TRACE_ERR(interp, "NTP recvfrom failed");
+		Th8_ErrorMessage(
+		    interp, "clock ntp: incomplete response from \"", zServer,
+		    Th8_Strlen(interp, zServer));
+		continue; /* transient -- retry */
+	    }
+	}
+
+	/*
+	 * A full response arrived.  Validate and derive epoch seconds.
+	 * Validation is TERMINAL -- whether it succeeds or rejects, the
+	 * result is never retried (see the loop-header comment).  The
+	 * protocol-validation logic is factored into
+	 * th8NtpValidateResponse so it can be MC/DC-driven directly with
+	 * crafted packets (via the internal stubs) without a live NTP
+	 * exchange.
+	 */
+
+	rc = th8NtpValidateResponse(interp, &resp, &req, pEpochSec);
 	goto done;
     }
 
     /*
-     * Receive response with timeout guard.
+     * Every attempt failed transiently; rc is still TH8_ERROR and the
+     * interp result holds the last attempt's diagnostic.
      */
-
-#  if !defined(_WIN32)
-    {
-	struct pollfd pfd;
-
-	pfd.fd = sock;
-	pfd.events = POLLIN;
-	if (ntp_poll(&pfd, 1, timeoutMs) <= 0) {
-	    Th8_ErrorMessage(
-	        interp, "clock ntp: timeout from \"", zServer,
-	        Th8_Strlen(interp, zServer));
-	    goto done;
-	}
-    }
-#  endif
-
-    Th8_Memset(interp, &resp, 0, sizeof(resp));
-    {
-	int nRecv = (int)
-	    recvfrom(sock, (char *)&resp, NTP_PACKET_SIZE, 0, NULL, NULL);
-
-	if (nRecv < NTP_PACKET_SIZE) {
-	    TH8_TRACE_ERR(interp, "NTP recvfrom failed");
-	    Th8_ErrorMessage(
-	        interp, "clock ntp: incomplete response from \"", zServer,
-	        Th8_Strlen(interp, zServer));
-	    goto done;
-	}
-    }
-
-    /*
-     * Validate the response and derive the epoch seconds.  The
-     * protocol-validation logic is factored into
-     * th8NtpValidateResponse so it can be MC/DC-driven directly
-     * with crafted packets (via the internal stubs) without a
-     * live NTP exchange.
-     */
-
-    rc = th8NtpValidateResponse(interp, &resp, &req, pEpochSec);
 
 done:
     if (sock != NTP_INVALID_SOCKET) ntp_close(sock);
@@ -654,6 +680,7 @@ th8NtpQuery(
     int nServers,
     int timeoutMs,
     int maxDisagreeSec,
+    int attempts,
     th8_int64_t *pEpochSec)
 {
     th8_int64_t aTimes[NTP_MAX_SERVERS];
@@ -673,6 +700,8 @@ th8NtpQuery(
     if (nServers > NTP_MAX_SERVERS) nServers = NTP_MAX_SERVERS;
     if (timeoutMs <= 0) timeoutMs = NTP_DEFAULT_TIMEOUT_MS;
     if (maxDisagreeSec <= 0) maxDisagreeSec = NTP_DEFAULT_MAX_DISAGREE;
+    if (attempts <= 0) attempts = NTP_DEFAULT_ATTEMPTS;
+    if (attempts > NTP_MAX_ATTEMPTS) attempts = NTP_MAX_ATTEMPTS;
 
 #  if defined(_WIN32)
     if (th8NtpWsaInit() != TH8_OK) {
@@ -689,7 +718,8 @@ th8NtpQuery(
     for (i = 0; i < nServers; i++) {
 	th8_int64_t t = 0;
 
-	if (th8NtpQueryOne(interp, azServers[i], timeoutMs, &t) == TH8_OK) {
+	if (th8NtpQueryOne(interp, azServers[i], timeoutMs, attempts, &t) ==
+	    TH8_OK) {
 	    aTimes[nGood++] = t;
 	}
     }
@@ -1003,6 +1033,18 @@ th8HttpsTimeQuery(
     char zNonceHex[TH8_TIME_NONCE_BYTES * 2 + 1];
 
     *pEpochSec = 0;
+
+    /*
+     * Sensitivity boundary: the URL is transmitted to a remote time
+     * server, so a sensitive value used as (or within) the URL must
+     * never leave the process.  The tag rides in nUrl (the caller
+     * passes argl[] straight through).  Reject before any network work.
+     */
+    if (TH8_SENSITIVE(nUrl)) {
+	Th8_SetResultStatic(
+	    interp, "sensitive value cannot be written", TH8_NOLEN);
+	return TH8_ERROR;
+    }
 
     rc = Th8_RandomBytes(interp, aNonce, TH8_TIME_NONCE_BYTES);
     if (rc != TH8_OK) {

@@ -51,6 +51,9 @@
  */
 
 #ifdef TH8_TESTLIB_TH8
+#  include "th8_meta_defs.h"
+#  include "th8_meta_libc.h"
+#  include "th8_meta_posix.h"
 #  include "th8.h"
 #  include "th8_int.h"
 #  include "th8_plugin.h"
@@ -1504,39 +1507,29 @@ th8test_nop_cmd(
 /*
  *----------------------------------------------------------------------
  *
- * th8test_expr_features_cmd --
+ * th8test_expr_features_parse_flags --
  *
- *	Implements the "th8testlib::expr_features" command.
- *	Provides script-level access to Th8_GetExprFeatures and
- *	Th8_SetExprFeatures so that test files can flip the opt-in
- *	expression-grammar features on and off.
- *
- *	Usage:
- *	  th8testlib::expr_features get
- *	    Returns the current flag set as a decimal integer.
- *
- *	  th8testlib::expr_features set <flags>
- *	    Calls Th8_SetExprFeatures with the supplied flag set
- *	    and returns the PREVIOUS flag set as a decimal integer.
- *	    `<flags>` may be either:
- *	      - a decimal integer (e.g. "1", "3"),
- *	      - one of the token aliases "none", "all",
- *	        "top-comma", "var-assign",
- *	      - or a comma-separated list of the token aliases.
+ *	Parse the `<flags>` argument of `th8testlib::expr_features
+ *	set` into an integer TH8_EXPR_* flag set.
  *
  * Why / How:
- *	The public C API (Th8_GetExprFeatures / Th8_SetExprFeatures
- *	in th8.h) is intentionally NOT exposed as a script-level
- *	command in production code -- the strict-vs-extended
- *	decision belongs to the embedder.  But test scripts need a
- *	way to flip flags on a per-test basis to exercise both the
- *	strict-mode regression path and the feature-enabled path,
- *	so this testlib-only wrapper provides that access.  Real
- *	embedders call the C API directly; tests use this command.
+ *	The argument may be a plain decimal integer or a
+ *	comma-separated list of the token aliases "none", "all",
+ *	"top-comma" and "var-assign".  A decimal is tried first
+ *	via Th8_ToWideInt; if that fails the string is walked
+ *	comma-by-comma, OR-ing in the matching TH8_EXPR_* bit for
+ *	each recognised token and raising an "unknown flag token"
+ *	error on anything else.
+ *
+ * Results:
+ *	TH8_OK with *piFlags set to the parsed flag set; TH8_ERROR
+ *	(with an error message on interp) on an unrecognised token.
+ *
+ * Side effects:
+ *	None beyond setting the interpreter result on error.
  *
  *----------------------------------------------------------------------
  */
-
 static int
 th8test_expr_features_parse_flags(
     Th8_Interp *interp,
@@ -1860,30 +1853,27 @@ done:
 /*
  *----------------------------------------------------------------------
  *
- * th8test_parse_size --
+ * th8testlib_format_size --
  *
- *	Parse a string into a size_t value, accepting both decimal
- *	literals and a small set of symbolic boundary tokens:
- *	  "max"      -> SIZE_MAX
- *	  "max-1"    -> SIZE_MAX - 1
- *	  "half"     -> SIZE_MAX / 2
- *	  "halfp1"   -> SIZE_MAX / 2 + 1
- *	  "halfdiv2" -> SIZE_MAX / 2 / 2  (used in MulAdd2 step-3 test)
- *	  decimal    -> parsed as a non-negative integer
+ *	Format the size_t value `v` as decimal ASCII digits into
+ *	`zOut` (no terminating NUL is written).
  *
  * Why / How:
- *	Tcl wide ints are signed 64-bit and cannot represent SIZE_MAX
- *	on 64-bit platforms.  Test cases that need to exercise overflow
- *	at the size_t boundary use these symbolic tokens instead of
- *	literals.  Used only by the safe-math test commands below.
+ *	The safe-math test commands print size_t operands that may
+ *	exceed the range of a signed Tcl wide int, so the standard
+ *	integer formatters cannot be used.  Digits are generated
+ *	least-significant-first into a scratch buffer, then copied
+ *	out in reverse; a `v` of 0 yields a single '0'.
  *
  * Results:
- *	TH8_OK on success with *pOut filled in; TH8_ERROR on parse
- *	failure (without modifying *pOut).
+ *	The number of digits written, or 0 if `nOut` is too small
+ *	to hold them (the caller supplies a generous buffer).
+ *
+ * Side effects:
+ *	Writes up to the returned count of bytes into `zOut`.
  *
  *----------------------------------------------------------------------
  */
-
 static int
 th8testlib_format_size(char *zOut, size_t nOut, size_t v)
 {
@@ -2316,23 +2306,26 @@ th8test_parse_var_name_cmd(
 /*
  *----------------------------------------------------------------------
  *
- * th8test_plat_wrappers_cmd --
+ * th8test_plat_qsort_cmp_int --
  *
- *	Implements "th8testlib::plat_wrappers".  Drives the
- *	th8_plat.c utility wrappers th8Memmove, th8Strcmp,
- *	th8Strchr, th8Atoi, th8Qsort that have no in-tree
- *	callers (the codebase uses the Th8_API variants
- *	directly).  Each call exercises the defensive
- *	NULL-arg + missing-callback decisions internal to
- *	those wrappers.
+ *	`qsort`-style comparator that orders two `int` values in
+ *	ascending order.
  *
- *	Returns a list of probe results so the test can
- *	assert on basic correctness while incidentally
- *	closing the MC/DC pairs.
+ * Why / How:
+ *	Passed to the `th8Qsort` wrapper exercised by
+ *	`th8test_plat_wrappers_cmd`.  Reads an `int` through each
+ *	`void *` argument and returns the sign of their difference
+ *	using the overflow-safe `(x > y) - (x < y)` idiom.
+ *
+ * Results:
+ *	-1, 0, or 1 as `*a` is less than, equal to, or greater
+ *	than `*b`.
+ *
+ * Side effects:
+ *	None.
  *
  *----------------------------------------------------------------------
  */
-
 static int
 th8test_plat_qsort_cmp_int(const void *a, const void *b)
 {
@@ -2551,6 +2544,31 @@ th8test_bug22_null_op_count_cmd(
  *----------------------------------------------------------------------
  */
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8TestExerciseCharProps --
+ *
+ *	Call every TH8 character-classification predicate
+ *	(th8IsSpace, th8IsDigit, th8IsAlpha, th8IsAlnum,
+ *	th8IsSpecial, th8IsHexDig, th8IsOctDig, th8IsBinDig) once
+ *	with the byte `c`, discarding the results.
+ *
+ * Why / How:
+ *	Lives in the test library (not src/) so the classifiers'
+ *	internal branch decisions are driven for MC/DC without the
+ *	sweep's own `(void)` calls counting against the production
+ *	translation unit.  Called across the full 0..255 byte range
+ *	by the char-props exerciser command.
+ *
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
+ *	None; every predicate is side-effect free.
+ *
+ *----------------------------------------------------------------------
+ */
 static void
 th8TestExerciseCharProps(int c)
 {
@@ -3228,6 +3246,26 @@ th8TestExerciseExpansionPrefix(Th8_Interp *interp)
 
 #  define TH8TEST_TOKEN_XOR_MASK ((th8_int64_t)0x5A5A5A5A5A5A5A5AULL)
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8TestPerturbLoadToken --
+ *
+ *	XOR-perturb the interpreter's [load]-enable token by the
+ *	fixed mask `TH8TEST_TOKEN_XOR_MASK` (a non-zero constant
+ *	chosen to avoid the 0/1/~0 patterns the regen retry loops
+ *	guard against).  Drives the load-token tamper-detection
+ *	path that checks the token against its expected value --
+ *	after the perturbation the two no longer match.
+ *
+ * Parameters:
+ *	interp -- live interpreter.  No-op if NULL.
+ *
+ * Returns / Side effects:
+ *	No return.  Mutates the interpreter's load-enable token.
+ *
+ *----------------------------------------------------------------------
+ */
 static void
 th8TestPerturbLoadToken(Th8_Interp *interp)
 {
@@ -3352,6 +3390,26 @@ th8TestClearUnloadFlag(Th8_Interp *interp)
 
 static int th8test_null_guard_qe_cb(Th8_Interp *interp, void *pCtx);
 
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_plat_wrappers_cmd --
+ *
+ *	Implements "th8testlib::plat_wrappers".  Drives the
+ *	th8_plat.c utility wrappers th8Memmove, th8Strcmp,
+ *	th8Strchr, th8Atoi, th8Qsort that have no in-tree
+ *	callers (the codebase uses the Th8_API variants
+ *	directly).  Each call exercises the defensive
+ *	NULL-arg + missing-callback decisions internal to
+ *	those wrappers.
+ *
+ *	Returns a list of probe results so the test can
+ *	assert on basic correctness while incidentally
+ *	closing the MC/DC pairs.
+ *
+ *----------------------------------------------------------------------
+ */
 
 static int
 th8test_plat_wrappers_cmd(
@@ -6737,6 +6795,30 @@ th8test_overflow_check_cmd(
  *----------------------------------------------------------------------
  */
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_null_guard_qe_cb --
+ *
+ *	No-op callback used as the valid (non-NULL) function
+ *	pointer in the public-API null-guard MC/DC sweep.
+ *
+ * Why / How:
+ *	Several public APIs take a callback pointer and guard it
+ *	with `!xCallback`; driving the false (success) side of that
+ *	guard requires a real, non-NULL callback.  This stub
+ *	satisfies that need, ignoring both arguments and reporting
+ *	success so the guarded operation proceeds to its normal
+ *	path.
+ *
+ * Results:
+ *	TH8_OK always.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
 static int
 th8test_null_guard_qe_cb(Th8_Interp *interp, void *pCtx)
 {
@@ -7128,6 +7210,31 @@ th8test_null_guard_iterate_array(Th8_Interp *interp)
  * sets the interp result to "ok" or a "fail rc1=N rc2=N rc3=N
  * rc4=N" diagnostic.
  */
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_null_guard_check4 --
+ *
+ *	Verdict helper for a null-guard drive that produced four
+ *	return codes: compare `rc1..rc4` against the expected
+ *	`e1..e4` and report the outcome on the interpreter.
+ *
+ * Why / How:
+ *	Factors out the pass/fail bookkeeping shared by the
+ *	four-vector null-OR guard sweeps.  On a full match the
+ *	interp result is set to "ok"; otherwise a
+ *	"fail rc1=.. (expected ..)" diagnostic is formatted so the
+ *	failing vector is visible to the test.
+ *
+ * Results:
+ *	TH8_OK when every code matches its expectation; TH8_ERROR
+ *	otherwise.
+ *
+ * Side effects:
+ *	Sets the interpreter result string.
+ *
+ *----------------------------------------------------------------------
+ */
 static int
 th8test_null_guard_check4(
     Th8_Interp *interp,
@@ -7171,6 +7278,32 @@ th8test_null_guard_check4(
  * expected outcome (NULL, NULL, non-NULL) or a diagnostic.
  */
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_null_guard_check3_alloc --
+ *
+ *	Verdict helper for the safe-allocator boundary sweep:
+ *	given the three pointers returned by an allocator called
+ *	with size 0, an oversize request, and a small valid size,
+ *	check that the first two are NULL and the third non-NULL.
+ *
+ * Why / How:
+ *	Closes both operands of the shared
+ *	`nByte == 0 || nByte > TH8_MX_ALLOC` guard.  A non-NULL
+ *	`p3` (the success case) is freed here so the drive leaks
+ *	nothing; the interp result is set to "ok" or a
+ *	"fail p1=.. (expected NULL,NULL,non-NULL)" diagnostic.
+ *
+ * Results:
+ *	TH8_OK when the NULL/NULL/non-NULL pattern holds; TH8_ERROR
+ *	otherwise.
+ *
+ * Side effects:
+ *	Frees `p3` when non-NULL and sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
 static int
 th8test_null_guard_check3_alloc(
     Th8_Interp *interp,
@@ -8048,6 +8181,29 @@ th8test_pt_chanctl_fault_cmd(
  *----------------------------------------------------------------------
  */
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_plugin_dummy_cmd --
+ *
+ *	Trivial command procedure used as the target `xProc` for
+ *	the mock plugins registered during the plugin-API MC/DC
+ *	sweep.
+ *
+ * Why / How:
+ *	The sweep registers throwaway commands in a child interp to
+ *	drive th8_plugin.c registration paths; those commands need
+ *	a real procedure to bind to.  This one ignores its
+ *	arguments and reports success.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to "ok".
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
 static int
 th8test_plugin_dummy_cmd(
     Th8_Interp *interp,
@@ -8069,6 +8225,34 @@ th8test_plugin_dummy_cmd(
  * pChild hosts several "successful" plugin registrations during
  * the sweep; sharing one command name would make the second
  * Th8_CreateCommand a duplicate and skew the test. */
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_plugin_get_ok_a --
+ *
+ *	Mock `xGetCommands` plugin probe that succeeds and yields
+ *	a single command named `th8test_plugin_cmd_a` bound to
+ *	the dummy command procedure.  Used to drive the
+ *	plugin-registration success path with a distinct command
+ *	name from the `_ok_b` probe (so the registry can hold
+ *	multiple plugins simultaneously without name collisions).
+ *
+ * Parameters:
+ *	pCommand  -- output array for command entries; NULL on
+ *	             the discovery call (when the caller is just
+ *	             querying `*pnCommand`).
+ *	pnCommand -- discovery call: receives the count (always
+ *	             1).  Fill call: ignored.
+ *
+ * Returns:
+ *	`TH8_OK` always.
+ *
+ * Side effects:
+ *	On the fill call, writes a single `Th8_CommandEntry` into
+ *	`pCommand[0]`.
+ *
+ *----------------------------------------------------------------------
+ */
 static int
 th8test_plugin_get_ok_a(Th8_CommandEntry *pCommand, int *pnCommand)
 {
@@ -9367,12 +9551,41 @@ th8test_null_guard_core(Th8_Interp *interp)
 #    endif
 		}
 
+		/* Drive th8_core.c th8FinalizeSensitiveResult L5718
+		 * NULL-guard (!interp || !interp->pProtectedResult).
+		 * C1-Pair via a NULL interp; C2-Pair via pChild whose
+		 * protected-result region is still lazily unallocated --
+		 * this MUST run BEFORE the Th8_SetResultSensitive calls
+		 * below, which allocate that region.  The all-false case
+		 * is covered by normal sensitive-result finalization. */
+		(void)th8FinalizeSensitiveResult(NULL, 0);
+		(void)th8FinalizeSensitiveResult(pChild, 0);
+
 		/* Drive th8_core.c Th8_SetResultSensitive TH8_API.
 		 * No in-tree callers in the test path; the result
 		 * gets stored in the interp's protected region. */
 		(void)Th8_SetResultSensitive(NULL, "x", 1);
 		(void)Th8_SetResultSensitive(pChild, "sensitive", 9);
 		(void)Th8_SetResultSensitive(pChild, "", 0);
+
+		/* Drive the capacity-guard C2-Pair (n + 1 > nUsable):
+		 * a payload larger than the protected region's usable
+		 * page must be rejected with "sensitive result exceeds
+		 * protected region capacity" rather than overrunning the
+		 * region.  The usable page tracks the OS page size (16 KB
+		 * on Apple Silicon, 4 KB elsewhere), so use 128 KB to
+		 * clear any real page.  The C1 sibling (n + 1 < n, the
+		 * SIZE_MAX overflow guard) is intrinsically dead for any
+		 * real string length. */
+		{
+		    size_t nBig = 128 * 1024;
+		    char *zBig = (char *)Th8_Malloc(pChild, nBig);
+		    if (zBig) {
+			Th8_Memset(pChild, zBig, 'x', nBig);
+			(void)Th8_SetResultSensitive(pChild, zBig, nBig);
+			Th8_Free(pChild, zBig);
+		    }
+		}
 
 		/* Drive th8_xlib.c L427 `bParentSigned && pPolicyCtx`
 		 * C1-Pair {F,-} vector.  Parent here (pChild) has
@@ -13274,7 +13487,7 @@ th8test_echo_mathfunc(
 /*
  *----------------------------------------------------------------------
  *
- * th8testlib::cancel_recover --
+ * th8test_cancel_recover_cmd --
  *
  *	Verify that an interpreter recovers after cancel-unwind.
  *	Creates an isolated temporary interpreter, sets the
@@ -13417,7 +13630,7 @@ th8test_cancel_recover_cmd(
 /*
  *----------------------------------------------------------------------
  *
- * cancel_unwind_self (test-only helper) --
+ * th8test_cancel_unwind_self_cmd --
  *
  *	Arm cancel-unwind on the calling interpreter and return
  *	TH8_OK.  Designed to be invoked from inside a [catch] body
@@ -13469,7 +13682,7 @@ th8test_cancel_unwind_self_cmd(
 /*
  *----------------------------------------------------------------------
  *
- * th8testlib::catch_unwind --
+ * th8test_catch_unwind_cmd --
  *
  *	Regression-test the [catch]+cancel-unwind propagation
  *	contract: when cancel-unwind fires inside a [catch] body,
@@ -14252,7 +14465,10 @@ done:
 /*
  *----------------------------------------------------------------------
  *
- * th8testlib::signed_only install|enable|disable|query|keys|uninstall
+ * th8test_signed_only_cmd --
+ *
+ *	Implements the "th8testlib::signed_only
+ *	install|enable|disable|query|keys|uninstall" test command.
  *
  *	Manipulate the signed-only policy for testing.
  *
@@ -14680,7 +14896,7 @@ th8test_load_snk_cmd(
 /*
  *----------------------------------------------------------------------
  *
- * th8testlib::protected_null_page --
+ * th8test_protected_null_page_cmd --
  *
  *	Drive th8_protect.c L365 (th8ProtectedCheckCanary) and
  *	L435 (th8ProtectedData) C2-Pair MC/DC vectors by calling
@@ -15473,6 +15689,10 @@ th8test_fuzz_cmd(
 }
 
 
+#  if !defined(_WIN32) && !defined(WIN32)
+/* <dirent.h> included via th8_meta_posix.h */
+#  endif
+
 /*
  *----------------------------------------------------------------------
  *
@@ -15505,10 +15725,6 @@ th8test_fuzz_cmd(
  *
  *----------------------------------------------------------------------
  */
-
-#  if !defined(_WIN32) && !defined(WIN32)
-/* <dirent.h> included via th8_meta_posix.h */
-#  endif
 
 static int
 th8test_glob_cmd(
@@ -15967,57 +16183,6 @@ th8test_sandbox_cmd(
 }
 
 
-/*
- *----------------------------------------------------------------------
- *
- * th8test_fault_cmd --
- *
- *	Implements "th8testlib::fault eval <script> ?options?" and
- *	"th8testlib::fault counters".
- *
- *	Fault-injection testing command.  Installs the fault layer,
- *	evaluates the script, captures results and counters, then
- *	uninstalls the fault layer.  This ensures the fault layer
- *	is always cleaned up -- even if the script errors.
- *
- *	Options for "eval":
- *	  -allocFailAfter N     Fail the Nth allocation (0 = never)
- *	  -allocFailInterval M  After first failure, every Mth
- *	  -failGetData          Always fail xGetData
- *	  -failDataExists       Always fail xDataExists
- *	  -failRandomBytes      Always fail xRandomBytes
- *	  -failChannelRead      Fail xChannelControl READ ops
- *	  -failChannelEOF       Synth premature EOF on READ
- *	                        (success rc, *pnResult = 0)
- *	  -failChannelWrite     Fail xChannelControl WRITE ops
- *	  -failChannelOpen      Fail xChannelControl OPEN ops
- *
- *	"eval" returns: {returnCode result allocCount allocFailCount}
- *	"counters" returns the counters from the most recent eval.
- *
- *	All fault paths must be valgrind-clean: no leaks, no
- *	uninitialized reads, no use-after-free.
- *
- * Why / How:
- *	Tests error-handling paths that only trigger under resource
- *	exhaustion.  Creates an isolated child interpreter with
- *	xPanic=NULL (so OOM returns error instead of aborting),
- *	installs the fault interception layer, runs the script, then
- *	uninstalls regardless of outcome.  The child isolation
- *	ensures faults never corrupt the parent test harness.
- *
- * Results:
- *	"eval": TH8_OK with {returnCode result allocCount
- *	allocFailCount} list.
- *	"counters": TH8_OK with counter values from last eval.
- *
- * Side effects:
- *	Creates/destroys a child interpreter; installs/uninstalls
- *	the fault injection layer on it.
- *
- *----------------------------------------------------------------------
- */
-
 #  if defined(TH8_ENABLE_FAULT_INJECTION)
 
 /* Saved counters from the most recent fault eval. */
@@ -16215,6 +16380,56 @@ th8test_bufwrite_oom_cmd(
     return Th8_SetResultInt(interp, nResult);
 }
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_fault_cmd --
+ *
+ *	Implements "th8testlib::fault eval <script> ?options?" and
+ *	"th8testlib::fault counters".
+ *
+ *	Fault-injection testing command.  Installs the fault layer,
+ *	evaluates the script, captures results and counters, then
+ *	uninstalls the fault layer.  This ensures the fault layer
+ *	is always cleaned up -- even if the script errors.
+ *
+ *	Options for "eval":
+ *	  -allocFailAfter N     Fail the Nth allocation (0 = never)
+ *	  -allocFailInterval M  After first failure, every Mth
+ *	  -failGetData          Always fail xGetData
+ *	  -failDataExists       Always fail xDataExists
+ *	  -failRandomBytes      Always fail xRandomBytes
+ *	  -failChannelRead      Fail xChannelControl READ ops
+ *	  -failChannelEOF       Synth premature EOF on READ
+ *	                        (success rc, *pnResult = 0)
+ *	  -failChannelWrite     Fail xChannelControl WRITE ops
+ *	  -failChannelOpen      Fail xChannelControl OPEN ops
+ *
+ *	"eval" returns: {returnCode result allocCount allocFailCount}
+ *	"counters" returns the counters from the most recent eval.
+ *
+ *	All fault paths must be valgrind-clean: no leaks, no
+ *	uninitialized reads, no use-after-free.
+ *
+ * Why / How:
+ *	Tests error-handling paths that only trigger under resource
+ *	exhaustion.  Creates an isolated child interpreter with
+ *	xPanic=NULL (so OOM returns error instead of aborting),
+ *	installs the fault interception layer, runs the script, then
+ *	uninstalls regardless of outcome.  The child isolation
+ *	ensures faults never corrupt the parent test harness.
+ *
+ * Results:
+ *	"eval": TH8_OK with {returnCode result allocCount
+ *	allocFailCount} list.
+ *	"counters": TH8_OK with counter values from last eval.
+ *
+ * Side effects:
+ *	Creates/destroys a child interpreter; installs/uninstalls
+ *	the fault injection layer on it.
+ *
+ *----------------------------------------------------------------------
+ */
 static int
 th8test_fault_cmd(
     Th8_Interp *interp,
@@ -17141,49 +17356,28 @@ fault_cmd_install_err:
 /*
  *----------------------------------------------------------------------
  *
- * th8test_malloc_drive_cmd --
+ * th8test_safe_panic_stub --
  *
- *	Implements "th8testlib::malloc_drive MODE SIZE ?SIZE2?".
- *
- *	Drives the four bPanic-gated and the one xNeedMemory-gated
- *	short-circuit compounds in src/th8_core.c that are reachable
- *	only by calling Th8_Malloc / Th8_Realloc directly from C
- *	(bPanic=1) under specific fault conditions.  Used to close
- *	the C2=F MC/DC vector at:
- *
- *	  malloc-limit   line 963: (bPanic && xPanic) under sandbox
- *	                 alloc-limit-exceeded path.  Args: SIZE.
- *	  malloc-oom     line 999: (bPanic && xPanic) under
- *	                 xMalloc-returned-NULL path.  Args: SIZE.
- *	  realloc-need   line 1108: (!p && xNeedMemory) under xRealloc-
- *	                 returned-NULL path with xNeedMemory NULL.
- *	                 Args: SIZE SIZE2.
- *	  realloc-limit  line 1592: (bPanic && xPanic) under realloc
- *	                 alloc-limit-exceeded path.  Args: SIZE SIZE2.
- *	  realloc-oom    line 1622: (bPanic && xPanic) under
- *	                 xRealloc-returned-NULL path.  Args: SIZE SIZE2.
- *
- *	Each mode builds an isolated child interpreter, applies the
- *	relevant fault config (small alloc limit, alloc-fail trigger,
- *	or null callbacks), calls the target allocator with bPanic=1,
- *	and tears everything down.  The function returns "nil" if the
- *	allocator returned NULL (expected -- the panic compound's
- *	xPanic was NULL so the abort was skipped) or "ptr" if a
- *	pointer was returned despite the fault setup.
+ *	No-op `xPanic` platform-callback substitute installed by
+ *	`th8test_malloc_drive_cmd`'s panic-driving modes.
  *
  * Why / How:
- *	Th8_Malloc and Th8_Realloc are the only public allocators
- *	that pass bPanic=1; Th8_SafeAlloc et al. always pass 0, so
- *	the bPanic-side of the compound is unreachable from any
- *	script-level allocator.  This command bridges that gap.
+ *	Those modes drive the
+ *	`(bPanic && interp->pPlatform->xPanic)` compound's (T,T)
+ *	vector -- "panic IS requested AND a panic callback IS
+ *	installed."  For MC/DC all that matters is that this slot
+ *	is reachable and non-NULL; the body deliberately does
+ *	nothing and returns so the test process stays alive to
+ *	exercise subsequent vectors.
  *
- * Results:
- *	TH8_OK with "nil" or "ptr" as the result.
- *	TH8_ERROR with a diagnostic on bad args / setup failure.
+ * Parameters:
+ *	interp, pCtx, zMsg, nMsg -- all ignored.
+ *
+ * Results / Side effects:
+ *	No return value; no side effects.
  *
  *----------------------------------------------------------------------
  */
-
 static void
 th8test_safe_panic_stub(
     Th8_Interp *interp,
@@ -18671,25 +18865,30 @@ th8test_drivekeyfault_cmd(
 /*
  *----------------------------------------------------------------------
  *
- * th8test_osslfaulteval_cmd --
+ * th8test_faulteval_impl --
  *
- *	::th8testlib::osslfaulteval opBit script
+ *	Shared worker for the `osslfaulteval` and `posixfaulteval`
+ *	test commands: arm a single OpenSSL- or POSIX-op fault bit
+ *	and evaluate a script in the current interpreter.
  *
- *	Arms bit `opBit` (a TH8_OSSL_OP_* id) in
- *	Th8_FaultConfig.nFailOsslMask, installs the fault on THIS
- *	interpreter, then evaluates `script` (typically a
- *	`harpy verify` / `harpy sign` with inlined key material) so
- *	the OSSL_CALL wrapper in th8_snk.c forces the corresponding
- *	OpenSSL call to fail and its error arm runs.  Unlike
- *	`fault eval` -- which runs the body in an isolated child
- *	interp WITHOUT the signed-only crypto policy -- this evals
- *	in the current interpreter so the crypto path is fully
- *	live.  The fault is always uninstalled before returning.
+ * Why / How:
+ *	Parses `opBit` (0..63) and sets the corresponding bit in
+ *	Th8_FaultConfig.nFailOsslMask (when `posix` is 0) or
+ *	nFailPosixMask (when non-zero), installs the fault on THIS
+ *	interpreter -- so the crypto / POSIX path stays fully live,
+ *	unlike `fault eval`'s isolated child -- then evaluates the
+ *	script so the forced OSSL_CALL / POSIX-wrapper failure runs
+ *	its error arm.  The eval's result string is preserved
+ *	across Th8_FaultUninstall and restored before returning.
  *
- *	The evaluated script's result string is preserved across
- *	uninstall and returned as this command's result, with the
- *	script's return code, so callers can `catch` it and match
- *	the forced error message.
+ * Results:
+ *	The script's return code, with the (possibly forced-error)
+ *	result string left on the interpreter.  TH8_ERROR on bad
+ *	arguments or an out-of-range `opBit`.
+ *
+ * Side effects:
+ *	Installs and then uninstalls a fault configuration on the
+ *	calling interpreter around the evaluation.
  *
  *----------------------------------------------------------------------
  */
@@ -18768,6 +18967,32 @@ th8test_faulteval_impl(
     return rc;
 }
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_osslfaulteval_cmd --
+ *
+ *	::th8testlib::osslfaulteval opBit script
+ *
+ *	Arms bit `opBit` (a TH8_OSSL_OP_* id) in
+ *	Th8_FaultConfig.nFailOsslMask, installs the fault on THIS
+ *	interpreter, then evaluates `script` (typically a
+ *	`harpy verify` / `harpy sign` with inlined key material) so
+ *	the OSSL_CALL wrapper in th8_snk.c forces the corresponding
+ *	OpenSSL call to fail and its error arm runs.  Unlike
+ *	`fault eval` -- which runs the body in an isolated child
+ *	interp WITHOUT the signed-only crypto policy -- this evals
+ *	in the current interpreter so the crypto path is fully
+ *	live.  The fault is always uninstalled before returning.
+ *
+ *	The evaluated script's result string is preserved across
+ *	uninstall and returned as this command's result, with the
+ *	script's return code, so callers can `catch` it and match
+ *	the forced error message.
+ *
+ *----------------------------------------------------------------------
+ */
+
 static int
 th8test_osslfaulteval_cmd(
     Th8_Interp *interp,
@@ -18780,6 +19005,31 @@ th8test_osslfaulteval_cmd(
     return th8test_faulteval_impl(interp, argc, argv, argl, 0);
 }
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_posixfaulteval_cmd --
+ *
+ *	Implements "::th8testlib::posixfaulteval opBit script".
+ *	Thin wrapper that forwards to th8test_faulteval_impl with
+ *	the POSIX flag set, arming POSIX-op fault bit `opBit`.
+ *
+ * Why / How:
+ *	The bit selects an op id in
+ *	Th8_FaultConfig.nFailPosixMask so the corresponding POSIX
+ *	wrapper forces a failure, and `script` is evaluated in the
+ *	current interpreter so its error arm runs.
+ *
+ * Results:
+ *	The script's return code and result, as produced by
+ *	th8test_faulteval_impl.
+ *
+ * Side effects:
+ *	Installs and uninstalls a fault configuration on the
+ *	calling interpreter around the evaluation.
+ *
+ *----------------------------------------------------------------------
+ */
 static int
 th8test_posixfaulteval_cmd(
     Th8_Interp *interp,
@@ -21448,6 +21698,337 @@ th8test_event_delete_race_cmd(
 
 
 /*
+ * Test-library "logical allocation list" backing th8testlib::test_malloc
+ * and th8testlib::test_free (design_notes_memtrack.md section 3.4).  It is a
+ * small growable array of { pointer, size } records that the test library
+ * itself owns, kept deliberately independent of the memtrack side-table:
+ *
+ *   * test_malloc appends a record; test_free validates its pointer argument
+ *     against this list before freeing anything, so a script can never coerce
+ *     a free of an arbitrary, foreign, or already-freed address.
+ *   * test_malloc / test_free therefore exercise the real allocator even in a
+ *     build without TH8_MEM_DEBUG; only the dump needs the tracker.
+ *   * The list is a second, independent view of live test allocations, so a
+ *     divergence from the tracker's side-table is itself a signal.
+ *
+ * The list itself is raw-malloc bookkeeping (not a TH8 allocation), so it does
+ * not perturb the very allocator accounting the tracker measures.
+ */
+
+typedef struct th8testMemEntry {
+    void *ptr; /* Pointer returned by Th8_AttemptMalloc. */
+    size_t size; /* Requested size (for reporting / cross-check). */
+} th8testMemEntry;
+
+static th8testMemEntry *th8test_mem_list = NULL;
+static int th8test_mem_count = 0; /* Live entries. */
+static int th8test_mem_capacity = 0; /* Allocated slots. */
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_mem_list_add --
+ *
+ *	Append (ptr, size) to the logical allocation list, growing the
+ *	backing array with raw realloc as needed.
+ *
+ * Results:
+ *	TH8_OK, or TH8_ERROR if the array cannot grow (overflow / OOM).
+ *
+ * Side effects:
+ *	May reallocate th8test_mem_list; appends one entry.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_mem_list_add(void *ptr, size_t size)
+{
+    if (th8test_mem_count == th8test_mem_capacity) {
+	int newCap = (th8test_mem_capacity == 0) ? 16
+	                                         : th8test_mem_capacity * 2;
+	size_t nBytes;
+	th8testMemEntry *pNew;
+	if (TH8_SAFE_MUL_SIZE((size_t)newCap, sizeof(*pNew), &nBytes)) {
+	    return TH8_ERROR; /* size overflow */
+	}
+	pNew = (th8testMemEntry *)realloc(th8test_mem_list, nBytes);
+	if (pNew == NULL) {
+	    return TH8_ERROR;
+	}
+	th8test_mem_list = pNew;
+	th8test_mem_capacity = newCap;
+    }
+    th8test_mem_list[th8test_mem_count].ptr = ptr;
+    th8test_mem_list[th8test_mem_count].size = size;
+    th8test_mem_count++;
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_mem_list_remove --
+ *
+ *	Remove the logical-list entry for ptr, if present, by swapping the
+ *	last entry into the gap (order is not significant).
+ *
+ * Results:
+ *	1 if an entry was found and removed, else 0.
+ *
+ * Side effects:
+ *	Shrinks the logical list by one entry on success.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_mem_list_remove(void *ptr)
+{
+    int i;
+
+    for (i = 0; i < th8test_mem_count; i++) {
+	if (th8test_mem_list[i].ptr == ptr) {
+	    th8test_mem_list[i] = th8test_mem_list[th8test_mem_count - 1];
+	    th8test_mem_count--;
+	    return 1;
+	}
+    }
+    return 0;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_test_malloc_cmd --
+ *
+ *	Implements "th8testlib::test_malloc size": allocate `size` bytes
+ *	through the normal Th8_AttemptMalloc funnel (so the block is
+ *	tracked exactly like any other allocation), record it in the
+ *	logical allocation list, and return the pointer as a hex address
+ *	string the test can hold and later free.
+ *
+ * Results:
+ *	TH8_OK with the block's hex address; TH8_ERROR on a bad size or
+ *	allocation failure.
+ *
+ * Side effects:
+ *	Allocates a tracked block; appends to the logical list.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_test_malloc_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    size_t size;
+    void *p;
+    char zBuf[32]; /* "0x" + up to 16 hex digits + NUL. */
+    int n;
+
+    (void)ctx;
+
+    if (argc != 2) {
+	return Th8_WrongNumArgs(interp, "th8testlib::test_malloc size");
+    }
+    if (th8test_parse_size(argv[1], TH8_LEN(argl[1]), &size) != TH8_OK) {
+	Th8_SetResultStatic(
+	    interp, "test_malloc: size must be a non-negative integer",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    p = Th8_AttemptMalloc(interp, size);
+    if (p == NULL) {
+	Th8_SetResultStatic(
+	    interp, "test_malloc: allocation failed", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    n = th8Snprintf(
+        interp, zBuf, sizeof(zBuf), "0x%llx", (unsigned long long)(size_t)p);
+    if (n < 0 || (size_t)n >= sizeof(zBuf)) {
+	Th8_Free(interp, p);
+	Th8_SetResultStatic(
+	    interp, "test_malloc: pointer format failed", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    if (th8test_mem_list_add(p, (size_t)size) != TH8_OK) {
+	Th8_Free(interp, p);
+	Th8_SetResultStatic(
+	    interp, "test_malloc: cannot record allocation", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    return Th8_SetResult(interp, zBuf, (size_t)n);
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_test_free_cmd --
+ *
+ *	Implements "th8testlib::test_free ptr": free a pointer previously
+ *	returned by test_malloc.  `ptr` MUST be present in the logical
+ *	allocation list (a still-live test allocation); otherwise the
+ *	command errors and frees nothing.  This makes the command memory
+ *	safe from script -- it cannot be coerced into freeing an
+ *	arbitrary, foreign, or already-freed address.
+ *
+ * Results:
+ *	TH8_OK on success; TH8_ERROR if `ptr` does not parse or is not a
+ *	live test allocation.
+ *
+ * Side effects:
+ *	Removes the entry from the logical list and calls Th8_Free (which
+ *	untracks the block).
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_test_free_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    void *p;
+    th8_int64_t addr;
+
+    (void)ctx;
+
+    if (argc != 2) {
+	return Th8_WrongNumArgs(interp, "th8testlib::test_free ptr");
+    }
+    /* Th8_ToWideInt parses the 0x-prefixed hex address emitted by
+     * test_malloc (user-space pointers fit the signed 64-bit range). */
+    if (Th8_ToWideInt(NULL, argv[1], TH8_LEN(argl[1]), &addr) != TH8_OK) {
+	Th8_SetResultStatic(
+	    interp, "test_free: ptr must be a hex address", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    p = (void *)(size_t)addr;
+    if (!th8test_mem_list_remove(p)) {
+	Th8_SetResultStatic(
+	    interp, "test_free: pointer is not a live test allocation",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    Th8_Free(interp, p);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_test_memory_dump_cmd --
+ *
+ *	Implements "th8testlib::test_memory_dump fileName": dump the
+ *	tracker's live-allocation set (via th8MemTrackDump, reached
+ *	through the internal-stubs table) to fileName.  The file MUST NOT
+ *	already exist -- th8MemTrackDump opens it create-exclusive and
+ *	errors otherwise, so a test can never clobber an existing file.
+ *	In a non-TH8_MEM_DEBUG build the stub reports that a debug build
+ *	is required.
+ *
+ * Results:
+ *	TH8_OK with the live block count; TH8_ERROR on any failure.
+ *
+ * Side effects:
+ *	Creates and writes fileName.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_test_memory_dump_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    (void)ctx;
+
+    if (argc != 2) {
+	return Th8_WrongNumArgs(
+	    interp, "th8testlib::test_memory_dump fileName");
+    }
+    if (th8InternalStubsPtr == NULL ||
+        th8InternalStubsPtr->th8_MemTrackDump == NULL) {
+	Th8_SetResultStatic(
+	    interp, "test_memory_dump: internal stubs unavailable",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    return th8InternalStubsPtr
+        ->th8_MemTrackDump(interp, argv[1], TH8_LEN(argl[1]));
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_test_memory_reset_cmd --
+ *
+ *	Implements "th8testlib::test_memory_reset": free all of the
+ *	allocation tracker's bookkeeping (side-table nodes and interned
+ *	traces) and zero its counters, via th8MemTrackReset reached
+ *	through the internal-stubs table.
+ *
+ * Why / How:
+ *	Lets a test start the tracker from a known-empty state, or drop
+ *	the tracker's retained trace storage so the tracker itself is not
+ *	reported as a leak at shutdown.  In a non-TH8_MEM_DEBUG build the
+ *	stub is a successful no-op (there is nothing to clear).  Takes no
+ *	arguments; returns the number of live blocks that were cleared.
+ *
+ * Results:
+ *	TH8_OK with the cleared block count; TH8_ERROR only on a usage
+ *	error or missing stubs.
+ *
+ * Side effects:
+ *	Frees all tracker bookkeeping.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_test_memory_reset_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::test_memory_reset");
+    }
+    if (th8InternalStubsPtr == NULL ||
+        th8InternalStubsPtr->th8_MemTrackReset == NULL) {
+	Th8_SetResultStatic(
+	    interp, "test_memory_reset: internal stubs unavailable",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    return th8InternalStubsPtr->th8_MemTrackReset(interp);
+}
+
+
+/*
  *----------------------------------------------------------------------
  *
  * Th8test_Init --
@@ -21881,6 +22462,19 @@ Th8test_Init(Th8_Interp *interp)
         interp, "::th8testlib::event_delete_race",
         th8test_event_delete_race_cmd, 0, 0, 0);
 
+    /* Allocation-site memory tracker (design_notes_memtrack.md 3.4). */
+    Th8_CreateCommand(
+        interp, "::th8testlib::test_malloc", th8test_test_malloc_cmd, 0, 0,
+        0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::test_free", th8test_test_free_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::test_memory_dump",
+        th8test_test_memory_dump_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::test_memory_reset",
+        th8test_test_memory_reset_cmd, 0, 0, 0);
+
     /*
      * Register a test-only math function "test_echo" that
      * accepts a single string argument and returns it.
@@ -22016,7 +22610,7 @@ th8test_loadtest_marker_cmd(
 /*
  *----------------------------------------------------------------------
  *
- * Th8loadtest_Init / Th8loadtest_Unload --
+ * Th8loadtest_Init --
  *
  *	A SECOND, independent TH8 load entry point in this same
  *	library, exposed under the "Th8loadtest" symbol.  It exists

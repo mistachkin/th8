@@ -239,6 +239,18 @@ puts_command(
 	    zStr = argv[iArg];
 	    nStr = TH8_LEN(argl[iArg]);
 
+	    /*
+	     * Sensitivity boundary: a sensitive value must never be
+	     * written to a channel as plaintext.  Reject BEFORE any
+	     * write with a fixed diagnostic that discloses no payload.
+	     */
+
+	    if (TH8_SENSITIVE(argl[iArg])) {
+		Th8_SetResultStatic(
+		    interp, "sensitive value cannot be written", TH8_NOLEN);
+		return TH8_ERROR;
+	    }
+
 	    rc = th8ChannelWrite(interp, pChan, zStr, nStr);
 	    if (rc != TH8_OK) return rc;
 	    if (!noNewline) {
@@ -263,6 +275,19 @@ puts_command(
 
     zStr = argv[iArg];
     nStr = TH8_LEN(argl[iArg]);
+
+    /*
+     * Sensitivity boundary: a sensitive value must never be routed to
+     * the host xOutput callback as plaintext.  Reject BEFORE buffer
+     * assembly or Th8_Output with a fixed diagnostic that discloses no
+     * payload.
+     */
+
+    if (TH8_SENSITIVE(argl[iArg])) {
+	Th8_SetResultStatic(
+	    interp, "sensitive value cannot be written", TH8_NOLEN);
+	return TH8_ERROR;
+    }
 
     /*
      * Route through platform xOutput.

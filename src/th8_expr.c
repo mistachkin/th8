@@ -2509,6 +2509,14 @@ th8ExprParse(
 
 
 /*
+ * TH8_ISTERM -- true if a token is a complete term (a literal or an
+ * operator that already has its left child set, meaning it has been
+ * incorporated into the tree).
+ */
+
+/* TH8_ISTERM -- declared in th8_expr.h. */
+
+/*
  *----------------------------------------------------------------------
  *
  * th8ExprMakeTree -- phase 2, expression-grammar tree builder
@@ -2583,14 +2591,6 @@ th8ExprParse(
  *
  *----------------------------------------------------------------------
  */
-
-/*
- * TH8_ISTERM -- true if a token is a complete term (a literal or an
- * operator that already has its left child set, meaning it has been
- * incorporated into the tree).
- */
-
-/* TH8_ISTERM -- declared in th8_expr.h. */
 
 static int
 th8ExprMakeTree(Th8_Interp *interp, Th8_ExprNode **apToken, int nToken)

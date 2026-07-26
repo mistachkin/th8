@@ -374,7 +374,7 @@ th8MacOSMemset(Th8_Interp *interp, void *pCtx, void *dst, int c, size_t n)
 
 
 static Th8_Platform th8MacOSPlatformData = {
-    4,    /* nVersion */
+    5,    /* nVersion */
     th8MacOSInitialize,  /* xInitialize */
     th8MacOSFinalize,  /* xFinalize */
 
@@ -503,8 +503,15 @@ static Th8_Platform th8MacOSPlatformData = {
     /* DNS (provided by POSIX merge when TH8_ENABLE_UNBOUND) */
     0, 0,  /* xDnsResolve, xDnsResolveFree */
 
+    /* Diagnostics (nVersion 5) -- xStackBackTrace is deliberately left
+       NULL here.  It is supplied by the compiler-runtime th8_unwind layer
+       (_Unwind_Backtrace), merged after the OS layers.  It works uniformly
+       on Apple targets; macOS's native backtrace() (<execinfo.h>) would be
+       functionally equivalent but redundant, so no override is added here. */
+    0, /* xStackBackTrace */
+
     /* Host context */
-    0   /* pCtx */
+    0 /* pCtx */
 };
 
 

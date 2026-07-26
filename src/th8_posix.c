@@ -62,6 +62,29 @@ extern Th8_Platform th8GlobalPlatform;
 #  if defined(TH8_ENABLE_FAULT_INJECTION)
 extern struct Th8_FaultConfig *th8FaultActiveCfg;
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8PosixSyscallTrip --
+ *
+ *	Report whether the fault-injection layer is currently armed to
+ *	force the syscall identified by op to fail.
+ *
+ * Why / How:
+ *	The POSIX_CALL / POSIX_CALL_PTR macros consult this predicate
+ *	to decide whether to short-circuit a wrapped syscall.  Returns
+ *	true only when a fault config is active and op's corresponding
+ *	bit is set in th8FaultActiveCfg->nFailPosixMask.
+ *
+ * Results:
+ *	Nonzero if op's failure bit is armed; zero otherwise.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
+
 static int
 th8PosixSyscallTrip(int op)
 {
@@ -504,6 +527,14 @@ th8PosixDataExists(
 }
 
 
+/* <dlfcn.h> included via th8_meta_posix.h */
+
+#  if !defined(TH8_FUZZ_STANDALONE)
+
+static void th8PosixSaveHandle(Th8_Interp *, const char *, size_t, void *);
+
+typedef int (*Th8_LoadInitProc)(Th8_Interp *);
+
 /*
  *----------------------------------------------------------------------
  *
@@ -548,14 +579,6 @@ th8PosixDataExists(
  *
  *----------------------------------------------------------------------
  */
-
-/* <dlfcn.h> included via th8_meta_posix.h */
-
-#  if !defined(TH8_FUZZ_STANDALONE)
-
-static void th8PosixSaveHandle(Th8_Interp *, const char *, size_t, void *);
-
-typedef int (*Th8_LoadInitProc)(Th8_Interp *);
 
 static int
 th8PosixLoad(
@@ -2296,26 +2319,23 @@ th8PosixGetEnv(Th8_Interp *interp, void *pCtx, const char *zName)
 /*
  *----------------------------------------------------------------------
  *
- * th8PosixGetLastError / th8PosixSetLastError --
+ * th8PosixGetLastError --
  *
- *	Implement the Th8_Platform.xGetLastError and
- *	Th8_Platform.xSetLastError callbacks.  Get or set the
- *	per-thread error code.
+ *	Implements the Th8_Platform.xGetLastError callback.  Return
+ *	the current per-thread error code.
  *
  * Why / How:
  *	On POSIX, the "last error" is the thread-local errno
- *	variable.  These trivial wrappers allow the interpreter
- *	to save/restore errno across platform callback boundaries
- *	without directly referencing the POSIX errno macro.  This
- *	abstraction is essential because Win32 uses GetLastError/
- *	SetLastError instead of errno.
+ *	variable.  This trivial wrapper lets the interpreter read
+ *	errno across platform callback boundaries without directly
+ *	referencing the POSIX errno macro.  This abstraction is
+ *	essential because Win32 uses GetLastError instead of errno.
  *
  * Results:
- *	xGetLastError returns the current errno value.
- *	xSetLastError has no return value.
+ *	Returns the current errno value.
  *
  * Side effects:
- *	xSetLastError modifies the thread-local errno.
+ *	None.
  *
  *----------------------------------------------------------------------
  */
@@ -2762,8 +2782,18 @@ th8PosixChannelControl(
 
     (void)interp;
     (void)pCtx;
-    if (fd < 0) {
-	TH8_TRACE_ERR(NULL, "invalid file descriptor");
+    /*
+     * A NULL pChannel maps to fd 0 (stdin) through TH8_PTR2INT, and a
+     * bare `fd < 0` guard would let it through -- a READ would then
+     * block forever on an interactive stdin, a WRITE/CLOSE would target
+     * the process's standard streams.  Real TH8 channels are temp
+     * files with fd >= 3, so reject fd <= 0 (NULL/stdin) as an invalid
+     * channel for every op that USES the descriptor.  OPEN is exempt:
+     * it creates a brand-new fd from a path and ignores the incoming
+     * pChannel, so a NULL/0 fd is expected and valid there.
+     */
+    if (op != TH8_CHANCTL_OPEN && fd <= 0) {
+	TH8_TRACE_ERR(NULL, "invalid channel file descriptor");
 	return TH8_ERROR;
     }
 
@@ -2808,6 +2838,16 @@ th8PosixChannelControl(
 	    if (n < 0) {
 		if (errno == EINTR) continue;
 		TH8_TRACE_ERR(NULL, "write failed in channel");
+		return TH8_ERROR;
+	    }
+	    if (n == 0) {
+		/*
+		 * write() returning 0 with a non-zero count makes no
+		 * forward progress; without this guard `nTotal` would
+		 * never decrease and the loop would spin forever.  Treat
+		 * a zero-length write as a failure rather than hanging.
+		 */
+		TH8_TRACE_ERR(NULL, "zero-length write in channel");
 		return TH8_ERROR;
 	    }
 	    p += n;
@@ -5410,6 +5450,14 @@ th8PosixNormalizePath(
 }
 
 
+#  if defined(__APPLE__)
+#    include <mach-o/dyld.h> /* _NSGetExecutablePath */
+#  endif
+#  if defined(__FreeBSD__)
+#    include <sys/types.h>
+#    include <sys/sysctl.h>
+#  endif
+
 /*
  *----------------------------------------------------------------------
  *
@@ -5447,14 +5495,6 @@ th8PosixNormalizePath(
  *
  *----------------------------------------------------------------------
  */
-
-#  if defined(__APPLE__)
-#    include <mach-o/dyld.h> /* _NSGetExecutablePath */
-#  endif
-#  if defined(__FreeBSD__)
-#    include <sys/types.h>
-#    include <sys/sysctl.h>
-#  endif
 
 static char *
 th8PosixGetExePath(
@@ -5601,7 +5641,7 @@ th8PosixGetExePath(
  */
 
 static Th8_Platform th8PosixPlatformData = {
-    4, /* nVersion */
+    5, /* nVersion */
     th8PosixInitialize, /* xInitialize */
     th8PosixFinalize, /* xFinalize */
 
@@ -5749,6 +5789,14 @@ static Th8_Platform th8PosixPlatformData = {
     0,    /* xDnsResolve */
     0,    /* xDnsResolveFree */
 #  endif
+
+    /* Diagnostics (nVersion 5) -- xStackBackTrace is deliberately left
+       NULL here.  It is supplied by the compiler-runtime th8_unwind layer
+       (_Unwind_Backtrace), merged after the OS layers.  _Unwind_Backtrace is
+       a compiler-runtime facility (not POSIX), so it lives in th8_unwind.c;
+       the only POSIX-adjacent alternative (backtrace() in <execinfo.h>) is
+       glibc-only and not musl-safe, so POSIX adds no native override. */
+    0, /* xStackBackTrace */
 
     /* Host context */
     0 /* pCtx */

@@ -183,16 +183,23 @@ th8SecureCheckCanary(Th8_Interp *interp, const void *pKSv)
 /*
  *----------------------------------------------------------------------
  *
- * th8SlotIsUsed / th8SlotSetUsed / th8SlotClearUsed / th8SlotKey --
+ * th8SlotIsUsed --
  *
- *	Bitmap-based slot allocation for the key store.  Each secure
- *	variable gets one 32-byte slot in the locked page.  The bitmap
- *	tracks which slots are in use.
+ *	Query whether key-store slot `i` is currently occupied by
+ *	testing its bit in `pKS->aBitmap`.
  *
  * Why / How:
- *	A fixed-size bitmap avoids heap allocation for slot management,
+ *	The bitmap-based slot allocator (with th8SlotSetUsed and
+ *	th8SlotClearUsed) avoids heap allocation for slot management,
  *	keeping the entire key-store metadata out of pageable memory.
  *	Slot 0 is reserved for the canary; usable range is 1..MAX-1.
+ *	The caller is responsible for passing an in-range index.
+ *
+ * Results:
+ *	Non-zero if slot `i` is in use, 0 if free.
+ *
+ * Side effects:
+ *	None.
  *
  *----------------------------------------------------------------------
  */

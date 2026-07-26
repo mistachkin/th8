@@ -46,26 +46,29 @@ static TH8_THREAD_LOCAL Th8_Interp *volatile th8_bigint_interp = 0;
 /*
  *----------------------------------------------------------------------
  *
- * th8_bigint_malloc / th8_bigint_calloc / th8_bigint_realloc /
- * th8_bigint_free --
+ * th8_bigint_malloc --
  *
- *	Custom allocator callbacks for libtommath.  These route
- *	all libtommath memory through the TH8 platform allocator
- *	and enforce cancellation and resource limits.
+ *	libtommath `XMALLOC` allocator bridge.  Routes a raw
+ *	`n`-byte request through TH8's `TH8_ALLOC` using the
+ *	thread-local `th8_bigint_interp` captured by the
+ *	bracketing `th8BigintSetup` call.
  *
  * Why / How:
- *	libtommath is compiled with LTM_ALLOC_FUNCS pointing to
- *	these four functions.  Each one checks interpreter readiness
- *	(cancellation, step limit) before delegating to TH8_ALLOC
- *	or Th8_AttemptRealloc.  Returning NULL triggers libtommath's
- *	MP_MEM error path, unwinding gracefully.
+ *	libtommath is compiled with LTM_ALLOC_FUNCS pointing at
+ *	this family of callbacks, which take no user-data pointer;
+ *	the interp is therefore threaded in via the thread-local.
+ *	A NULL `th8_bigint_interp` (bridge not set up) or a
+ *	non-ready interpreter (cancelled / over its memory limit)
+ *	makes this return NULL, which libtommath maps to MP_MEM
+ *	and unwinds gracefully.  Plain guards, NOT `NEVER()`, per
+ *	the Bug 26 family rule.
  *
  * Results:
- *	malloc/calloc/realloc return a pointer or NULL on failure.
- *	free has no return value.
+ *	Pointer to `n` bytes on success; NULL on any failure.
  *
  * Side effects:
- *	Memory allocation/deallocation through the interpreter.
+ *	Allocates via the per-interp allocator (which counts the
+ *	request against the interpreter's memory limit).
  *
  *----------------------------------------------------------------------
  */

@@ -3432,6 +3432,105 @@ th8Win32EmitTrace(Th8_Interp *interp, void *pCtx, const char *zMsg)
 }
 
 
+typedef USHORT(
+    WINAPI *RtlCaptureStackBackTraceFunc)(ULONG, ULONG, PVOID *, PULONG);
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8Win32StackBackTrace --
+ *
+ *	Implements the Th8_Platform.xStackBackTrace callback on Windows:
+ *	capture up to nMaxFrames return-address program counters into
+ *	apFrames[], skipping the innermost nSkip frames.  Returns the
+ *	number captured.
+ *
+ * Why / How:
+ *	Uses RtlCaptureStackBackTrace (exported by name from kernel32.dll,
+ *	forwarded to ntdll; available since Windows XP), the Windows
+ *	analogue of the th8_unwind layer's _Unwind_Backtrace.  A native
+ *	Win32 body is required because under MSVC the compiler unwind
+ *	runtime that th8_unwind relies on is absent, so the merged Win32
+ *	platform would otherwise inherit th8_unwind's no-op.  Win32 is
+ *	merged (with the OS layers) BEFORE th8_unwind in
+ *	Th8_UseDefaultPlatform, and MERGE_SLOT only fills a NULL slot, so
+ *	this native entry wins over the compiler-runtime fallback.
+ *
+ *	The symbol is resolved dynamically (mirroring th8Win32RandomBytes'
+ *	handling of RtlGenRandom) because RtlCaptureStackBackTrace is
+ *	inconsistently prototyped across SDKs / MinGW headers.  Unlike the
+ *	RtlGenRandom path this caches the resolved pointer in function-local
+ *	statics and uses GetModuleHandleA rather than LoadLibrary/FreeLibrary:
+ *	this callback runs on EVERY tracked allocation, so per-call loader
+ *	work would be ruinous, and -- critically -- it must not allocate or
+ *	take the loader lock repeatedly while executing inside the allocation
+ *	tracker.  kernel32.dll is always resident, so GetModuleHandleA neither
+ *	loads nor ref-counts it.  The one-time resolution races benignly
+ *	across threads (idempotent pointer-sized writes of the same value);
+ *	bResolved is latched so a failed lookup is not retried every call.
+ *	The capture itself walks the stack without any debug-help library and
+ *	allocates nothing.  Pre-Vista releases cap FramesToSkip +
+ *	FramesToCapture at 62, so the request is clamped to that ceiling.
+ *
+ * Results:
+ *	Number of frames stored (0 on bad arguments, if the symbol cannot be
+ *	resolved, or if the skip count alone reaches the 62-frame ceiling).
+ *
+ * Side effects:
+ *	Populates and latches function-local static caches on first call.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8Win32StackBackTrace(
+    Th8_Interp *interp,
+    void *pCtx,
+    void **apFrames,
+    int nMaxFrames,
+    int nSkip)
+{
+    static RtlCaptureStackBackTraceFunc pFunc = NULL;
+    static int bResolved = 0;
+    ULONG nSkipFrames;
+    ULONG nCapFrames;
+    USHORT nCaptured;
+
+    (void)interp;
+    (void)pCtx;
+    if (apFrames == NULL || nMaxFrames <= 0) {
+	return 0;
+    }
+    if (!bResolved) {
+	HMODULE hK32 = GetModuleHandleA("kernel32.dll");
+	if (hK32) {
+	    pFunc = (RtlCaptureStackBackTraceFunc)
+	        GetProcAddress(hK32, "RtlCaptureStackBackTrace");
+	}
+	bResolved = 1; /* Latch: do not re-probe on every allocation. */
+    }
+    if (pFunc == NULL) {
+	return 0;
+    }
+    nSkipFrames = (nSkip < 0) ? 0 : (ULONG)nSkip;
+    nCapFrames = (ULONG)nMaxFrames;
+
+    /*
+     * RtlCaptureStackBackTrace on pre-Vista releases limits the sum of
+     * FramesToSkip and FramesToCapture to 62; clamp so the call stays
+     * within that ceiling on every supported Windows version.
+     */
+    if (nSkipFrames >= 62) {
+	return 0;
+    }
+    if (nSkipFrames + nCapFrames > 62) {
+	nCapFrames = 62 - nSkipFrames;
+    }
+    nCaptured = pFunc(nSkipFrames, nCapFrames, apFrames, NULL);
+    return (int)nCaptured;
+}
+
+
 /*
  *----------------------------------------------------------------------
  *
@@ -5507,7 +5606,7 @@ th8Win32DnsResolveFree(Th8_Interp *interp, void *pCtx, Th8_DnsResult *pResult)
 
 
 static Th8_Platform th8Win32PlatformData = {
-    4,   /* nVersion */
+    5,   /* nVersion */
 
     /* Lifecycle */
     th8Win32Initialize,  /* xInitialize */
@@ -5619,6 +5718,12 @@ static Th8_Platform th8Win32PlatformData = {
 #  else
     0, 0,
 #  endif
+
+    /* Diagnostics (nVersion 5) -- native RtlCaptureStackBackTrace, since
+       MSVC lacks the _Unwind_Backtrace runtime the th8_unwind layer uses.
+       Win32 is merged before th8_unwind, so this native entry wins over the
+       compiler-runtime no-op fallback. */
+    th8Win32StackBackTrace, /* xStackBackTrace */
 
     /* Host context */
     0 /* pCtx */

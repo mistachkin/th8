@@ -30,7 +30,7 @@
 #
 
 .PHONY: all static shared stubs shell static-shell testlib bridge \
-        genstubs audit audit-reqs regex_vendor bestline_vendor tommath_vendor clean install debug FORCE \
+        genstubs audit audit-reqs regex_vendor bestline_vendor tommath_vendor clean install debug memdebug FORCE \
         th8test tcltest eagletest \
         amalgamation amalgamation-test \
         asan ubsan msan sanitize asan-test asan-test-macos \
@@ -652,8 +652,9 @@ CORE_OBJ     = $(B)th8_core.o $(B)th8_plat.o $(B)th8_hash.o $(B)th8_util.o \
                $(B)th8_strings.o \
                $(B)th8_timekeeping.o $(B)th8_variables.o \
                $(B)th8_lang.o $(B)th8_xlib.o $(B)th8_fault.o \
-               $(B)th8_env.o $(B)th8_mem.o \
-               $(B)th8_regex.o $(B)th8_nullio.o $(B)th8_ctime.o \
+               $(B)th8_env.o $(B)th8_mem.o $(B)th8_memtrack.o \
+               $(B)th8_regex.o $(B)th8_nullio.o $(B)th8_unwind.o \
+               $(B)th8_ctime.o \
                $(CURL_OBJ) $(BIGINT_OBJ) $(CRYPTOGRAPHY_OBJ) \
                $(MIMALLOC_OBJ) $(UNBOUND_OBJ) \
                $(B)th8_spilornis.o $(B)spilornis.o \
@@ -675,8 +676,9 @@ CORE_OBJ_PIC = $(B)th8_core.pic.o $(B)th8_plat.pic.o $(B)th8_hash.pic.o \
                $(B)th8_strings.pic.o \
                $(B)th8_timekeeping.pic.o $(B)th8_variables.pic.o \
                $(B)th8_lang.pic.o $(B)th8_xlib.pic.o $(B)th8_fault.pic.o \
-               $(B)th8_env.pic.o $(B)th8_mem.pic.o \
+               $(B)th8_env.pic.o $(B)th8_mem.pic.o $(B)th8_memtrack.pic.o \
                $(B)th8_regex.pic.o $(B)th8_nullio.pic.o \
+               $(B)th8_unwind.pic.o \
                $(B)th8_ctime.pic.o $(CURL_OBJ_PIC) $(BIGINT_OBJ_PIC) \
                $(CRYPTOGRAPHY_OBJ_PIC) $(MIMALLOC_OBJ_PIC) $(UNBOUND_OBJ_PIC) \
                $(B)th8_spilornis.pic.o $(B)spilornis.pic.o $(B)th8StubInit.pic.o \
@@ -1388,6 +1390,16 @@ $(B)th8_mem.o: $(S)th8_mem.c $(S)th8.h $(S)th8_int.h | $(B)
 $(B)th8_mem.pic.o: $(S)th8_mem.c $(S)th8.h $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_mem.c
 
+$(B)th8_memtrack.o: $(S)th8_memtrack.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_int_core.h $(S)th8_plat.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_posix.h | $(B)
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_memtrack.c
+
+$(B)th8_memtrack.pic.o: $(S)th8_memtrack.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_int_core.h $(S)th8_plat.h $(S)th8_meta_defs.h \
+	    $(S)th8_meta_libc.h $(S)th8_meta_posix.h | $(B)
+	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_memtrack.c
+
 $(B)th8_regex.o: $(S)plugins/regexp/th8_regex.c $(S)th8.h \
 	    $(S)plugins/regexp/regex_th8.h $(S)th8_int.h $(S)th8_plugin.h \
 	    $(S)th8_util.h | $(B)
@@ -1395,6 +1407,10 @@ $(B)th8_regex.o: $(S)plugins/regexp/th8_regex.c $(S)th8.h \
 
 $(B)th8_nullio.o: $(S)th8_nullio.c $(S)th8.h $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_nullio.c
+
+$(B)th8_unwind.o: $(S)th8_unwind.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h | $(B)
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_unwind.c
 
 $(B)th8_ctime.o: $(S)th8_ctime.c $(S)th8.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_ctime.c
@@ -1439,7 +1455,14 @@ ifneq (,$(findstring TH8_DEBUG,$(CFLAGS)))
 else
   MI_MODE_FLAGS = -O2 -DNDEBUG
 endif
-MI_CFLAGS = -std=c11 $(MI_MODE_FLAGS) -DMI_STATIC_LIB \
+# MI_TRACK_FLAGS is empty by default.  The `valgrind` target sets it to
+# -DMI_TRACK_VALGRIND=1 so mimalloc emits VALGRIND_MALLOCLIKE/FREELIKE
+# annotations and Valgrind sees each mimalloc block individually (with a
+# backtrace) instead of a few opaque arenas.  It is opt-in because it
+# needs the Valgrind headers (present on the Valgrind host, absent on a
+# plain macOS dev box) and adds overhead.
+MI_TRACK_FLAGS ?=
+MI_CFLAGS = -std=c11 $(MI_MODE_FLAGS) $(MI_TRACK_FLAGS) -DMI_STATIC_LIB \
 	    -I$(MI_INC) -I$(MI_SRC) \
 	    -Wno-pedantic -Wno-long-long -Wno-unused-parameter \
 	    -Wno-strict-prototypes -Wno-missing-prototypes \
@@ -1663,6 +1686,10 @@ $(B)th8_regex.pic.o: $(S)plugins/regexp/th8_regex.c $(S)th8.h \
 $(B)th8_nullio.pic.o: $(S)th8_nullio.c $(S)th8.h $(S)th8_int.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_nullio.c
 
+$(B)th8_unwind.pic.o: $(S)th8_unwind.c $(S)th8.h $(S)th8_int.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h | $(B)
+	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_unwind.c
+
 $(B)th8_ctime.pic.o: $(S)th8_ctime.c $(S)th8.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_ctime.c
 
@@ -1700,10 +1727,22 @@ $(B)ConvertUTF_v2.pic.o: $(UTF_DIR)/ConvertUTF_v2.c $(UTF_DIR)/ConvertUTF_v2.h |
 #
 # Stubs regeneration (from th8.h).
 #
+# The clang-format call is a COSMETIC post-process on the generated
+# stubs -- mkstubs.tcl already emits valid, compilable C.  It is made
+# non-fatal on purpose: the project .clang-format uses
+# `AlignTrailingComments: Kind: Leave`, which requires clang-format
+# >= 16 (there is no equivalent in the older boolean-only syntax that
+# preserves comment columns, so the config cannot be downgraded).  A
+# host with an older or absent clang-format (e.g. running `make
+# valgrind` on Linux) must NOT have its build broken by this cosmetic
+# step -- warn and continue with the unformatted (but valid) files.
+# Install clang-format >= 16 for style-consistent regeneration/commit.
+#
 
 genstubs:
 	$(TCLSH) tools/mkstubs.tcl $(S)th8.h $(S)th8Decls.h $(S)th8StubInit.c
-	clang-format -i --style=file $(S)th8Decls.h $(S)th8StubInit.c
+	@clang-format -i --style=file $(S)th8Decls.h $(S)th8StubInit.c 2>/dev/null || \
+	    echo "genstubs: WARNING: clang-format failed (needs >= 16 for .clang-format); generated stubs left unformatted -- valid and compilable, cosmetic only."
 
 #
 # Banned-pattern audit (tools/audit_patterns.tcl).
@@ -1716,10 +1755,22 @@ genstubs:
 # line to suppress the check; see the tool header for details.
 #
 
-audit: check-deps
+audit: check-deps check-headers
 	$(TCLSH) tools/audit_patterns.tcl source
 	$(TCLSH) tools/audit_patterns.tcl crt-objects $(B)
 	$(TCLSH) tools/audit_patterns.tcl format
+
+#
+# Function-header audit (tools/check_headers.tcl).  Every function
+# DEFINITION in a TH8 .c source must be immediately preceded by a
+# Tcl-style header banner naming it ("* FunctionName --"), which forces
+# the one-header-per-function Why/How convention and flags both missing
+# and grouped headers.  Exits non-zero on any violation, so it fails the
+# build.  A case the parser cannot see through can be waived with a
+# /* CHECK-HEADERS-OK: <reason> */ marker on/above the definition.
+#
+check-headers:
+	$(TCLSH) tools/check_headers.tcl
 
 #
 # Header-dependency audit.  Verifies that every object dependency line
@@ -1735,7 +1786,7 @@ audit: check-deps
 check-deps:
 	$(TCLSH) tools/check_deps.tcl
 
-.PHONY: check-deps
+.PHONY: check-deps check-headers
 
 #
 # Formatting check (clang-format).  Kept as a separate target for
@@ -2251,6 +2302,17 @@ fresh: clean all
 debug:
 	$(MAKE) CFLAGS="$(CFLAGS_DEBUG)" all
 
+# memdebug:  A debug build with the allocation-site memory tracker
+#            (th8_memtrack.c) compiled in via -DTH8_MEM_DEBUG.  Every
+#            allocation through the central funnel is recorded with a
+#            captured stack trace; th8testlib::test_memory_dump then
+#            writes the live set grouped by call stack.  A normal build
+#            has none of this (the funnel is byte-for-byte unchanged).
+#            See docs/internal/design_notes_memtrack.md.  Usage:
+#              make ENABLE_TEST_KEY=1 clean memdebug
+memdebug:
+	$(MAKE) CFLAGS="$(CFLAGS_DEBUG) -DTH8_MEM_DEBUG" all
+
 # ----------------------------------------------------------------
 # Amalgamation.
 #
@@ -2484,11 +2546,31 @@ sanitize-test-macos: sanitize
 	  $(SHELL_BIN) tests/all.tcl
 
 valgrind:
-	$(MAKE) CFLAGS="$(CFLAGS_DEBUG)" all-non-static
+	#
+	# Build mimalloc with Valgrind tracking so Valgrind sees each
+	# mimalloc block (with a backtrace) instead of opaque arenas --
+	# i.e. real leak reporting WITH mimalloc in the loop.  The
+	# mimalloc objects are removed first because a change to
+	# MI_TRACK_FLAGS alone does not retrigger their rebuild (they
+	# depend only on static.c + Makefile timestamps).  ENABLE_MIMALLOC=0
+	# still works: mimalloc is simply not compiled and the flag is
+	# inert.
+	#
+	rm -f $(B)mimalloc_static.o $(B)mimalloc_static.pic.o
+	$(MAKE) CFLAGS="$(CFLAGS_DEBUG)" \
+	    MI_TRACK_FLAGS="-DMI_TRACK_VALGRIND=1" all-non-static
+	#
+	# `< /dev/null` is REQUIRED: the suite exercises channel-READ
+	# paths (e.g. coverage_channel_control_fault.tcl) that can reach
+	# a blocking read(fd=0).  With an interactive terminal on stdin
+	# that read blocks forever (SL+, zero CPU); redirecting stdin to
+	# /dev/null makes it return EOF immediately.  Automated runs must
+	# never read interactive stdin.
+	#
 	TH8SH_YES_TESTLIB=1 valgrind --leak-check=full \
 	  --show-leak-kinds=all --track-origins=yes \
 	  --suppressions=tools/data/th8.supp \
-	  --error-exitcode=1 $(SHELL_BIN) tests/all.tcl
+	  --error-exitcode=1 $(SHELL_BIN) tests/all.tcl < /dev/null
 
 # ----------------------------------------------------------------
 # CRT dependency audit.
