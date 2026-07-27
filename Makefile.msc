@@ -1370,7 +1370,7 @@ check-crt:
 # Mirrors the POSIX `audit` target.
 # ----------------------------------------------------------------
 
-audit: check-deps
+audit: check-deps check-headers check-amal
 	tclsh tools\audit_patterns.tcl source
 	tclsh tools\audit_patterns.tcl crt-objects $(B)
 
@@ -1384,6 +1384,26 @@ audit: check-deps
 #
 check-deps:
 	tclsh tools\check_deps.tcl
+
+#
+# Function-header audit (tools/check_headers.tcl).  Every function
+# DEFINITION in a TH8 .c source must be immediately preceded by a
+# Tcl-style header banner naming it ("* FunctionName --").  Fails the
+# build on any missing or grouped header; waive an unparseable case with
+# a /* CHECK-HEADERS-OK: <reason> */ marker.  Compiler-free.
+#
+check-headers:
+	tclsh tools\check_headers.tcl
+
+#
+# Amalgamation source-list audit (tools/check_amal.tcl).  Verifies that
+# every TH8-authored .c source in the tree is referenced by
+# tools/mkamal.tcl (or is on that tool's small, documented exclude list),
+# so a new source cannot silently break the amalgamation build (the
+# 2026-07-27 th8_memtrack.c / th8_unwind.c regression).  Compiler-free.
+#
+check-amal:
+	tclsh tools\check_amal.tcl
 
 #
 # Requirements-marker audit (tools/mkreq.tcl).  Catches:

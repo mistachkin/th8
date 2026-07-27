@@ -48,8 +48,9 @@
 #include "th8_plat.h" /* real Th8_Mutex typedef; must precede th8.h */
 #include "th8.h"
 #include "th8_int.h"
-#include "th8_int_core.h" /* struct Th8_Interp (pPlatform), accessed on the
-                             interp's own thread from the allocation funnel */
+/* th8_int_core.h defines struct Th8_Interp; the tracker reads
+ * interp->pPlatform on the interp's own thread from the allocation funnel. */
+#include "th8_int_core.h"
 
 #if !defined(TH8_MEM_DEBUG)
 

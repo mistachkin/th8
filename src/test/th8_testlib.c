@@ -3600,6 +3600,35 @@ th8test_plat_wrappers_cmd(
 	 * isn't the case in normal test runs. */
 	Th8_EmitTrace(interp, NULL);
 
+	/* th8_unwind.c xStackBackTrace: drive th8UnwindStackBackTrace's
+	 * `apFrames == NULL || nMaxFrames <= 0` guard (all outcomes) and
+	 * its `(nSkip < 0)` clamp, plus -- via real captures -- th8UnwindStep's
+	 * per-frame decisions (nSeen >= nSkip both ways, nStored >= nMax when a
+	 * small buffer fills, and natural stack end).  At runtime only the
+	 * TH8_MEM_DEBUG memory tracker calls xStackBackTrace, so without this
+	 * drive the compiler-runtime layer is entirely uncovered in the
+	 * (non-memdebug) MC/DC build. */
+	{
+	    const Th8_Platform *pSbt = Th8_GetPlatform(interp);
+	    if (pSbt && pSbt->xStackBackTrace) {
+		void *aSbt[64];
+		/* small buffer against a deep stack -> nStored >= nMax = T */
+		(void)pSbt->xStackBackTrace(interp, pSbt->pCtx, aSbt, 4, 0);
+		/* skip 2 then record, large buffer -> nSeen>=nSkip both ways,
+		 * natural end with nStored >= nMax = F */
+		(void)pSbt->xStackBackTrace(interp, pSbt->pCtx, aSbt, 64, 2);
+		/* skip more than the stack depth -> records nothing */
+		(void)pSbt
+		    ->xStackBackTrace(interp, pSbt->pCtx, aSbt, 64, 1000000);
+		/* nSkip < 0 -> the clamp branch */
+		(void)pSbt->xStackBackTrace(interp, pSbt->pCtx, aSbt, 8, -1);
+		/* guard C1=T: apFrames == NULL */
+		(void)pSbt->xStackBackTrace(interp, pSbt->pCtx, NULL, 8, 0);
+		/* guard C1=F,C2=T: nMaxFrames <= 0 */
+		(void)pSbt->xStackBackTrace(interp, pSbt->pCtx, aSbt, 0, 0);
+	    }
+	}
+
 	/* Th8_GetData L1796 `(flags & TH8_TRANSLATE_EOL)
 	 * && ALWAYS(*pzOut) && *pnOut > 0` C2-Pair:
 	 * drive (T, F, -) by calling Th8_GetData with

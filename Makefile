@@ -1755,7 +1755,7 @@ genstubs:
 # line to suppress the check; see the tool header for details.
 #
 
-audit: check-deps check-headers
+audit: check-deps check-headers check-amal
 	$(TCLSH) tools/audit_patterns.tcl source
 	$(TCLSH) tools/audit_patterns.tcl crt-objects $(B)
 	$(TCLSH) tools/audit_patterns.tcl format
@@ -1786,7 +1786,19 @@ check-headers:
 check-deps:
 	$(TCLSH) tools/check_deps.tcl
 
-.PHONY: check-deps check-headers
+#
+# Amalgamation source-list audit (tools/check_amal.tcl).  Verifies that every
+# TH8-authored .c source in the tree is referenced by tools/mkamal.tcl (or is
+# on that tool's small, documented exclude list of units built outside the
+# library amalgamation).  This guarantees the amalgamation (bin/th8.c) stays
+# buildable as sources are added: a new file that lands in CORE_OBJ but not in
+# mkamal.tcl fails this gate instead of silently breaking amalgamation-shell
+# (the 2026-07-27 th8_memtrack.c / th8_unwind.c regression).  Compiler-free.
+#
+check-amal:
+	$(TCLSH) tools/check_amal.tcl
+
+.PHONY: check-deps check-headers check-amal
 
 #
 # Formatting check (clang-format).  Kept as a separate target for

@@ -157,8 +157,10 @@ set sourceFiles [list \
     [list "src/plugins/th8_binary.c"         ""  ""] \
     [list "src/th8_lang.c"           ""  ""] \
     [list "src/th8_mem.c"            ""  ""] \
+    [list "src/th8_memtrack.c"       ""  ""] \
     [list "src/th8_xlib.c"           ""  ""] \
     [list "src/th8_nullio.c"         ""  ""] \
+    [list "src/th8_unwind.c"         ""  ""] \
     [list "src/th8_ctime.c"          ""  ""] \
     [list "src/th8StubInit.c"        ""  ""] \
     [list "src/th8InternalStubInit.c" ""  ""] \

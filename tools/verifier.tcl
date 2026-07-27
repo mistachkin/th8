@@ -290,7 +290,7 @@ foreach f $allFiles {
     }
     unsigned -
     mismatch -
-    error {; # BUGBUG: Unsigned does not work due to continue above.
+    error {; # BUGBUG: Unsigned does not work due to [continue] above.
       if {$status eq "error"} then {
         incr nError
         puts "ERROR     $rel  ($detail)"
