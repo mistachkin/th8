@@ -22,7 +22,7 @@ source tests/prologue.tcl
 
 runTest {test lremove-1.1 {
   R-05764-04130: remove single element by index
-} -body {
+} -constraints {lremove} -body {
   lremove {a b c d e} 2
 } -result {a b d e}}
 
@@ -30,7 +30,7 @@ runTest {test lremove-1.1 {
 
 runTest {test lremove-1.2 {
   R-05764-04130: remove multiple elements
-} -body {
+} -constraints {lremove} -body {
   lremove {a b c d e} 0 4
 } -result {b c d}}
 
@@ -38,7 +38,7 @@ runTest {test lremove-1.2 {
 
 runTest {test lremove-1.3 {
   R-57118-58718: remove with end index
-} -body {
+} -constraints {lremove} -body {
   lremove {a b c d e} end
 } -result {a b c d}}
 
@@ -46,7 +46,7 @@ runTest {test lremove-1.3 {
 
 runTest {test lremove-1.4 {
   R-57118-58718: remove with end-1 index
-} -body {
+} -constraints {lremove} -body {
   lremove {a b c d e} end-1
 } -result {a b c e}}
 
@@ -54,7 +54,7 @@ runTest {test lremove-1.4 {
 
 runTest {test lremove-1.5 {
   R-05764-04130: remove from empty list
-} -body {
+} -constraints {lremove} -body {
   lremove {} 0
 } -result {}}
 
@@ -62,7 +62,7 @@ runTest {test lremove-1.5 {
 
 runTest {test lremove-1.6 {
   R-64017-07410: no indices (returns original)
-} -body {
+} -constraints {lremove} -body {
   lremove {a b c d e}
 } -result {a b c d e}}
 
@@ -71,7 +71,7 @@ runTest {test lremove-1.6 {
 runTest {test lremove-2.1 {
   R-05764-04130: wrong # args (no args)
 } -setup {
-} -body {
+} -constraints {lremove} -body {
   list [catch {lremove} msg] $msg
 } -cleanup {
   unset -nocomplain msg
@@ -81,7 +81,7 @@ runTest {test lremove-2.1 {
 
 runTest {test lremove-3.1 {
   R-12457-39560: out-of-range index silently ignored
-} -body {
+} -constraints {lremove} -body {
   lremove {a b c} 10
 } -result {a b c}}
 
@@ -89,7 +89,7 @@ runTest {test lremove-3.1 {
 
 runTest {test lremove-3.2 {
   R-12457-39560: duplicate indices
-} -body {
+} -constraints {lremove} -body {
   lremove {a b c d e} 1 1
 } -result {a c d e}}
 
@@ -97,7 +97,7 @@ runTest {test lremove-3.2 {
 
 runTest {test lremove-3.3 {
   R-05764-04130: remove all elements
-} -body {
+} -constraints {lremove} -body {
   lremove {a b c} 0 1 2
 } -result {}}
 

@@ -245,7 +245,7 @@ runTest {test coverage8-6.1 {
 
 runTest {test coverage8-6.2 {
   R-20051-12919: set inside namespace eval does NOT persist
-} -body {
+} -constraints {th8} -body {
   namespace eval ::_cv8_ns2 {
     set ephemeral "gone"
   }
@@ -304,7 +304,7 @@ runTest {test coverage8-7.1 {
 
 runTest {test coverage8-7.2 {
   R-27404-11181: package scan re-scans auto_path
-} -body {
+} -constraints {package_scan} -body {
   # package scan should succeed without error
   catch {package scan} msg
   expr {$msg eq ""}
@@ -320,7 +320,7 @@ runTest {test coverage8-7.2 {
 
 runTest {test coverage8-8.1 {
   R-43740-46756: info subcommands works without prior invocation
-} -body {
+} -constraints {info_subcommands} -body {
   # info subcommands should list sub-commands of any ensemble
   # even if that ensemble hasn't been invoked yet
   set subs [info subcommands info]
@@ -402,7 +402,7 @@ runTest {test coverage8-9.5 {
 
 runTest {test coverage8-10.1 {
   R-14640-47759: clock ntp returns epoch seconds
-} -body {
+} -constraints {clock_ntp} -body {
   set t [clock ntp -timeout 5000]
   # Should be a reasonable epoch time (after 2024-01-01)
   expr {$t > 1704067200}
@@ -563,7 +563,7 @@ runTest {test coverage8-12.1 {
 
 runTest {test coverage8-12.2 {
   R-45561-34695: epsilon returns machine epsilon
-} -body {
+} -constraints {mathfunc_epsilon} -body {
   set e [expr {epsilon()}]
   # Machine epsilon is ~2.22e-16
   expr {$e > 2e-16 && $e < 3e-16}

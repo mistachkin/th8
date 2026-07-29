@@ -137,7 +137,7 @@ runTest {test coroutine-2.2 {
 runTest {test coroutine-2.3 {
   generator with foreach loop
 } -constraints {
-    coroutine
+    coroutine th8
 } -setup {
 } -body {
   proc _letters {} {
@@ -556,7 +556,7 @@ runTest {test coroutine-10.1 {
   R-34122-15052: the coroutine command raises a script error if a
   command with the given name already exists
 } -constraints {
-    coroutine
+    coroutine th8
 } -setup {
   proc _coro_dummy {} { return "ok" }
   proc _coro_body  {} { yield "ready"; return "done" }

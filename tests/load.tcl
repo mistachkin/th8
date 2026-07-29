@@ -165,7 +165,7 @@ runTest {test unload-2.8 {
 runTest {test load-3.1 {
   R-25864-47382: load registers commands from shared library
 } -constraints {
-    loadLib
+    loadLib th8
 } -setup {
   testUnloadLib
 } -body {
@@ -198,7 +198,7 @@ runTest {test load-3.2 {
 runTest {test load-3.3 {
   R-11211-50952: loaded library appears in tracking
 } -constraints {
-    loadLib
+    loadLib th8
 } -setup {
   testUnloadLib
 } -body {
@@ -328,7 +328,7 @@ runTest {test load-3.9 {
 runTest {test load-4.1 {
   R-25864-47382: isotime Unix epoch
 } -constraints {
-    loadLib
+    loadLib th8
 } -setup {
   testUnloadLib
 } -body {
@@ -346,7 +346,7 @@ runTest {test load-4.1 {
 runTest {test load-4.2 {
   R-25864-47382: isotime one day after epoch
 } -constraints {
-    loadLib
+    loadLib th8
 } -setup {
   testUnloadLib
 } -body {
@@ -364,7 +364,7 @@ runTest {test load-4.2 {
 runTest {test load-4.3 {
   R-25864-47382: isotime Y2K
 } -constraints {
-    loadLib
+    loadLib th8
 } -setup {
   testUnloadLib
 } -body {
@@ -382,7 +382,7 @@ runTest {test load-4.3 {
 runTest {test load-4.4 {
   R-25864-47382: isotime leap year date (2024-02-29)
 } -constraints {
-    loadLib
+    loadLib th8
 } -setup {
   testUnloadLib
 } -body {
@@ -400,7 +400,7 @@ runTest {test load-4.4 {
 runTest {test load-4.5 {
   R-25864-47382: isotime end of 2024
 } -constraints {
-    loadLib
+    loadLib th8
 } -setup {
   testUnloadLib
 } -body {
@@ -418,7 +418,7 @@ runTest {test load-4.5 {
 runTest {test load-4.6 {
   R-25864-47382: isotime specific time with hours/minutes/seconds
 } -constraints {
-    loadLib
+    loadLib th8
 } -setup {
   testUnloadLib
 } -body {
@@ -436,7 +436,7 @@ runTest {test load-4.6 {
 runTest {test load-4.7 {
   R-25864-47382: isotime wrong # args
 } -constraints {
-    loadLib
+    loadLib th8
 } -setup {
   testUnloadLib
 } -body {
@@ -454,7 +454,7 @@ runTest {test load-4.7 {
 runTest {test load-4.8 {
   R-25864-47382: isotime non-integer argument
 } -constraints {
-    loadLib
+    loadLib th8
 } -setup {
   testUnloadLib
 } -body {
@@ -478,7 +478,7 @@ runTest {test load-5.1 {
   R-41729-49555: load with explicit initProc names the initialization entry
                  point
 } -constraints {
-    loadLib
+    loadLib th8
 } -setup {
   testUnloadLib
 } -body {

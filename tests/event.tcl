@@ -150,7 +150,7 @@ runTest {test event-2.4 {
 
 runTest {test event-2.5 {
   R-11279-35358: [vwait -timeout MS] errors with "vwait: timeout" if nothing fires
-} -setup {
+} -constraints {th8} -setup {
 } -body {
   set rc [catch {vwait -timeout 50 nothingHappens} msg]
   list $rc [string match {*timeout*} $msg]
@@ -184,7 +184,7 @@ runTest {test event-2.6 {
 
 runTest {test event-3.1 {
   R-48121-08664: [update -limit 0] is rejected as a degenerate value
-} -setup {
+} -constraints {th8} -setup {
 } -body {
   list [catch {update -limit 0} msg] [string match {*>= 1*} $msg]
 } -cleanup {

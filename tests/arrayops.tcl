@@ -166,13 +166,13 @@ runTest {test arrayops-4.1 {
   lindex [split [array statistics arr] "\n"] 0
 } -cleanup {
   unset -nocomplain arr
-} -result {3 entries}}
+} -match glob -result {3 entries*}}
 
 ###############################################################################
 
 runTest {test arrayops-4.2 {
   R-07244-26691: array statistics on an empty array reports zero entries and zero bytes
-} -setup {
+} -constraints {th8} -setup {
 } -body {
   array set arr {}
   set lines [split [array statistics arr] "\n"]
@@ -188,7 +188,7 @@ runTest {test arrayops-4.2 {
 
 runTest {test arrayops-4.3 {
   R-07244-26691: array statistics correctly counts element-name and element-value byte totals
-} -setup {
+} -constraints {th8} -setup {
 } -body {
   array set arr {a 11 bb 222 ccc 3333}
   set lines [split [array statistics arr] "\n"]
@@ -313,7 +313,7 @@ runTest {test arrayops-5.5 {
 
 runTest {test arrayops-5.6 {
   R-55410-62072: array unset during iteration invalidates the search; subsequent calls raise "couldn't find search"
-} -body {
+} -constraints {th8} -body {
   array set a {p 10 q 20}
   set sid [array startsearch a]
   array unset a
@@ -377,7 +377,7 @@ runTest {test arrayops-5.7a {
 
 runTest {test arrayops-5.7b {
   R-31734-18707: modifying the value of an existing element after startsearch invalidates the search
-} -setup {
+} -constraints {th8} -setup {
 } -body {
   array set a {a 1 b 2 c 3}
   set sid [array startsearch a]
@@ -414,7 +414,7 @@ runTest {test arrayops-5.7c {
 
 runTest {test arrayops-5.8 {
   R-15876-06247: search-id paired with a different array name than the one it was started for is rejected as if unknown
-} -setup {
+} -constraints {th8} -setup {
 } -body {
   array set a {one 1}
   array set b {two 2}
@@ -484,7 +484,7 @@ runTest {test arrayops-6.1 {
   Test-only command [::th8testlib::array_searches]: empty when no
   pending searches.  Not part of the language standard; exercises
   Th8_IterateArraySearches via th8_testlib for leak detection.
-} -body {
+} -constraints {array_searches} -body {
   ::th8testlib::array_searches
 } -result {}}
 
@@ -493,7 +493,7 @@ runTest {test arrayops-6.1 {
 runTest {test arrayops-6.2 {
   [::th8testlib::array_searches] returns flat list of
   {arrayName searchId} pairs, sorted by arrayName then searchId.
-} -setup {
+} -constraints {array_searches} -setup {
 } -body {
   array set a {x 1 y 2}
   array set b {p 1}
@@ -518,7 +518,7 @@ runTest {test arrayops-6.2 {
 runTest {test arrayops-6.3 {
   [::th8testlib::array_searches] accepts optional glob pattern
   matched against arrayName.
-} -setup {
+} -constraints {array_searches} -setup {
 } -body {
   array set a {x 1}
   array set b {p 1}
@@ -539,7 +539,7 @@ runTest {test arrayops-6.3 {
 runTest {test arrayops-6.4 {
   [::th8testlib::array_searches] returns empty list when pattern
   matches no pending-search arrays.
-} -setup {
+} -constraints {array_searches} -setup {
 } -body {
   array set a {x 1}
   set sid [array startsearch a]

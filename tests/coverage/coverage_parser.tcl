@@ -573,7 +573,7 @@ runTest {test parser-mcdc-4.8 {
 
 runTest {test parser-mcdc-5.1 {
   strict: unmatched open-brace reports "Unmatched braces"
-} -setup {
+} -constraints {th8} -setup {
   set bad "set x \{abc"
 } -body {
   set rc [catch {eval $bad} msg]
@@ -586,7 +586,7 @@ runTest {test parser-mcdc-5.1 {
 
 runTest {test parser-mcdc-5.2 {
   strict: unmatched open-bracket reports "Unmatched brackets"
-} -setup {
+} -constraints {th8} -setup {
   set bad {set x [foo}
 } -body {
   set rc [catch {eval $bad} msg]
@@ -599,7 +599,7 @@ runTest {test parser-mcdc-5.2 {
 
 runTest {test parser-mcdc-5.3 {
   strict: unmatched open-quote reports "Unmatched quote"
-} -setup {
+} -constraints {th8} -setup {
   set bad {set x "abc}
 } -body {
   set rc [catch {eval $bad} msg]
@@ -612,7 +612,7 @@ runTest {test parser-mcdc-5.3 {
 
 runTest {test parser-mcdc-5.4 {
   strict: unmatched inner brace inside command sub reports the inner error
-} -setup {
+} -constraints {th8} -setup {
   # The outer open-bracket opens a bracket scope; the inner
   # open-brace opens a brace scope that never closes.  The
   # parser walks back up the stack and reports based on the
@@ -631,7 +631,7 @@ runTest {test parser-mcdc-5.4 {
 
 runTest {test parser-mcdc-5.5 {
   strict: unmatched bracket appended to bare word
-} -setup {
+} -constraints {th8} -setup {
   # `"abc"[def` reads as ONE bare word: a quote-delimited
   # part followed by a bare-word continuation that opens a
   # bracket scope which never closes.
@@ -837,7 +837,7 @@ runTest {test parser-mcdc-7.8 {
   loop falls through to the regular character path.
   The eval may succeed or error; we only assert it
   doesn't crash.
-} -body {
+} -constraints {th8} -body {
   set s "puts a\\"
   set rc [catch {eval $s} m]
   set rc2 [catch {eval "set x \\"} m2]
@@ -920,7 +920,7 @@ runTest {test parser-mcdc-8.3 {
 
 runTest {test parser-mcdc-8.4 {
   heap: deep brace nesting actually evaluates via heap fallback
-} -setup {
+} -constraints {th8} -setup {
   # End-to-end heap test: build, eval, and verify the value
   # round-trips correctly.  Each brace level wraps the value
   # exactly once, so x ends up as the SOURCE minus the outer

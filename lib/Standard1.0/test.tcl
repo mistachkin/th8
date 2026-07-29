@@ -350,6 +350,26 @@ namespace eval ::th8test {
     testConstraint subst [expr {[llength [info commands subst]] > 0}]
     testConstraint time [expr {[llength [info commands time]] > 0}]
     testConstraint base64 [expr {[llength [info commands base64]] > 0}]
+    testConstraint lremove [expr {[llength [info commands lremove]] > 0}]
+
+    #
+    # Extended math functions present in TH8/Eagle (and Tcl 8.7+/9)
+    # but not in the Tcl 8.6 reference: gate each test that calls one
+    # so it skips on engines whose [expr] lacks the function.  Detect
+    # via [info functions] (the math-function introspection) -- under
+    # TH8 these resolve dynamically and are NOT listed by
+    # [info commands ::tcl::mathfunc::*], so an info-commands probe
+    # would wrongly skip them under TH8.
+    #
+    testConstraint mathfunc_pi [expr {
+      [lsearch -exact [info functions] pi] >= 0
+    }]
+    testConstraint mathfunc_random [expr {
+      [lsearch -exact [info functions] random] >= 0
+    }]
+    testConstraint mathfunc_epsilon [expr {
+      [lsearch -exact [info functions] epsilon] >= 0
+    }]
 
     testConstraint bigint_toggle [expr {
       [llength [info commands ::th8testlib::bigint]] > 0
@@ -373,6 +393,10 @@ namespace eval ::th8test {
 
     testConstraint queue_event [expr {
       [llength [info commands ::th8testlib::queue_event]] > 0
+    }]
+
+    testConstraint array_searches [expr {
+      [llength [info commands ::th8testlib::array_searches]] > 0
     }]
 
     testConstraint switch_regexp [expr {
@@ -407,6 +431,17 @@ namespace eval ::th8test {
   #
   proc setupSubCommandConstraints {} {
     testConstraint clock_seconds [hasSubCommand clock seconds]
+    testConstraint clock_ntp [hasSubCommand clock ntp]
+
+    #
+    # [info] sub-commands that exist in TH8/Eagle but not in the Tcl
+    # 8.6 reference ensemble.  hasSubCommand uses [info subcommands]
+    # where available and falls back to the invalid-sub-command error
+    # probe on native Tcl.  (info_subcommands itself is registered in
+    # setupCommonConstraints below.)
+    #
+    testConstraint info_expansions [hasSubCommand info expansions]
+    testConstraint info_breakpoints [hasSubCommand info breakpoints]
 
     testConstraint file_exists [hasSubCommand file exists]
     testConstraint file_normalize [hasSubCommand file normalize]

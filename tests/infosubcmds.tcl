@@ -302,7 +302,7 @@ runTest {test infosubcmds-4.9 {
 
 runTest {test infosubcmds-4.1 {
   R-01803-53009: info expansions returns registered operators
-} -body {
+} -constraints {info_expansions} -body {
   set result [info expansions]
   expr {[lsearch -exact $result "*"] >= 0}
 } -cleanup {
@@ -313,7 +313,7 @@ runTest {test infosubcmds-4.1 {
 
 runTest {test infosubcmds-4.2 {
   R-01803-53009: info expansions with glob pattern
-} -body {
+} -constraints {info_expansions} -body {
   info expansions {[*]}
 } -result {*}}
 
@@ -321,7 +321,7 @@ runTest {test infosubcmds-4.2 {
 
 runTest {test infosubcmds-4.3 {
   R-01803-53009: info expansions no-match pattern returns empty
-} -body {
+} -constraints {info_expansions} -body {
   info expansions {no_such_*}
 } -result {}}
 
@@ -333,7 +333,7 @@ runTest {test infosubcmds-4.3 {
 
 runTest {test infosubcmds-5.1 {
   R-16236-39798: info breakpoints with no breakpoints returns empty
-} -body {
+} -constraints {info_breakpoints} -body {
   info breakpoints
 } -result {}}
 

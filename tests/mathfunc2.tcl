@@ -20,7 +20,7 @@ source tests/prologue.tcl
 
 runTest {test mathfunc2-1.1 {
   R-64737-26899: pi() returns Pi to maximum double precision
-} -body {
+} -constraints {mathfunc_pi} -body {
   expr {pi()}
 } -result {3.141592653589793}}
 
@@ -28,7 +28,7 @@ runTest {test mathfunc2-1.1 {
 
 runTest {test mathfunc2-1.2 {
   R-07930-26550: pi() value is in the correct range
-} -body {
+} -constraints {mathfunc_pi} -body {
   expr {pi() > 3.14159265358979 && pi() < 3.14159265358980}
 } -result {1}}
 
@@ -36,7 +36,7 @@ runTest {test mathfunc2-1.2 {
 
 runTest {test mathfunc2-1.3 {
   R-64737-26899: pi() takes no arguments
-} -setup {
+} -constraints {mathfunc_pi} -setup {
 } -body {
   # Verify it works with no args in an expression context.
   set v [expr {pi()}]
@@ -49,7 +49,7 @@ runTest {test mathfunc2-1.3 {
 
 runTest {test mathfunc2-1.4 {
   R-07930-26550: pi() usable in arithmetic
-} -body {
+} -constraints {mathfunc_pi} -body {
   # Area of unit circle: pi * r^2 where r=1.
   expr {pi() * 1.0 * 1.0}
 } -result {3.141592653589793}}
@@ -58,7 +58,7 @@ runTest {test mathfunc2-1.4 {
 
 runTest {test mathfunc2-1.5 {
   R-64737-26899: pi() is listed by info functions
-} -body {
+} -constraints {mathfunc_pi} -body {
   expr {[lsearch [info functions] "pi"] >= 0}
 } -result {1}}
 
@@ -66,7 +66,7 @@ runTest {test mathfunc2-1.5 {
 
 runTest {test mathfunc2-2.1 {
   R-56249-19402: random() returns a 64-bit integer
-} -setup {
+} -constraints {mathfunc_random} -setup {
 } -body {
   set v [expr {random()}]
   string is wideinteger $v
@@ -78,7 +78,7 @@ runTest {test mathfunc2-2.1 {
 
 runTest {test mathfunc2-2.2 {
   R-36032-44824: successive random() calls return different values
-} -body {
+} -constraints {mathfunc_random} -body {
   set a [expr {random()}]
   set b [expr {random()}]
   set c [expr {random()}]
@@ -93,7 +93,7 @@ runTest {test mathfunc2-2.2 {
 
 runTest {test mathfunc2-2.3 {
   R-56249-19402: random() is listed by info functions
-} -body {
+} -constraints {mathfunc_random} -body {
   expr {[lsearch [info functions] "random"] >= 0}
 } -result {1}}
 
@@ -101,7 +101,7 @@ runTest {test mathfunc2-2.3 {
 
 runTest {test mathfunc2-2.4 {
   R-22028-56793: random() is distinct from rand()
-} -body {
+} -constraints {mathfunc_random} -body {
   # rand() returns a double in [0,1); random() returns a wide int.
   set r [expr {rand()}]
   set q [expr {random()}]
@@ -114,7 +114,7 @@ runTest {test mathfunc2-2.4 {
 
 runTest {test mathfunc2-2.5 {
   R-56249-19402: random() can produce negative values
-} -body {
+} -constraints {mathfunc_random} -body {
   # Run enough trials to get at least one negative (50% chance per trial).
   set found 0
   for {set i 0} {$i < 100} {incr i} {
@@ -137,7 +137,7 @@ runTest {test mathfunc2-2.5 {
 runTest {test mathfunc2-3.1 {
   R-30069-08069: epsilon() returns the IEEE 754 double-precision
   machine epsilon
-} -body {
+} -constraints {mathfunc_epsilon} -body {
   expr {epsilon()}
 } -result {2.220446049250313e-16}}
 
@@ -146,7 +146,7 @@ runTest {test mathfunc2-3.1 {
 runTest {test mathfunc2-3.2 {
   R-30069-08069: epsilon() is the smallest positive value where
   1.0 + epsilon is distinguishable from 1.0
-} -body {
+} -constraints {mathfunc_epsilon} -body {
   expr {1.0 + epsilon() != 1.0}
 } -result {1}}
 
@@ -154,7 +154,7 @@ runTest {test mathfunc2-3.2 {
 
 runTest {test mathfunc2-3.3 {
   R-06656-00761: epsilon() returns a positive value
-} -body {
+} -constraints {mathfunc_epsilon} -body {
   expr {epsilon() > 0.0}
 } -result {1}}
 
@@ -163,7 +163,7 @@ runTest {test mathfunc2-3.3 {
 runTest {test mathfunc2-3.4 {
   R-06656-00761: successive epsilon() calls return identical values
   within a single interpreter lifetime
-} -body {
+} -constraints {mathfunc_epsilon} -body {
   expr {epsilon() == epsilon()}
 } -result {1}}
 

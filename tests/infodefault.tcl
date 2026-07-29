@@ -89,7 +89,7 @@ runTest {test infodefault-2.1 {
   set msg
 } -cleanup {
   unset -nocomplain msg result
-} -match regexp -result {.*not a procedure}}
+} -match regexp -result {(not a procedure|isn't a procedure)}}
 
 ###############################################################################
 

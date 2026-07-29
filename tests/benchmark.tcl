@@ -144,8 +144,8 @@ bench "string repeat (long string)" $iterations(2) {
     string repeat "0123456789" 100
 }
 
-bench "append (random)" $iterations(4) {
-    append s [expr {random()}]
+bench "append (rand)" $iterations(4) {
+    append s [expr {rand()}]
 }
 
 # === SECTION 3: List operations ==============================================

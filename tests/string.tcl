@@ -798,7 +798,7 @@ runTest {test string-19.3.1 {
   escapes returns the byte count even when string length
   reports a smaller code-point count (raw bytes may form
   coincidentally-valid UTF-8 multi-byte sequences).
-} -body {
+} -constraints {th8} -body {
   string bytelength "\xaa\xbb\xcc\xdd"
 } -result {4}}
 
@@ -828,7 +828,7 @@ runTest {test string-19.3.3 {
 
 runTest {test string-19.3.4 {
   R-56057-18552: string bytelength of NUL byte is 1.
-} -body {
+} -constraints {th8} -body {
   string bytelength "\x00"
 } -result {1}}
 

@@ -98,7 +98,7 @@ runTest {test package-3.1 {
 runTest {test package-3.2 {
   R-11675-43758: package names returns list of known packages
 } -constraints {
-    package
+    package th8
 } -body {
   expr {[lsearch [package names] TH8] >= 0}
 } -result {1}}

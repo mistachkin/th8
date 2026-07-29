@@ -198,12 +198,14 @@ runAllTests {
   coverage/coverage_quick_pairs.tcl
   coverage/coverage_random_bytes.tcl
   coverage/coverage_read_opts.tcl
+  coverage/coverage_rsa_verify_tamper_mcdc.tcl
   coverage/coverage_samefile.tcl
   coverage/coverage_scan.tcl
   coverage/coverage_scan_dual_e.tcl
   coverage/coverage_secure_canary_noppage_mcdc.tcl
   coverage/coverage_secure_dispatch.tcl
   coverage/coverage_secure_load_blob_mcdc.tcl
+  coverage/coverage_secure_load_tamper_mcdc.tcl
   coverage/coverage_secure_setvar_nonseure_mcdc.tcl
   coverage/coverage_sensitive_release.tcl
   coverage/coverage_shell_subprocess.tcl

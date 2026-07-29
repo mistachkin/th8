@@ -234,7 +234,7 @@ runTest {test try-4.2 {
   set msg
 } -cleanup {
   unset -nocomplain msg x y
-} -match glob -result {expected "finally"*}}
+} -match regexp -result {(expected "finally"|bad handler type)}}
 
 ###############################################################################
 

@@ -14,17 +14,19 @@
 # Drive 1.1: 1-byte blob -> L1889 (F,T)=T closes
 # C2-Pair.
 #
-# Note on the L1927 `if (nCipher == 0 ||
-# nPlainLen > nCipher)` companion guard: that path
-# proved hard to drive via a script-constructed
-# 40-byte blob (the secure-load code returns OK with
-# empty result rather than the expected "corrupted
-# blob" error -- likely because the master-key
-# decrypt of an empty ciphertext succeeds with an
-# empty plaintext, bypassing the L1927 check by some
-# path I haven't isolated yet).  Logged as future
-# work; the L1889 closure is the principal win for
-# this batch.
+# Historical note (resolved 2026-07-27): the companion
+# `if (nCipher == 0 || nPlainLen > nCipher)` guard and the
+# other validation arms once "returned OK with empty
+# result rather than the expected error."  That was not a
+# hard-to-drive test -- it was Bug 71: th8SecureLoad
+# returned a stale TH8_OK on every `goto done` failure and
+# cleared the message, so tamper detection failed OPEN.
+# With Bug 71 fixed, all those arms (bad magic, bad
+# version, corrupted-length, GCM auth failure, oversized)
+# are driven and asserted in the companion file
+# coverage_secure_load_tamper_mcdc.tcl.  This file retains
+# the too-short (F,T) closure, which always worked (it
+# `return`s before rc is clobbered).
 #
 # Coverage-driven; not pinned to specific R-markers.
 #

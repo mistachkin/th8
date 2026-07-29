@@ -274,7 +274,7 @@ runTest {test coverage6-8.2 {namespace qualified variable access} -body {
 
 ###############################################################################
 
-runTest {test coverage6-8.3 {unknown command handler catches missing cmd} -body {
+runTest {test coverage6-8.3 {unknown command handler catches missing cmd} -constraints {th8} -body {
     proc unknown {args} {
         return "caught"
     }

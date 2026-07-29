@@ -40,12 +40,14 @@ runTest {test unknown-1.1 {
   original command name and substituted arguments intact -- proving azNew
   survived until proc_call_nr bound the parameters.
 } -setup {
+  catch {rename unknown __saved_unknown}
   proc unknown args { return "UNK|[join $args |]" }
 } -body {
   # 'nope' is unknown; the '[format ...]' forces the async bracket path.
   nope [format %s%s a b] gamma
 } -cleanup {
   rename unknown ""
+  catch {rename __saved_unknown unknown}
 } -result {UNK|nope|ab|gamma}}
 
 ###############################################################################
@@ -57,6 +59,7 @@ runTest {test unknown-1.2 {
   invocation must observe exactly three arguments (name + two args); a
   freed/ reused azNew would yield a wrong count or crash.
 } -setup {
+  catch {rename unknown __saved_unknown}
   proc unknown args { return [llength $args] }
 } -body {
   set ok 1
@@ -71,6 +74,7 @@ runTest {test unknown-1.2 {
   set ok
 } -cleanup {
   rename unknown ""
+  catch {rename __saved_unknown unknown}
   unset -nocomplain ok i junk n
 } -result {1}}
 
@@ -81,6 +85,7 @@ runTest {test unknown-1.3 {
   substituted argument is empty and when arguments contain spaces, so the
   handler sees the exact word vector the parser produced.
 } -setup {
+  catch {rename unknown __saved_unknown}
   proc unknown args {
     return "[llength $args]|[lindex $args 0]|[lindex $args 2]"
   }
@@ -90,6 +95,7 @@ runTest {test unknown-1.3 {
   zzz [set e {}] {two words} last
 } -cleanup {
   rename unknown ""
+  catch {rename __saved_unknown unknown}
   unset -nocomplain e
 } -result {4|zzz|two words}}
 
@@ -104,11 +110,13 @@ runTest {test unknown-2.1 {
   (no '[' in the command) must behave identically, confirming the fix did
   not change observable semantics between the two paths.
 } -setup {
+  catch {rename unknown __saved_unknown}
   proc unknown args { return "UNK|[join $args |]" }
 } -body {
   nope literal gamma
 } -cleanup {
   rename unknown ""
+  catch {rename __saved_unknown unknown}
 } -result {UNK|nope|literal|gamma}}
 
 ###############################################################################
