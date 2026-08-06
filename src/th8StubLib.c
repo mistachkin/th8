@@ -59,8 +59,7 @@ const Th8StubsTable *th8StubsPtr = 0;
  */
 
 const void *
-Th8_GetStubs(
-    Th8_Interp *interp)		/* Interpreter. */
+Th8_GetStubs(Th8_Interp *interp)  /* Interpreter. */
 {
     return interp->pStubs;
 }
@@ -94,9 +93,9 @@ Th8_GetStubs(
 
 const Th8StubsTable *
 Th8_InitStubs(
-    Th8_Interp *interp,	/* Interpreter to get stubs from. */
-    const char *version,	/* Required version (reserved). */
-    int exact)			/* Exact version match (reserved). */
+    Th8_Interp *interp, /* Interpreter to get stubs from. */
+    const char *version, /* Required version (reserved). */
+    int exact)   /* Exact version match (reserved). */
 {
     const Th8StubsTable *pStubs;
 

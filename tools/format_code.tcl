@@ -103,11 +103,18 @@ set ::DEFAULT_INCLUDE_GLOBS [list \
     src/sqlite3/*.c \
     src/sqlite3/*.h]
 
+# Excluded: build output (bin/, which includes the generated single-file
+# amalgamation bin/th8.c) and vendored third-party sources (externals/).
+# The generated stubs (th8Decls.h, th8StubInit.c, th8InternalStubInit.c) and
+# the hand-written stubs library (th8StubLib.c) are deliberately NOT excluded:
+# the project holds its own generated/committed source to the same style.
+# `genstubs` formats the generated stubs with the canonical clang-format
+# (see CLANG_FORMAT / CLANG_FORMAT_VERSION in the Makefile), so they stay
+# audit-clean across regeneration.
 set ::DEFAULT_EXCLUDE_GLOBS [list \
     bin/* \
     externals/* \
-    src/*_amal.c \
-    src/*Stub*.c]
+    src/*_amal.c]
 
 
 #

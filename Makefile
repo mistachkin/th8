@@ -1773,22 +1773,22 @@ $(B)ConvertUTF_v2.pic.o: $(UTF_DIR)/ConvertUTF_v2.c $(UTF_DIR)/ConvertUTF_v2.h |
 #
 # Stubs regeneration (from th8.h).
 #
-# The clang-format call is a COSMETIC post-process on the generated
-# stubs -- mkstubs.tcl already emits valid, compilable C.  It is made
-# non-fatal on purpose: the project .clang-format uses
-# `AlignTrailingComments: Kind: Leave`, which requires clang-format
-# >= 16 (there is no equivalent in the older boolean-only syntax that
-# preserves comment columns, so the config cannot be downgraded).  A
-# host with an older or absent clang-format (e.g. running `make
-# valgrind` on Linux) must NOT have its build broken by this cosmetic
-# step -- warn and continue with the unformatted (but valid) files.
-# Install clang-format >= 16 for style-consistent regeneration/commit.
+# The clang-format call formats the generated stubs.  It uses $(CLANG_FORMAT)
+# -- the SAME canonical clang-format (preferring clang-format-$(CLANG_FORMAT_VERSION))
+# that `audit-format` enforces with -- because th8StubInit.c is EXCLUDED from the
+# style audit (cosmetic for it) but th8Decls.h is NOT, so th8Decls.h must be
+# formatted with the canonical version to pass `make audit-format`.  Using a
+# different clang-format here (e.g. the unversioned Debian/Ubuntu `clang-format`,
+# which is 18) would reformat th8Decls.h off-canonical and fail the audit.  The
+# step stays non-fatal: on a host lacking the canonical clang-format it warns and
+# continues with unformatted (still valid, compilable) files, and the audit
+# itself SKIPS in that case -- so the build is never broken either way.
 #
 
 genstubs:
 	$(TCLSH) tools/mkstubs.tcl $(S)th8.h $(S)th8Decls.h $(S)th8StubInit.c
-	@clang-format -i --style=file $(S)th8Decls.h $(S)th8StubInit.c 2>/dev/null || \
-	    echo "genstubs: WARNING: clang-format failed (needs >= 16 for .clang-format); generated stubs left unformatted -- valid and compilable, cosmetic only."
+	@$(CLANG_FORMAT) -i --style=file $(S)th8Decls.h $(S)th8StubInit.c 2>/dev/null || \
+	    echo "genstubs: WARNING: '$(CLANG_FORMAT)' failed or absent; generated stubs left unformatted -- valid and compilable.  Install clang-format-$(CLANG_FORMAT_VERSION) ('make apt-deps') for audit-clean stubs."
 
 #
 # Banned-pattern audit (tools/audit_patterns.tcl).
@@ -1944,22 +1944,25 @@ check-eagle:
 # that clang-format), then bump this number.
 CLANG_FORMAT_VERSION ?= 19
 
+# Resolve the clang-format binary ONCE and share it between `genstubs` (which
+# formats the generated stubs th8Decls.h / th8StubInit.c) and `audit-format`
+# (the style gate), so a generated file is never formatted by a DIFFERENT
+# clang-format than the one enforcing.  An explicit CLANG_FORMAT (env/CLI) wins;
+# otherwise prefer the canonical clang-format-$(CLANG_FORMAT_VERSION) -- which is
+# what `make apt-deps` installs, and is NOT the same binary as the unversioned
+# `clang-format` on Debian/Ubuntu -- falling back to a plain `clang-format`.
+ifeq ($(origin CLANG_FORMAT),undefined)
+  CLANG_FORMAT := $(shell command -v clang-format-$(CLANG_FORMAT_VERSION) 2>/dev/null || echo clang-format)
+endif
+
 audit-format:
-	@cfbin="$$CLANG_FORMAT"; \
-	if [ -z "$$cfbin" ]; then \
-	    if command -v clang-format-$(CLANG_FORMAT_VERSION) >/dev/null 2>&1; then \
-	        cfbin=clang-format-$(CLANG_FORMAT_VERSION); \
-	    else \
-	        cfbin=clang-format; \
-	    fi; \
-	fi; \
-	cfver=`command -v "$$cfbin" >/dev/null 2>&1 && "$$cfbin" --version | grep -oE '[0-9]+' | head -1`; \
+	@cfver=`command -v "$(CLANG_FORMAT)" >/dev/null 2>&1 && "$(CLANG_FORMAT)" --version | grep -oE '[0-9]+' | head -1`; \
 	if [ "$$cfver" = "$(CLANG_FORMAT_VERSION)" ]; then \
-	    CLANG_FORMAT="$$cfbin" $(TCLSH) tools/audit_patterns.tcl format; \
+	    CLANG_FORMAT="$(CLANG_FORMAT)" $(TCLSH) tools/audit_patterns.tcl format; \
 	elif [ -z "$$cfver" ]; then \
-	    echo "audit-format: SKIP -- no clang-format found (canonical: clang-format-$(CLANG_FORMAT_VERSION); run 'make apt-deps')."; \
+	    echo "audit-format: SKIP -- clang-format not found (canonical: clang-format-$(CLANG_FORMAT_VERSION); run 'make apt-deps')."; \
 	else \
-	    echo "audit-format: SKIP -- clang-format $$cfver found, but the tree is formatted with clang-format $(CLANG_FORMAT_VERSION); install clang-format-$(CLANG_FORMAT_VERSION) to enforce (or set CLANG_FORMAT=)."; \
+	    echo "audit-format: SKIP -- clang-format $$cfver found (via '$(CLANG_FORMAT)'), but the tree is formatted with clang-format $(CLANG_FORMAT_VERSION); install clang-format-$(CLANG_FORMAT_VERSION) to enforce."; \
 	fi
 
 #
