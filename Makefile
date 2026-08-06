@@ -30,7 +30,7 @@
 #
 
 .PHONY: all static shared stubs shell static-shell testlib bridge \
-        genstubs audit audit-reqs regex_vendor bestline_vendor tommath_vendor mimalloc_vendor clean install debug memdebug FORCE \
+        genstubs audit audit-reqs regex_vendor bestline_vendor tommath_vendor mimalloc_vendor vendoring clean install debug memdebug FORCE \
         th8test tcltest eagletest \
         amalgamation amalgamation-test \
         asan ubsan msan sanitize asan-test asan-test-macos \
@@ -368,14 +368,20 @@ ENABLE_MIMALLOC ?= 1
 
 ifeq ($(ENABLE_MIMALLOC),1)
   MIMALLOC_DEFS    = -DTH8_USE_MIMALLOC
-  MIMALLOC_INC     = -Iexternals/mimalloc/build/include
+  MIMALLOC_INC     = -I$(MIMALLOC_BUILD)/include
   MIMALLOC_OBJ     = $(B)th8_mimalloc.o $(B)mimalloc_static.o
   MIMALLOC_OBJ_PIC = $(B)th8_mimalloc.pic.o $(B)mimalloc_static.pic.o
+  # Order-only prerequisite for any object OUTSIDE this conditional that
+  # compiles a mimalloc source or #includes <mimalloc.h> (e.g. th8_amal.o):
+  # forces mimalloc_vendor to populate the generated externals/mimalloc/build/
+  # tree first.  Empty when mimalloc is disabled, so the dep vanishes.
+  MIMALLOC_VENDOR_DEP = mimalloc_vendor
 else
   MIMALLOC_DEFS    =
   MIMALLOC_INC     =
   MIMALLOC_OBJ     =
   MIMALLOC_OBJ_PIC =
+  MIMALLOC_VENDOR_DEP =
 endif
 
 ENABLE_TEST_KEY ?= 0
@@ -589,6 +595,7 @@ SPILORNIS_SRC    = $(SPILORNIS_DIR)/Spilornis.c
 BESTLINE_BUILD   = externals/bestline/build
 REGEX_BUILD      = externals/regex/build
 TOMMATH_BUILD    = externals/tommath/build
+MIMALLOC_BUILD   = externals/mimalloc/build
 
 #
 # Source files.
@@ -1444,8 +1451,8 @@ $(B)th8_unbound.pic.o: $(S)th8_unbound.c $(S)th8.h $(S)th8_int.h \
 endif
 
 ifeq ($(ENABLE_MIMALLOC),1)
-MI_SRC = externals/mimalloc/build/src
-MI_INC = externals/mimalloc/build/include
+MI_SRC = $(MIMALLOC_BUILD)/src
+MI_INC = $(MIMALLOC_BUILD)/include
 #
 # mimalloc's static.c includes all source files.  We suppress
 # warnings that conflict with TH8's -pedantic -Wall flags since
@@ -1502,16 +1509,25 @@ MI_AMAL_HDRS = $(wildcard $(MI_INC)/*.h) $(wildcard $(MI_INC)/mimalloc/*.h) \
 # flags and running an incremental build silently reuses a stale object built
 # with the old level -- which produces confusing ABI/assertion mismatches.
 # The MI_AMAL_* prerequisites do the same for a vendored source patch.
-$(B)mimalloc_static.o: $(MI_SRC)/static.c $(MI_AMAL_SRCS) $(MI_AMAL_HDRS) Makefile | $(B)
+# The vendored mimalloc tree (externals/mimalloc/build/) does not exist on a
+# clean checkout; mimalloc_vendor regenerates it from vendor/ + patches/.
+# Mirror the bestline wiring above (Bug 74): give the generated static.c an
+# explicit rule so make can create it, and hang an order-only `| mimalloc_vendor`
+# on every object that compiles a mimalloc source or #includes <mimalloc.h>, so
+# `make all`/`make shell` on a fresh tree vendor the build/ tree first instead
+# of failing with a missing <mimalloc.h> header.
+$(MI_SRC)/static.c: mimalloc_vendor
+
+$(B)mimalloc_static.o: $(MI_SRC)/static.c $(MI_AMAL_SRCS) $(MI_AMAL_HDRS) Makefile | mimalloc_vendor $(B)
 	$(CC) $(MI_CFLAGS) -c -o $@ $(MI_SRC)/static.c
 
-$(B)mimalloc_static.pic.o: $(MI_SRC)/static.c $(MI_AMAL_SRCS) $(MI_AMAL_HDRS) Makefile | $(B)
+$(B)mimalloc_static.pic.o: $(MI_SRC)/static.c $(MI_AMAL_SRCS) $(MI_AMAL_HDRS) Makefile | mimalloc_vendor $(B)
 	$(CC) $(MI_CFLAGS) -fPIC -c -o $@ $(MI_SRC)/static.c
 
-$(B)th8_mimalloc.o: $(S)th8_mimalloc.c $(S)th8.h $(S)th8_int.h | $(B)
+$(B)th8_mimalloc.o: $(S)th8_mimalloc.c $(S)th8.h $(S)th8_int.h | mimalloc_vendor $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)th8_mimalloc.c
 
-$(B)th8_mimalloc.pic.o: $(S)th8_mimalloc.c $(S)th8.h $(S)th8_int.h | $(B)
+$(B)th8_mimalloc.pic.o: $(S)th8_mimalloc.c $(S)th8.h $(S)th8_int.h | mimalloc_vendor $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_mimalloc.c
 endif
 
@@ -1981,6 +1997,17 @@ mimalloc_vendor:
 	$(TCLSH) tools/mimalloc_vendor.tcl
 
 #
+# vendoring: regenerate every vendored external's build tree in one step, each
+# from its pristine vendor/ sources with patches/ overlaid.  A clean checkout
+# can prime all of externals/*/build/ with a single `make vendoring`, and this
+# names the full vendored set in one place.  Individual build objects still
+# carry precise order-only `| <lib>_vendor` prerequisites (so a parallel
+# `make -j` build stays correct and only vendors the library it needs); this
+# target is the convenience umbrella over them, not a build prerequisite.
+#
+vendoring: regex_vendor tommath_vendor mimalloc_vendor bestline_vendor spilornis_vendor
+
+#
 # Spencer regex engine objects.
 #
 
@@ -2418,6 +2445,7 @@ clean:
 	rm -rf $(REGEX_BUILD)
 	rm -rf $(BESTLINE_BUILD)
 	rm -rf $(TOMMATH_BUILD)
+	rm -rf $(MIMALLOC_BUILD)
 	rm -f *.gcov
 
 fresh-non-static: clean all-non-static
@@ -2485,11 +2513,11 @@ amalgamation: $(VERSIONHDR) $(B)regex_amalg.c $(B)tommath_amalg.c spilornis_vend
 # No TH8-internal include paths are permitted -- this proves
 # that th8.c + th8.h are fully self-contained.
 #
-$(B)th8_amal.o: $(AMAL_FILE) $(B)th8.h | $(B)
+$(B)th8_amal.o: $(AMAL_FILE) $(B)th8.h | $(MIMALLOC_VENDOR_DEP) $(B)
 	$(CC) $(CFLAGS) -I$(B) $(EXTLIB_INCLUDES) $(REGEX_CFLAGS) \
 	  -c -o $@ $(AMAL_FILE)
 
-$(B)th8_amal.pic.o: $(AMAL_FILE) $(B)th8.h | $(B)
+$(B)th8_amal.pic.o: $(AMAL_FILE) $(B)th8.h | $(MIMALLOC_VENDOR_DEP) $(B)
 	$(CC) $(CFLAGS) -I$(B) $(EXTLIB_INCLUDES) $(REGEX_CFLAGS) \
 	  $(PIC_DEFS) -c -o $@ $(AMAL_FILE)
 

@@ -689,6 +689,16 @@ mimalloc_vendor:
 	tclsh tools/mimalloc_vendor.tcl
 
 # ----------------------------------------------------------------
+# vendoring: regenerate every vendored external's build tree in one step.  A
+# clean checkout can prime all of externals\*\build with a single
+# `nmake vendoring`; individual objects still depend on their specific
+# generated sources (which pull in <lib>_vendor) so a normal build vendors
+# only what it needs.  (bestline is POSIX-only; see the Makefile for it.)
+# ----------------------------------------------------------------
+
+vendoring: regex_vendor tommath_vendor mimalloc_vendor spilornis_vendor
+
+# ----------------------------------------------------------------
 # Compilation rules.
 # ----------------------------------------------------------------
 
@@ -994,6 +1004,15 @@ MI_AMAL = \
 	$(MI_INC)\mimalloc\internal.h $(MI_INC)\mimalloc\prim.h \
 	$(MI_INC)\mimalloc\track.h $(MI_INC)\mimalloc\types.h
 
+# The vendored mimalloc tree (externals\mimalloc\build) does not exist on a
+# clean checkout; mimalloc_vendor regenerates it from vendor + patches,
+# preserving mtimes.  Make the generated static.c and the enumerated
+# amalgamation sources/headers depend on it, so `nmake all`/`nmake shell` on a
+# fresh tree vendor the tree before compiling instead of failing on a missing
+# <mimalloc.h>.  (nmake has no order-only prerequisites; keying off the real
+# generated files avoids a needless rebuild every invocation.)
+$(MI_SRC)\static.c $(MI_AMAL): mimalloc_vendor
+
 # mimalloc's static.c #includes all source files.  Compile with
 # reduced warnings since mimalloc uses MSVC extensions internally.
 # CRT flag must match the main build (/MD for release, /MDd for debug).
@@ -1008,7 +1027,7 @@ $(MIMALLOC_STATIC_OBJ): $(MI_SRC)\static.c $(MI_AMAL)
 	$(CC) /nologo /W3 /O2 /MD /DMI_STATIC_LIB /I$(MI_INC) /I$(MI_SRC) /c /Fo$@ $(MI_SRC)\static.c
 !ENDIF
 
-$(MIMALLOC_PLAT_OBJ): $(S)\th8_mimalloc.c $(S)\th8.h
+$(MIMALLOC_PLAT_OBJ): $(S)\th8_mimalloc.c $(S)\th8.h $(MI_INC)\mimalloc.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(S)\th8_mimalloc.c
 !ENDIF
@@ -1385,6 +1404,7 @@ clean:
 	-if exist "$(B)" rmdir /s /q "$(B)" 2>nul
 	-if exist "$(REGEX_BUILD)" rmdir /s /q "$(REGEX_BUILD)" 2>nul
 	-if exist "$(TOMMATH_BUILD)" rmdir /s /q "$(TOMMATH_BUILD)" 2>nul
+	-if exist "$(MIMALLOC_DIR)" rmdir /s /q "$(MIMALLOC_DIR)" 2>nul
 
 fresh: clean genstubs all
 	@echo BUILT FRESH AND CLEAN...
