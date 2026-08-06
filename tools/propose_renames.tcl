@@ -18,9 +18,9 @@
 ###############################################################################
 
 set DOC_FILES [list \
-    docs/pending/tcl_language_standard_v1.md \
-    docs/pending/th8_public_c_api_specification.md \
-    docs/pending/th8_language_extensions.md]
+    docs/public/tcl_language_standard_v1.md \
+    docs/public/th8_public_c_api_specification.md \
+    docs/public/th8_language_extensions.md]
 
 set TESTS_DIR tests
 

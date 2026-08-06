@@ -38,7 +38,6 @@ logs/
 # Internal / private documentation (NEVER ship)
 # ---------------------------------------------------------------------
 docs/internal/
-docs/pending/
 docs/private/
 docs/scratch/
 docs/archive/

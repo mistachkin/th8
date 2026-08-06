@@ -44,7 +44,7 @@ re-sign it with `bash tools/signScript.sh examples/<file>.tcl`.
 
 Every procedure lives in the `::examples` namespace so the files can be
 sourced together without clashing.  The code follows the project
-scripting style guide (`docs/pending/tcl_eagle_th8_style_guide.md`):
+scripting style guide (`docs/public/tcl_eagle_th8_style_guide.md`):
 2-space indent, the `then` keyword on every `if`, braced `expr`,
 camelCase procedure names, and a `# name --` documentation block above
 each procedure.

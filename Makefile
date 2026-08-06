@@ -1956,15 +1956,15 @@ audit-format:
 #
 
 audit-reqs:
-	$(TCLSH) tools/mkreq.tcl --verify docs/pending/tcl_language_standard_v1.md
-	$(TCLSH) tools/mkreq.tcl --verify docs/pending/th8_language_extensions.md
-	$(TCLSH) tools/mkreq.tcl --verify docs/pending/th8_public_c_api_specification.md
-	$(TCLSH) tools/mkreq.tcl --verify docs/pending/th8_internal_api_specification.md
+	$(TCLSH) tools/mkreq.tcl --verify docs/public/tcl_language_standard_v1.md
+	$(TCLSH) tools/mkreq.tcl --verify docs/public/th8_language_extensions.md
+	$(TCLSH) tools/mkreq.tcl --verify docs/public/th8_public_c_api_specification.md
+	$(TCLSH) tools/mkreq.tcl --verify docs/public/th8_internal_api_specification.md
 	$(TCLSH) tools/mkreq.tcl --check-tests \
-	    docs/pending/tcl_language_standard_v1.md \
-	    docs/pending/th8_language_extensions.md \
-	    docs/pending/th8_public_c_api_specification.md \
-	    docs/pending/th8_internal_api_specification.md \
+	    docs/public/tcl_language_standard_v1.md \
+	    docs/public/th8_language_extensions.md \
+	    docs/public/th8_public_c_api_specification.md \
+	    docs/public/th8_internal_api_specification.md \
 	    tests
 
 #
@@ -3058,4 +3058,4 @@ check-mcdc-doc:
 #
 check-cmdindex:
 	@tclsh tools/gencmdindex.tcl --check \
-	    docs/pending/tcl_language_standard_v1.md
+	    docs/public/tcl_language_standard_v1.md
