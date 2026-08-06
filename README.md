@@ -328,7 +328,7 @@ The artefacts this style produced are visible in the repository:
     decision with a *why* and a *how-to-apply*, so the next
     iteration -- human or agent -- starts with full context rather
     than reconstructed guesswork.
-  * The Tcl conference paper in `docs/public/tcl_conference_2026_paper.md`
+  * The Tcl conference paper in `docs/public/tcl_conference_paper.md`
     documents the agent/human interaction case studies in detail.
 
 We think this style of collaboration is going to matter.  TH8 is one

@@ -1218,7 +1218,7 @@ Disabling a core feature automatically disables dependent plugins:
 | `docs/public/tcl_language_standard_v1.md`     | Formal language specification    |
 | `docs/public/th8_public_c_api_specification.md` | C embedding API reference      |
 | `docs/private/ladybird.md`                    | LadyBird browser integration     |
-| `docs/public/tcl_conference_2026_paper.md`    | Conference paper                 |
+| `docs/public/tcl_conference_paper.md`    | Conference paper                 |
 | `license.terms`                       | License file                     |
 
 ### Keys
