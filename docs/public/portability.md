@@ -2,6 +2,17 @@
 
 Compiler, OS, and library prerequisites for building TH8.
 
+On a fresh **Debian/Ubuntu** machine the POSIX `Makefile` installs every
+system package needed for a standard build in one step:
+
+    make apt-deps            # shared/dynamic build
+    make apt-deps-static     # the above, plus the extras a fully-static link needs
+
+Both run `apt-get` via `sudo` (pass `SUDO=` to run as root directly, e.g.
+inside a container).  The vendored libraries below marked "Compiled into
+TH8 (no external library)" need no packages — the `make vendoring` target
+regenerates them from `externals/*/vendor/`.
+
 ---
 
 ## 1. C Language Standard

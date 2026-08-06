@@ -36,6 +36,15 @@ and Android are tracked as post-1.0 work.
 
 ### Native (Unix-like)
 
+On a fresh Debian/Ubuntu machine, install the system build
+dependencies once, first (see also `docs/public/portability.md`):
+
+    make apt-deps                    # build tools + tcl-dev + libssl/curl/unbound-dev
+    make apt-deps-static             # ...plus the extras for a fully-static link
+
+Both run `apt-get` via `sudo` (pass `SUDO=` to run as root directly).
+Then build:
+
     make clean debug                 # debug + assertions
     make ENABLE_TEST_KEY=1 clean debug && bin/th8sh tests/all.tcl
 
