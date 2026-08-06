@@ -162,11 +162,15 @@ AllowShortLoopsOnASingleLine: false
 #
 # ---- Comment preservation (USER-VISIBLE: do not change lightly) ----
 #
-# `ReflowComments: Never` keeps comment text byte-for-byte.
+# `ReflowComments: false` keeps comment text byte-for-byte.  We use the
+# boolean form (not the newer enum value `Never`) for portability: it is
+# accepted by every clang-format >= 3.8 and is normalized to `Never` on
+# clang-format >= 20, whereas `Never` is REJECTED as "invalid boolean" by
+# clang-format < 20 -- e.g. the clang-format 18 shipped with Ubuntu 24.04.
 # `AlignTrailingComments` with Kind=Leave preserves the column at
 # which trailing comments were written (no auto-realignment).
 #
-ReflowComments:               Never
+ReflowComments:               false
 AlignTrailingComments:
   Kind:                       Leave
   OverEmptyLines:             0

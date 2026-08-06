@@ -216,8 +216,9 @@ Tclth8bridge_Init(Tcl_Interp *tclInterp) /* Host Tcl interpreter. */
     if (!pState->th8Interp) {
 	ckfree((char *)pState->pPlatform);
 	ckfree((char *)pState);
-	Tcl_SetResult(
-	    tclInterp, "failed to create TH8 interpreter", TCL_STATIC);
+	Tcl_SetObjResult(
+	    tclInterp,
+	    Tcl_NewStringObj("failed to create TH8 interpreter", -1));
 	return TCL_ERROR;
     }
 
