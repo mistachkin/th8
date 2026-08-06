@@ -883,6 +883,14 @@ $(B)th8_shell.o: $(S)th8_shell.c $(S)th8.h $(S)th8_int.h $(S)th8_mem.h \
 	$(CC) $(CFLAGS) $(INCLUDES) \
 	  -I$(BESTLINE_BUILD) -c -o $@ $(S)th8_shell.c
 
+# The vendored bestline sources need an explicit rule so make can create
+# them from a clean tree (mirrors $(B)regex_amalg.c: regex_vendor).  Without
+# this, `make amalgamation-shell` on a clean checkout fails with "No rule to
+# make target externals/bestline/build/bestline.c" because the file is only
+# named as a prerequisite; an order-only `| bestline_vendor` does NOT make a
+# missing normal prerequisite buildable.
+$(BESTLINE_BUILD)/bestline.c $(BESTLINE_BUILD)/bestline.h: bestline_vendor
+
 $(B)bestline.o: $(BESTLINE_BUILD)/bestline.c $(BESTLINE_BUILD)/bestline.h | bestline_vendor $(B)
 	$(CC) $(CFLAGS) $(BESTLINE_CFLAGS) \
 	  -I$(BESTLINE_BUILD) -c -o $@ $(BESTLINE_BUILD)/bestline.c
