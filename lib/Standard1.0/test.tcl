@@ -296,10 +296,14 @@ namespace eval ::th8test {
     if {[llength [info commands ::th8testlib::load_snk]] > 0 && \
         [llength [info commands harpy]] > 0 && \
         [::th8testlib::signed_only query]} then {
-      set ::_harpyToken [::th8testlib::load_snk \
-          tests/helpers/th8_test_key.snk]
+      catch {
+        unset -nocomplain ::_harpyToken
 
-      testConstraint harpy_sign 1
+        set ::_harpyToken [::th8testlib::load_snk \
+            tests/helpers/th8_test_key.snk]
+
+        testConstraint harpy_sign 1
+      }
     }
   }
 

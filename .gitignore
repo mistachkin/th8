@@ -107,10 +107,6 @@ externals/bestline/build/
 # Spilornis vendor pull cache (regenerated).
 externals/spilornis/vendor/
 
-# development team key
-tests/helpers/th8_test_key.snk
-tests/helpers/th8_test_key.snk.b64sig
-
 # ---------------------------------------------------------------------
 # Editor / OS noise
 # ---------------------------------------------------------------------

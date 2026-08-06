@@ -208,7 +208,7 @@ runTest {test sandbox-escape-3.1 {
 runTest {test sandbox-escape-3.2 {
   R-20999-34016: no parent variables leak into sandbox
 } -constraints {
-    th8 sandbox
+    th8 harpy_sign sandbox
 } -body {
   # The parent's _harpyToken should not be visible
   set r [::th8testlib::sandbox {

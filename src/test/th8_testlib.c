@@ -22668,12 +22668,17 @@ th8test_event_stress_cmd(
  * distinct child interpreter (so per-interp state and the debug heap
  * tracker never race), and all workers hammer the SAME `::env` key so
  * their setenv/unsetenv calls contend maximally on the shared file-scope
- * env mutex (R-00313).
+ * env mutex (R-00313).  `failed`/`zErr` capture the FIRST non-OK eval's
+ * error text so th8test_env_stress_cmd can emit a durable diagnostic --
+ * the per-eval error is otherwise discarded (only a success count is kept),
+ * leaving a failure's aggregate "got/expected" result with no cause.
  */
 typedef struct th8test_env_worker {
     Th8_Interp *interp; /* this worker's own child interpreter */
     int nIters;
     int ok; /* successful set+unset cycles */
+    int failed; /* nonzero once the first non-OK eval is captured */
+    char zErr[256]; /* first non-OK eval's error text (NUL-terminated) */
 } th8test_env_worker;
 
 /* Every worker runs this: one setenv + one unsetenv per cycle, all
@@ -22688,7 +22693,9 @@ static const char
  * th8test_env_worker_fn --
  *
  *	Worker body for th8test_env_stress_cmd: evaluate the set/unset
- *	env script nIters times on this worker's own interpreter.
+ *	env script nIters times on this worker's own interpreter, counting
+ *	the cycles that complete.  The FIRST eval that returns non-OK has
+ *	its error captured into w->zErr for the command's durable diagnostic.
  *
  *----------------------------------------------------------------------
  */
@@ -22702,6 +22709,18 @@ TH8TEST_WORKER_DECL(th8test_env_worker_fn)
 	        w->interp, 0, TH8TEST_ENV_STRESS_SCRIPT, TH8_NOLEN, "es",
 	        2) == TH8_OK) {
 	    w->ok++;
+	} else if (!w->failed) {
+	    size_t nErr = 0;
+	    const char *zErr = Th8_GetResult(w->interp, &nErr);
+
+	    if (nErr >= sizeof(w->zErr)) {
+		nErr = sizeof(w->zErr) - 1;
+	    }
+	    if (zErr != NULL && nErr > 0) {
+		memcpy(w->zErr, zErr, nErr);
+	    }
+	    w->zErr[nErr] = '\0';
+	    w->failed = 1;
 	}
     }
     TH8TEST_WORKER_RETURN;
@@ -22731,11 +22750,14 @@ TH8TEST_WORKER_DECL(th8test_env_worker_fn)
  *
  * Results:
  *	TH8_OK with "ok" when every worker completed all its cycles;
- *	otherwise a "FAIL got/expected" diagnostic.
+ *	otherwise a "FAIL got/expected" diagnostic result, and -- so the
+ *	cause is not lost -- a "---- env_stress failed: <error>" line is
+ *	emitted to stdout carrying the first worker's captured eval error.
  *
  * Side effects:
  *	Creates and deletes NTHREADS child interpreters; transiently
- *	sets/unsets the TH8_ENVSTRESS process environment variable.
+ *	sets/unsets the TH8_ENVSTRESS process environment variable; on
+ *	failure, writes one diagnostic line to stdout.
  *
  *----------------------------------------------------------------------
  */
@@ -22791,6 +22813,8 @@ th8test_env_stress_cmd(
 	aWorker[i].interp = NULL;
 	aWorker[i].nIters = (int)nIters;
 	aWorker[i].ok = 0;
+	aWorker[i].failed = 0;
+	aWorker[i].zErr[0] = '\0';
 	if (pcp == NULL) break;
 	aWorker[i].interp = Th8_CreateInterp(pcp);
 	if (aWorker[i].interp == NULL) {
@@ -22828,6 +22852,20 @@ th8test_env_stress_cmd(
 	total += aWorker[i].ok;
 	Th8_DeleteInterp(aWorker[i].interp);
     }
+
+    /* Durable diagnostic: the worker discards per-eval errors (it only bumps a
+     * success counter), so on any failure surface the FIRST captured error as
+     * a test-suite-style line -- otherwise the aggregate "FAIL got/expected"
+     * result below gives no clue WHY the script failed (e.g. a platform where
+     * the env backend or ::env misbehaves under concurrency). */
+    for (i = 0; i < (int)nThreads; i++) {
+	if (aWorker[i].failed) {
+	    fprintf(stdout, "---- env_stress failed: %s\n", aWorker[i].zErr);
+	    fflush(stdout);
+	    break;
+	}
+    }
+
     Th8_Free(interp, aWorker);
     Th8_Free(interp, aTid);
 
