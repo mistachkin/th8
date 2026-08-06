@@ -68,16 +68,63 @@ extern struct Th8_FaultConfig *th8FaultActiveCfg;
  * th8PosixSyscallTrip --
  *
  *	Report whether the fault-injection layer is currently armed to
- *	force the syscall identified by op to fail.
+ *	force the syscall identified by op to fail, consuming a
+ *	one-shot arming in the process.
  *
  * Why / How:
  *	The POSIX_CALL / POSIX_CALL_PTR macros consult this predicate
  *	to decide whether to short-circuit a wrapped syscall.  Returns
  *	true only when a fault config is active and op's corresponding
- *	bit is set in th8FaultActiveCfg->nFailPosixMask.
+ *	bit is set in th8FaultActiveCfg->nFailPosixMask.  When the
+ *	config requests one-shot mode (nFailPosixOnce), a trip clears
+ *	op's arming bit so the NEXT call to the same wrapper passes
+ *	through -- letting a retry loop's error arm run exactly once
+ *	instead of forcing every iteration to fail.
  *
  * Results:
  *	Nonzero if op's failure bit is armed; zero otherwise.
+ *
+ * Side effects:
+ *	In one-shot mode, clears op's bit in nFailPosixMask on a trip.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8PosixSyscallTrip(int op)
+{
+    if (th8FaultActiveCfg == NULL) {
+	return 0;
+    }
+    if ((th8FaultActiveCfg->nFailPosixMask & ((th8_uint64_t)1 << op)) == 0) {
+	return 0;
+    }
+    if (th8FaultActiveCfg->nFailPosixOnce) {
+	th8FaultActiveCfg->nFailPosixMask &= ~((th8_uint64_t)1 << op);
+    }
+    return 1;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8PosixFaultErrno --
+ *
+ *	Return the errno value a forced POSIX_CALL failure should set.
+ *
+ * Why / How:
+ *	Defaults to EIO -- a deterministic NON-EINTR value that mimics
+ *	a real syscall error and avoids a stale errno accidentally
+ *	reading as EINTR (which would send a `nRead < 0 && errno ==
+ *	EINTR` retry loop spinning forever).  A test overrides it via a
+ *	POSITIVE nFailPosixErrno to drive an error arm that inspects
+ *	errno itself -- e.g. forcing EINTR (with one-shot mode) to run
+ *	a retry branch, or a non-EEXIST value for an `errno != EEXIST`
+ *	discriminator.  (A NEGATIVE nFailPosixErrno instead requests a
+ *	short read; see th8PosixFaultShort -- it is not an errno.)
+ *
+ * Results:
+ *	The configured nFailPosixErrno if POSITIVE, else EIO.
  *
  * Side effects:
  *	None.
@@ -86,22 +133,55 @@ extern struct Th8_FaultConfig *th8FaultActiveCfg;
  */
 
 static int
-th8PosixSyscallTrip(int op)
+th8PosixFaultErrno(void)
 {
-    return th8FaultActiveCfg != NULL &&
-           (th8FaultActiveCfg->nFailPosixMask & ((th8_uint64_t)1 << op)) != 0;
+    if (th8FaultActiveCfg != NULL && th8FaultActiveCfg->nFailPosixErrno > 0) {
+	return th8FaultActiveCfg->nFailPosixErrno;
+    }
+    return EIO;
 }
 
 /*
- * On a forced failure, set errno to a deterministic NON-EINTR
- * value (EIO).  This both mimics a real syscall error and avoids
- * a stale errno accidentally reading as EINTR, which would send a
- * retry loop (`nRead < 0 && errno == EINTR`) spinning forever.
+ *----------------------------------------------------------------------
+ *
+ * th8PosixFaultShort --
+ *
+ *	Report whether a forced POSIX_CALL failure should be a SHORT
+ *	result (return 0) rather than an error (return -1).
+ *
+ * Why / How:
+ *	A NEGATIVE nFailPosixErrno is the sentinel for short-result
+ *	mode: the wrapper returns 0 with errno untouched, mimicking a
+ *	premature end-of-file / zero-byte read().  This drives the
+ *	`nRead == 0` side of a read loop's `nRead < 0 && errno ==
+ *	EINTR` decision (the C1=F, break arm) -- unreachable with the
+ *	-1/error faults.  Only meaningful for read-like ops (0 is a
+ *	distinguished return there); do not arm it for open/PTR ops.
+ *
+ * Results:
+ *	Nonzero if short-result mode is armed; zero otherwise.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
  */
+
+static int
+th8PosixFaultShort(void)
+{
+    return th8FaultActiveCfg != NULL &&
+           th8FaultActiveCfg->nFailPosixErrno < 0;
+}
+
 #    define POSIX_CALL(op, expr)                                             \
-	(th8PosixSyscallTrip(op) ? (errno = EIO, -1) : (expr))
+	(th8PosixSyscallTrip(op)                                             \
+	     ? (th8PosixFaultShort() ? 0                                     \
+	                             : (errno = th8PosixFaultErrno(), -1))   \
+	     : (expr))
 #    define POSIX_CALL_PTR(op, expr)                                         \
-	(th8PosixSyscallTrip(op) ? (errno = EIO, (void *)0) : (expr))
+	(th8PosixSyscallTrip(op) ? (errno = th8PosixFaultErrno(), (void *)0) \
+	                         : (expr))
 #  else
 #    define POSIX_CALL(op, expr)     (expr)
 #    define POSIX_CALL_PTR(op, expr) (expr)
@@ -1972,7 +2052,8 @@ th8PosixRandomBytes(Th8_Interp *interp, void *pCtx, void *pBuf, size_t nByte)
 	    size_t nLeft = nByte;
 
 	    while (nLeft > 0) {
-		nRead = read(fd, pRd, nLeft);
+		nRead = POSIX_CALL(
+		    TH8_POSIX_OP_RANDOM_READ, read(fd, pRd, nLeft));
 		if (nRead > 0) {
 		    pRd += nRead;
 		    nLeft -= (size_t)nRead;

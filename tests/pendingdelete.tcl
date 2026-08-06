@@ -241,7 +241,7 @@ runTest {test pendingdelete-4.1 {
   set msg
 } -cleanup {
   unset -nocomplain msg
-} -match regexp -result {(no such command: _no_such_cmd|command doesn't exist)}}
+} -match regexp -result {(no such command: _no_such_cmd|command doesn't exist|invalid command name)}}
 
 ###############################################################################
 

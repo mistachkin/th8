@@ -501,6 +501,42 @@ runTest {test crypto-7.9 {
 } -result {0}}
 
 ###############################################################################
+
+runTest {test crypto-7.10 {
+  R-01415-20789: When signed-only mode is enabled, a top-level (eval depth 1)
+                 script with no origin name (NULL) SHALL be rejected.
+                 signed_reject runs this in a fresh child interpreter (empty
+                 eval stack, nothing verified) -- the only context where the
+                 depth-1 origin gate is reached -- and reports "ok" when the
+                 NULL-origin eval was rejected.
+} -constraints {
+    th8 crypto_testlib
+} -body {
+  set result [th8testlib::signed_reject]
+  set idx [lsearch -exact $result "null_origin"]
+  lindex $result [expr {$idx + 1}]
+} -cleanup {
+  unset -nocomplain result idx
+} -result {ok}}
+
+###############################################################################
+
+runTest {test crypto-7.11 {
+  R-43104-17325: When the signed-only policy is enabled, a top-level script
+                 carrying a malformed annotation (a "# <<" with no closing
+                 ">>") SHALL be rejected -- even when the script has a valid
+                 origin -- before the origin gate is reached.
+} -constraints {
+    th8 crypto_testlib
+} -body {
+  set result [th8testlib::signed_reject]
+  set idx [lsearch -exact $result "malformed_annotation"]
+  lindex $result [expr {$idx + 1}]
+} -cleanup {
+  unset -nocomplain result idx
+} -result {ok}}
+
+###############################################################################
 #
 # Section 8 -- crypto: Th8_EvalFileAsData
 #
@@ -534,14 +570,37 @@ runTest {test crypto-8.2 {
 ###############################################################################
 
 runTest {test crypto-8.3 {
-  R-36411-65332: The load_key_file command SHALL fail for a nonexistent script
-                 file.
+  R-36411-65332 R-00108-51576: The load_key_file command SHALL fail for a
+                 nonexistent script file.  This exercises the FAILURE path of
+                 Th8_EvalFileAsData, whose child interpreter SHALL always be
+                 deleted whether the evaluation succeeds or fails -- the failing
+                 load here leaks no interpreter (the debug heap checks would
+                 flag it), confirming the child was torn down on the error path.
 } -constraints {
     th8 crypto_testlib
 } -body {
   lindex [th8testlib::load_key_file \
       tests/helpers/nonexistent_key.th8] 0
 } -result {1}}
+
+###############################################################################
+
+runTest {test crypto-8.4 {
+  R-51860-19180: If the parent interpreter has the signed-only policy enabled,
+                 Th8_EvalFileAsData SHALL enable it in the child interpreter as
+                 well.  signed_inherit enables signed-only on the parent, then
+                 evaluates a signed base64-data file as data -- success (the
+                 decoded data is returned) proves the inheriting child had the
+                 policy and could verify the signed file.
+} -constraints {
+    th8 crypto_testlib
+} -body {
+  set result [th8testlib::signed_inherit]
+  set idx [lsearch -exact $result "parent_signed_child_ok"]
+  lindex $result [expr {$idx + 1}]
+} -cleanup {
+  unset -nocomplain result idx
+} -result {ok}}
 
 ###############################################################################
 
@@ -567,6 +626,67 @@ runTest {test crypto-9.2 {
 } -cleanup {
   unset -nocomplain msg
 } -match regexp -result {^0 \d+$}}
+
+###############################################################################
+#
+# Section 10 -- crypto: RSA sign key-strength + verify-failure trace
+#
+###############################################################################
+
+runTest {test crypto-10.1 {
+  R-64430-14707: Th8_RsaSign SHALL reject RSA keys shorter than 2048 bits.
+                 rsa_short_key crafts a structurally valid 1024-bit RSA
+                 private key and attempts to sign with it; the sign must be
+                 rejected (the key loads, but signing a sub-2048-bit key is
+                 refused before any signing math).
+} -constraints {
+    th8 crypto_testlib
+} -body {
+  set result [th8testlib::rsa_short_key]
+  set idx [lsearch -exact $result "sign_rejected"]
+  lindex $result [expr {$idx + 1}]
+} -cleanup {
+  unset -nocomplain result idx
+} -result {ok}}
+
+###############################################################################
+
+runTest {test crypto-10.2 {
+  R-56307-62946: When RSA verification fails, the preGetData callback SHALL
+                 emit the computed data hash and the extracted signature hash
+                 via Th8_EmitTrace for diagnostics.  verify_trace installs a
+                 capturing xEmitTrace on a signed-only child interpreter,
+                 sources a tampered file (verification fails), and confirms the
+                 diagnostic trace with both SHA-512 hashes was emitted.
+} -constraints {
+    th8 crypto_testlib
+} -body {
+  set result [th8testlib::verify_trace]
+  set idx [lsearch -exact $result "trace_emitted"]
+  lindex $result [expr {$idx + 1}]
+} -cleanup {
+  unset -nocomplain result idx
+} -result {ok}}
+
+###############################################################################
+
+runTest {test crypto-10.3 {
+  R-36002-25646: When bPreload is non-zero, Th8_EvalFileAndRsaKeyLoad SHALL
+                 preload the key into the policy cache via Th8_PolicyPreloadKey,
+                 requiring pCtx to be a valid policy context.  preload_key
+                 enables a signed-only policy (isolated via
+                 Th8_SaveSignedOnly/RestoreSignedOnly so no global state leaks),
+                 then loads a signed key file with bPreload=1, so the key is
+                 both loaded and preloaded into the policy context.
+} -constraints {
+    th8 crypto_testlib
+} -body {
+  set result [th8testlib::preload_key]
+  set idx [lsearch -exact $result "preloaded"]
+  lindex $result [expr {$idx + 1}]
+} -cleanup {
+  unset -nocomplain result idx
+} -result {ok}}
 
 ###############################################################################
 

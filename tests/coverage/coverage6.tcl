@@ -90,7 +90,7 @@ runTest {test coverage6-2.3 {unicode escape 3-byte UTF-8} -body {
 ###############################################################################
 
 runTest {test coverage6-3.1 {wide unicode escape emoji} -constraints {
-    escapeU
+    escapeU not_eagle
 } -body {
   string length \U0001F600
 } -result {1}}
@@ -222,19 +222,19 @@ runTest {test coverage6-6.4 {string range with multi-byte} -body {
 ###############################################################################
 
 runTest {test coverage6-7.1 {binary literal 0b101} -body {
-    expr {0b101}
+    format %d [expr {0b101}]
 } -result {5}}
 
 ###############################################################################
 
 runTest {test coverage6-7.2 {binary literal 0b0} -body {
-    expr {0b0}
+    format %d [expr {0b0}]
 } -result {0}}
 
 ###############################################################################
 
 runTest {test coverage6-7.3 {binary literal 0b11111111} -body {
-    expr {0b11111111}
+    format %d [expr {0b11111111}]
 } -result {255}}
 
 ###############################################################################

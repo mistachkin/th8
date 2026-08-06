@@ -223,8 +223,14 @@ runTest {test hooks-6.2 {
 ###############################################################################
 
 runTest {test hooks-7.1 {
-  R-48881-39702: An interpreter SHALL be usable for evaluation after a
-                 cancel-unwind operation completes.
+  R-48881-39702 R-16133-17525: An interpreter SHALL be usable for
+                 evaluation after a cancel-unwind operation completes; when
+                 TH8_CANCEL_UNWIND fires, the outermost Th8_Eval restores
+                 nEvalDepth to its entry value and clears the cancel state
+                 so a subsequent evaluation succeeds.  cancel_recover arms
+                 cancel-unwind, evaluates a script that fails, then
+                 evaluates a second script that must succeed -- which can
+                 only happen if the depth/cancel state was reset.
 } -constraints {
     loadLib th8
 } -body {

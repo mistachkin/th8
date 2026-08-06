@@ -753,7 +753,7 @@ runTest {test dict-22.2 {
 
 runTest {test dict-23.1 {
   R-29570-08733: dict set creates the variable if it does not exist
-} -setup {
+} -constraints {not_eagle} -setup {
 } -body {
   #
   # newdict does not exist yet; dict set should create it.

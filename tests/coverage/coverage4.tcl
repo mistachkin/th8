@@ -24,15 +24,46 @@ source tests/prologue.tcl
 #
 ###############################################################################
 
-runTest {test coverage4-1.1 {break wrong args} -body {
-    catch {break extra}
+runTest {test coverage4-1.1 {break too many args} -body {
+    catch {break a b}
 } -result {1}}
 
 ###############################################################################
 
-runTest {test coverage4-1.2 {continue wrong args} -body {
-    catch {continue extra}
+runTest {test coverage4-1.2 {continue too many args} -body {
+    catch {continue a b}
 } -result {1}}
+
+###############################################################################
+
+runTest {test coverage4-1.2a {
+  R-09845-29637: break accepts an optional result string, observable
+  through a catch that traps the break directly
+} -constraints {breakOptArg} -body {
+  list [catch {break foo} m] $m
+} -cleanup {
+  unset -nocomplain m
+} -result {3 foo}}
+
+###############################################################################
+
+runTest {test coverage4-1.2b {
+  R-20389-43665: continue accepts an optional result string, observable
+  through a catch that traps the continue directly
+} -constraints {breakOptArg} -body {
+  list [catch {continue bar} m] $m
+} -cleanup {
+  unset -nocomplain m
+} -result {4 bar}}
+
+###############################################################################
+
+runTest {test coverage4-1.2c {
+  R-09845-29637: an enclosing loop discards the break result and still
+  yields the empty string
+} -constraints {breakOptArg} -body {
+  while {1} {break discarded}
+} -result {}}
 
 ###############################################################################
 
@@ -542,19 +573,19 @@ runTest {test coverage4-6.13 {expr logical operators} -body {
 ###############################################################################
 
 runTest {test coverage4-6.14 {expr wide integer} -body {
-    expr {1000000000 * 1000}
+    expr {wide(1000000000) * 1000}
 } -result {1000000000000}}
 
 ###############################################################################
 
 runTest {test coverage4-6.15 {expr hex literal} -body {
-    expr {0xFF}
+    format %d [expr {0xFF}]
 } -result {255}}
 
 ###############################################################################
 
 runTest {test coverage4-6.16 {expr octal literal} -body {
-    expr {0o17}
+    format %d [expr {0o17}]
 } -result {15}}
 
 ###############################################################################
@@ -612,7 +643,7 @@ runTest {test coverage4-7.5 {scan basic integer} -constraints {
 
 runTest {test coverage4-8.1 {incr nonexistent creates} -setup {
     unset -nocomplain _cov4_i
-} -body {
+} -constraints {not_eagle} -body {
   incr _cov4_i
   set _cov4_i
 } -cleanup {

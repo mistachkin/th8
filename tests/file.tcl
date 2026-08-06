@@ -46,7 +46,7 @@ runTest {test file-1.3 {
 
 runTest {test file-1.4 {
   R-18250-49096: root directory returns root itself
-} -body {
+} -constraints {not_eagle} -body {
   file dirname "/"
 } -result {/}}
 
@@ -125,7 +125,7 @@ runTest {test file-2.3 {
 
 runTest {test file-2.4 {
   R-50437-19510: absolute component resets result
-} -body {
+} -constraints {not_eagle} -body {
   file join a /b c
 } -result {/b/c}}
 

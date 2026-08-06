@@ -78,7 +78,7 @@ runTest {test datamodel-2.3 {
 runTest {test datamodel-2.4 {
   R-08901-48972: hexadecimal prefix 0x
 } -body {
-  expr {0xFF}
+  format %d [expr {0xFF}]
 } -result {255}}
 
 ###############################################################################
@@ -86,7 +86,7 @@ runTest {test datamodel-2.4 {
 runTest {test datamodel-2.5 {
   R-08901-48972: hexadecimal prefix 0X
 } -body {
-  expr {0X1A}
+  format %d [expr {0X1A}]
 } -result {26}}
 
 ###############################################################################
@@ -94,7 +94,7 @@ runTest {test datamodel-2.5 {
 runTest {test datamodel-2.6 {
   R-18737-56517: octal prefix 0o
 } -body {
-  expr {0o77}
+  format %d [expr {0o77}]
 } -result {63}}
 
 ###############################################################################
@@ -102,7 +102,7 @@ runTest {test datamodel-2.6 {
 runTest {test datamodel-2.7 {
   R-44656-63369: binary prefix 0b
 } -body {
-  expr {0b1010}
+  format %d [expr {0b1010}]
 } -result {10}}
 
 ###############################################################################

@@ -1233,6 +1233,9 @@ th8test_taints_cmd(
  *	  count -- pazElem == NULL, panElem == NULL (count-only, like
  *	           llength)
  *	  lens  -- pazElem == NULL, panElem != NULL (lengths-only)
+ *	  block -- pazElem != NULL, panElem != NULL: a full split, used to
+ *	           verify the R-63239 single-block / interior-pointer
+ *	           contract (returns "interior" on success)
  *
  * Why / How:
  *	The element-tagging guard in Th8_SplitList,
@@ -1251,10 +1254,13 @@ th8test_taints_cmd(
  *	TH8_LIST_NO_CACHE forces the parse path so the guard is reached.
  *
  * Results:
- *	TH8_OK; result is the element count as an integer.
+ *	TH8_OK; result is the element count as an integer for count/lens,
+ *	or the string "interior" for block (TH8_ERROR if the block-layout
+ *	invariant does not hold).
  *
  * Side effects:
- *	Sets the interpreter result.
+ *	Sets the interpreter result.  In block mode, allocates and frees a
+ *	single split block.
  *
  *----------------------------------------------------------------------
  */
@@ -1267,6 +1273,7 @@ th8test_splitlist_probe_cmd(
     const char **argv,
     size_t *argl)
 {
+    char **azElem = 0;
     size_t *anElem = 0;
     int nCount = 0;
     size_t nTainted;
@@ -1283,7 +1290,37 @@ th8test_splitlist_probe_cmd(
      * split; the raw byte count is preserved. */
     nTainted = TH8_ADD_TAINT(TH8_LEN(argl[2]));
 
-    if (TH8_LEN(argl[1]) == 5 && memcmp(argv[1], "count", 5) == 0) {
+    if (TH8_LEN(argl[1]) == 5 && memcmp(argv[1], "block", 5) == 0) {
+	/*
+	 * R-63239: a full split (both element and length arrays) returns
+	 * *pazElem and *panElem as pointers into ONE allocation block --
+	 * *panElem is the interior lengths array laid out immediately
+	 * after the *panElem-count element pointers, i.e. exactly
+	 * &(*pazElem)[nCount].  Only *pazElem (the block start) may be
+	 * freed; freeing *panElem separately would be an interior-pointer
+	 * free.  Verify the exact interior relationship, then reclaim the
+	 * whole block with a SINGLE Th8_Free of the block start (the
+	 * debug build's heap checks flag a wrong/partial free).
+	 */
+
+	rc = Th8_SplitList(
+	    interp, argv[2], nTainted, &azElem, &anElem, &nCount,
+	    TH8_LIST_NO_CACHE);
+	if (rc != TH8_OK) {
+	    return rc;
+	}
+	if (azElem == NULL || anElem == NULL ||
+	    anElem != (size_t *)&azElem[nCount]) {
+	    Th8_Free(interp, azElem);
+	    Th8_SetResultStatic(
+	        interp, "not-a-single-block: panElem is not interior",
+	        TH8_NOLEN);
+	    return TH8_ERROR;
+	}
+	Th8_Free(interp, azElem); /* single free reclaims both arrays */
+	Th8_SetResultStatic(interp, "interior", TH8_NOLEN);
+	return TH8_OK;
+    } else if (TH8_LEN(argl[1]) == 5 && memcmp(argv[1], "count", 5) == 0) {
 	rc = Th8_SplitList(
 	    interp, argv[2], nTainted, 0, 0, &nCount, TH8_LIST_NO_CACHE);
     } else if (TH8_LEN(argl[1]) == 4 && memcmp(argv[1], "lens", 4) == 0) {
@@ -1291,7 +1328,8 @@ th8test_splitlist_probe_cmd(
 	    interp, argv[2], nTainted, 0, &anElem, &nCount,
 	    TH8_LIST_NO_CACHE);
     } else {
-	Th8_SetResultStatic(interp, "mode must be count or lens", TH8_NOLEN);
+	Th8_SetResultStatic(
+	    interp, "mode must be block, count or lens", TH8_NOLEN);
 	return TH8_ERROR;
     }
     if (rc != TH8_OK) {
@@ -14239,6 +14277,500 @@ th8test_policy_depth_cmd(
 /*
  *----------------------------------------------------------------------
  *
+ * th8test_signed_reject_cmd --
+ *
+ *	Implements "th8testlib::signed_reject".  Drives the two
+ *	top-level (eval depth 1) signed-only REJECTION decisions that a
+ *	nested testlib eval cannot reach, by running them in a FRESH
+ *	child interpreter (empty eval stack, nothing verified yet).
+ *
+ * Why / How:
+ *	th8PolicyEvalPre only gates a script at depth <= 1, only when
+ *	signed-only is active, and only when the context is not already
+ *	verified; sub-evaluations (depth > 1) are always allowed
+ *	(Gate 3).  A testlib command runs inside the harness eval, so any
+ *	Th8_Eval it issues is at depth > 1 and bypasses the gate.  To
+ *	reach the depth-1 rejections we clone the platform, create a
+ *	child interpreter (empty stack), enable the signed-only policy on
+ *	it, and evaluate at its top level:
+ *	  null_origin (R-01415): a script with NO origin name (NULL) is
+ *	    rejected ("signed-only: script has no origin name").
+ *	  malformed_annotation (R-43104): a script that carries a
+ *	    malformed annotation (a "# <<" with no closing ">>") is
+ *	    rejected before the origin gate is even reached.
+ *	The child owns its cloned platform and is deleted at the end,
+ *	which also frees the platform.
+ *
+ * Results:
+ *	TH8_OK with a flat list {null_origin ok|FAIL malformed_annotation
+ *	ok|FAIL}; TH8_ERROR only on child-setup failure.
+ *
+ * Side effects:
+ *	Creates and deletes a child interpreter with a temporary
+ *	signed-only policy; evaluates two side-effect-free scripts in it.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_signed_reject_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParentPlat;
+    Th8_Platform *pChildPlat;
+    Th8_Interp *pChild;
+    void *pPolicyCtx = NULL;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    int rc;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::signed_reject");
+    }
+
+    pParentPlat = Th8_GetPlatform(interp);
+    pChildPlat = Th8_ClonePlatform(pParentPlat);
+    if (pChildPlat == NULL) {
+	Th8_SetResultStatic(
+	    interp, "signed_reject: cannot clone platform", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    pChild = Th8_CreateInterp(pChildPlat);
+    if (pChild == NULL) {
+	Th8_FreePlatform(pChildPlat);
+	Th8_SetResultStatic(
+	    interp, "signed_reject: cannot create child interp", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    Th8_RegisterLanguage(pChild);
+
+    rc = Th8_EnableSignedPolicy(pChild, &pPolicyCtx, 1);
+    if (rc != TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(
+	    interp, "signed_reject: cannot enable signed policy", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /*
+     * R-01415: fresh signed-only child, nothing verified yet; a
+     * top-level (depth 1) eval with a NULL origin must be rejected.
+     */
+    rc = Th8_Eval(pChild, 0, "expr {1 + 1}", TH8_NOLEN, NULL, 0);
+    Th8_ListAppend(interp, &zOut, &nOut, "null_origin", TH8_NOLEN);
+    Th8_ListAppend(
+        interp, &zOut, &nOut, rc == TH8_ERROR ? "ok" : "FAIL", TH8_NOLEN);
+
+    /*
+     * R-43104: a top-level script (even WITH an origin) carrying a
+     * malformed annotation -- a "# <<" with no closing ">>" -- is
+     * rejected before the origin gate.
+     */
+    rc = Th8_Eval(
+        pChild, 0, "# <<notBefore:2020-01-01\nexpr {1}", TH8_NOLEN,
+        "child.th8", TH8_NOLEN);
+    Th8_ListAppend(interp, &zOut, &nOut, "malformed_annotation", TH8_NOLEN);
+    Th8_ListAppend(
+        interp, &zOut, &nOut, rc == TH8_ERROR ? "ok" : "FAIL", TH8_NOLEN);
+
+    Th8_EnableSignedPolicy(pChild, &pPolicyCtx, 0);
+    Th8_DeleteInterp(pChild); /* also frees pChildPlat (child owns it) */
+
+    Th8_SetResult(interp, zOut, nOut);
+    Th8_Free(interp, zOut);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_signed_inherit_cmd --
+ *
+ *	Implements "th8testlib::signed_inherit".  Drives the
+ *	parent -> child signed-only inheritance in Th8_EvalFileAsData
+ *	(R-51860).
+ *
+ * Why / How:
+ *	Th8_EvalFileAsData evaluates a signed script in an isolated child
+ *	interpreter and, per its contract, "the child inherits the
+ *	parent's platform and signed-only policy" -- the `if
+ *	(bParentSigned)` arm in th8_xlib.c enables the signed-only policy
+ *	in the child when the parent has it.  This helper enables the
+ *	signed-only policy on the calling (parent) interpreter, then calls
+ *	Th8_EvalFileAsData on a signed base64-data helper file.  Success
+ *	(non-NULL decoded data) proves the TRUE arm executed AND that the
+ *	inheriting child could verify the signed file -- which it can only
+ *	do with the signed-only policy and its preloaded keys.  The
+ *	parent's prior signed-only state is saved and restored.
+ *
+ * Results:
+ *	TH8_OK with a flat list {parent_signed_child_ok ok|FAIL};
+ *	TH8_ERROR only on policy-setup failure.
+ *
+ * Side effects:
+ *	Temporarily enables the signed-only policy on the parent and
+ *	evaluates a signed data file via a child interpreter.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_signed_inherit_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    void *pPolicyCtx = NULL;
+    const unsigned char *pzData = NULL;
+    size_t nData = 0;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    int rc;
+    char outerSaved[TH8_SIGNED_SAVE_SIZE];
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::signed_inherit");
+    }
+
+    Th8_SaveSignedOnly(interp, outerSaved);
+    rc = Th8_EnableSignedPolicy(interp, &pPolicyCtx, 1);
+    if (rc != TH8_OK) {
+	Th8_RestoreSignedOnly(interp, outerSaved);
+	Th8_SetResultStatic(
+	    interp, "signed_inherit: cannot enable signed policy", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /*
+     * R-51860: with the parent signed-only, Th8_EvalFileAsData must
+     * enable signed-only in the child; the child then verifies and
+     * evaluates the signed file and returns its base64-decoded data.
+     * pCtx is reserved and must be NULL.
+     */
+    rc = Th8_EvalFileAsData(
+        interp, "tests/helpers/base64_hello.th8", TH8_NOLEN, &pzData, &nData,
+        NULL);
+    Th8_ListAppend(interp, &zOut, &nOut, "parent_signed_child_ok", TH8_NOLEN);
+    Th8_ListAppend(
+        interp, &zOut, &nOut,
+        (rc == TH8_OK && pzData != NULL) ? "ok" : "FAIL", TH8_NOLEN);
+    if (pzData != NULL) {
+	Th8_Free(interp, (void *)pzData);
+    }
+
+    Th8_EnableSignedPolicy(interp, &pPolicyCtx, 0);
+    Th8_RestoreSignedOnly(interp, outerSaved);
+
+#    if defined(TH8_ENABLE_VARIABLES)
+    Th8_ResetSecurityArray(interp);
+#    endif
+
+    Th8_SetResult(interp, zOut, nOut);
+    Th8_Free(interp, zOut);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_rsa_short_key_cmd --
+ *
+ *	Implements "th8testlib::rsa_short_key".  Drives R-64430:
+ *	Th8_RsaSign SHALL reject RSA keys shorter than 2048 bits.
+ *
+ * Why / How:
+ *	No sub-2048-bit key fixture exists (all shipped keys are
+ *	16384-bit), so this helper crafts a minimal but structurally
+ *	valid 1024-bit RSA PRIVATE key blob (CAPI/SNK format) with dummy
+ *	key material.  Th8_RsaKeyLoad performs only a structural parse
+ *	(magic, power-of-two bitlen, odd public exponent, size) and never
+ *	validates the modulus/primes, so the blob loads with nBits=1024
+ *	and bHasPrivate=1.  Th8_RsaSign then checks the private-key
+ *	presence and, immediately after, the >= 2048-bit minimum -- both
+ *	BEFORE any real signing math -- so the 1024-bit key is rejected.
+ *	The dummy key material is never used.
+ *
+ * Results:
+ *	TH8_OK with {load_1024 ok|FAIL sign_rejected ok|FAIL|SKIP}.
+ *
+ * Side effects:
+ *	Loads and frees one crafted RSA key; sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_rsa_short_key_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    /*
+     * 1024-bit private SNK/CAPI blob: PUBLICKEYSTRUC(8) + RSAPUBKEY(12)
+     * + modulus(128) + p(64) + q(64) + dp(64) + dq(64) + qInv(64) +
+     * d(128) = 596 bytes.
+     */
+    unsigned char blob[596];
+    Th8_RsaKey *pKey = NULL;
+    unsigned char *pSig = NULL;
+    size_t nSig = 0;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    int rc;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::rsa_short_key");
+    }
+
+    Th8_Memset(interp, blob, 0x01, sizeof(blob)); /* dummy key material */
+    blob[0] = 0x07; /* CAPI_PRIVATEKEYBLOB */
+    blob[1] = 0x02; /* CAPI_BVERSION */
+    blob[2] = 0x00;
+    blob[3] = 0x00;
+    blob[4] = 0x00; /* CALG_RSA_SIGN = 0x00002400, little-endian */
+    blob[5] = 0x24;
+    blob[6] = 0x00;
+    blob[7] = 0x00;
+    blob[8] = 0x52; /* "RSA2" magic, little-endian */
+    blob[9] = 0x53;
+    blob[10] = 0x41;
+    blob[11] = 0x32;
+    blob[12] = 0x00; /* bitlen = 1024, little-endian */
+    blob[13] = 0x04;
+    blob[14] = 0x00;
+    blob[15] = 0x00;
+    blob[16] = 0x01; /* public exponent = 65537, little-endian */
+    blob[17] = 0x00;
+    blob[18] = 0x01;
+    blob[19] = 0x00;
+
+    rc = Th8_RsaKeyLoad(interp, blob, sizeof(blob), &pKey);
+    Th8_ListAppend(interp, &zOut, &nOut, "load_1024", TH8_NOLEN);
+    Th8_ListAppend(
+        interp, &zOut, &nOut, (rc == TH8_OK && pKey != NULL) ? "ok" : "FAIL",
+        TH8_NOLEN);
+
+    Th8_ListAppend(interp, &zOut, &nOut, "sign_rejected", TH8_NOLEN);
+    if (rc == TH8_OK && pKey != NULL) {
+	rc = Th8_RsaSign(
+	    interp, pKey, (const unsigned char *)"data", 4, &pSig, &nSig);
+	Th8_ListAppend(
+	    interp, &zOut, &nOut,
+	    (rc == TH8_ERROR && pSig == NULL) ? "ok" : "FAIL", TH8_NOLEN);
+	if (pSig != NULL) {
+	    Th8_Free(interp, pSig);
+	}
+	Th8_RsaKeyFree(interp, pKey);
+    } else {
+	Th8_ListAppend(interp, &zOut, &nOut, "SKIP", TH8_NOLEN);
+    }
+
+    Th8_SetResult(interp, zOut, nOut);
+    Th8_Free(interp, zOut);
+    return TH8_OK;
+}
+
+
+/*
+ * Capture buffer for th8test_verify_trace_cmd: the child interpreter's
+ * xEmitTrace routes the diagnostic verification-failure trace here so
+ * the test can assert it was emitted.  Single-threaded test use only.
+ */
+static char th8test_trace_capture_buf[8192];
+static size_t th8test_trace_capture_len;
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_trace_capture_cb --
+ *
+ *	A platform xEmitTrace callback that appends each trace message to
+ *	th8test_trace_capture_buf.  Installed on a child interpreter's
+ *	cloned platform by th8test_verify_trace_cmd.
+ *
+ *----------------------------------------------------------------------
+ */
+static void
+th8test_trace_capture_cb(Th8_Interp *interp, void *pCtx, const char *zMsg)
+{
+    size_t n;
+
+    (void)pCtx;
+    if (zMsg == NULL) return;
+    n = Th8_Strlen(interp, zMsg);
+    if (th8test_trace_capture_len + n <
+        sizeof(th8test_trace_capture_buf) - 1) {
+	Th8_Memcpy(
+	    interp, th8test_trace_capture_buf + th8test_trace_capture_len,
+	    zMsg, n);
+	th8test_trace_capture_len += n;
+	th8test_trace_capture_buf[th8test_trace_capture_len] = '\0';
+    }
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_contains --
+ *
+ *	Return non-zero if NUL-terminated zHay contains zNeedle.  A tiny
+ *	CRT-free substring search (Th8_Strlen + Th8_Memcmp) used by
+ *	th8test_verify_trace_cmd in place of strstr, which would add a
+ *	disallowed CRT dependency to the test library.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_contains(Th8_Interp *interp, const char *zHay, const char *zNeedle)
+{
+    size_t nHay = Th8_Strlen(interp, zHay);
+    size_t nNeedle = Th8_Strlen(interp, zNeedle);
+    size_t i;
+
+    if (nNeedle == 0) return 1;
+    if (nNeedle > nHay) return 0;
+    for (i = 0; i + nNeedle <= nHay; i++) {
+	if (Th8_Memcmp(interp, zHay + i, zNeedle, nNeedle) == 0) {
+	    return 1;
+	}
+    }
+    return 0;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_verify_trace_cmd --
+ *
+ *	Implements "th8testlib::verify_trace".  Drives R-56307: when RSA
+ *	verification fails, the preGetData (READ PRE) callback emits the
+ *	computed data hash and the extracted signature hash via
+ *	Th8_EmitTrace for diagnostics.
+ *
+ * Why / How:
+ *	Clones the platform, installs a capturing xEmitTrace on the clone,
+ *	creates a child interpreter with the signed-only policy, and
+ *	sources a TAMPERED signed file in it.  th8PolicyVerifyData fails
+ *	the RSA signature check and emits the two SHA-512 hashes via
+ *	Th8_EmitTrace -> our capture callback.  The test asserts both that
+ *	the source was rejected and that the diagnostic trace (containing
+ *	"verification failed" and the "SHA-512" hash lines) was emitted.
+ *
+ * Results:
+ *	TH8_OK with {verify_failed ok|FAIL trace_emitted ok|FAIL}.
+ *
+ * Side effects:
+ *	Creates and deletes a child interpreter; writes the capture
+ *	buffer.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_verify_trace_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParentPlat;
+    Th8_Platform *pChildPlat;
+    Th8_Interp *pChild;
+    void *pPolicyCtx = NULL;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    int rc;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::verify_trace");
+    }
+
+    pParentPlat = Th8_GetPlatform(interp);
+    pChildPlat = Th8_ClonePlatform(pParentPlat);
+    if (pChildPlat == NULL) {
+	Th8_SetResultStatic(
+	    interp, "verify_trace: cannot clone platform", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    pChildPlat->xEmitTrace = th8test_trace_capture_cb;
+    pChild = Th8_CreateInterp(pChildPlat);
+    if (pChild == NULL) {
+	Th8_FreePlatform(pChildPlat);
+	Th8_SetResultStatic(
+	    interp, "verify_trace: cannot create child interp", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    Th8_RegisterLanguage(pChild);
+
+    rc = Th8_EnableSignedPolicy(pChild, &pPolicyCtx, 1);
+    if (rc != TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(
+	    interp, "verify_trace: cannot enable signed policy", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    th8test_trace_capture_len = 0;
+    th8test_trace_capture_buf[0] = '\0';
+
+    /*
+     * R-56307: the tampered file's signature fails to verify in the
+     * READ PRE phase; the diagnostic trace is emitted to our capture
+     * callback.
+     */
+    rc = Th8_EvalFile(
+        pChild, "tests/helpers/tampered_clock_seconds.th8", TH8_NOLEN);
+    Th8_ListAppend(interp, &zOut, &nOut, "verify_failed", TH8_NOLEN);
+    Th8_ListAppend(
+        interp, &zOut, &nOut, rc == TH8_ERROR ? "ok" : "FAIL", TH8_NOLEN);
+
+    Th8_ListAppend(interp, &zOut, &nOut, "trace_emitted", TH8_NOLEN);
+    Th8_ListAppend(
+        interp, &zOut, &nOut,
+        (th8test_contains(
+             interp, th8test_trace_capture_buf, "verification failed") &&
+         th8test_contains(interp, th8test_trace_capture_buf, "SHA-512"))
+            ? "ok"
+            : "FAIL",
+        TH8_NOLEN);
+
+    Th8_EnableSignedPolicy(pChild, &pPolicyCtx, 0);
+    Th8_DeleteInterp(pChild);
+
+    Th8_SetResult(interp, zOut, nOut);
+    Th8_Free(interp, zOut);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8test_sig_hashes_cmd --
  *
  *	Implements "th8testlib::sig_hashes <scriptPath>".
@@ -15026,7 +15558,426 @@ th8test_protected_null_page_cmd(
     return TH8_OK;
 }
 
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_preload_key_cmd --
+ *
+ *	Implements "th8testlib::preload_key".  Drives R-36002: when
+ *	bPreload is non-zero, Th8_EvalFileAndRsaKeyLoad SHALL preload the
+ *	loaded key into the policy cache via Th8_PolicyPreloadKey,
+ *	requiring pCtx to be a valid policy context.
+ *
+ * Why / How:
+ *	Mirrors the isolated policy pattern of signed_inherit /
+ *	policy_depth_test: saves the caller's signed-only state, enables a
+ *	fresh signed-only policy (which yields a valid policy context),
+ *	then calls Th8_EvalFileAndRsaKeyLoad on a signed key file with
+ *	bPreload = 1, so the key is both loaded and preloaded into that
+ *	context.  The policy is disabled and the outer state restored
+ *	before returning, so no global policy state leaks to later tests
+ *	(installing/uninstalling the policy from a SCRIPT would clobber the
+ *	harness's own signed-only policy -- see Bug-free note below).
+ *
+ * Results:
+ *	TH8_OK with {preloaded ok|FAIL}.
+ *
+ * Side effects:
+ *	Temporarily enables the signed-only policy on the calling
+ *	interpreter and loads a key from a signed file.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_preload_key_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    void *pPolicyCtx = NULL;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    int rc;
+    char outerSaved[TH8_SIGNED_SAVE_SIZE];
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::preload_key");
+    }
+
+    Th8_SaveSignedOnly(interp, outerSaved);
+    rc = Th8_EnableSignedPolicy(interp, &pPolicyCtx, 1);
+    if (rc != TH8_OK) {
+	Th8_RestoreSignedOnly(interp, outerSaved);
+	Th8_SetResultStatic(
+	    interp, "preload_key: cannot enable signed policy", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /*
+     * R-36002: bPreload = 1 with the valid policy context pPolicyCtx
+     * loads the key from the signed file and preloads it into the cache.
+     */
+    rc = Th8_EvalFileAndRsaKeyLoad(
+        interp, "tests/helpers/load_test_key.th8", TH8_NOLEN, pPolicyCtx, 1);
+    Th8_ListAppend(interp, &zOut, &nOut, "preloaded", TH8_NOLEN);
+    Th8_ListAppend(
+        interp, &zOut, &nOut, rc == TH8_OK ? "ok" : "FAIL", TH8_NOLEN);
+
+    Th8_EnableSignedPolicy(interp, &pPolicyCtx, 0);
+    Th8_RestoreSignedOnly(interp, outerSaved);
+
+#    if defined(TH8_ENABLE_VARIABLES)
+    Th8_ResetSecurityArray(interp);
+#    endif
+
+    Th8_SetResult(interp, zOut, nOut);
+    Th8_Free(interp, zOut);
+    return TH8_OK;
+}
+
 #  endif /* TH8_ENABLE_CRYPTOGRAPHY */
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_normalize_no_callback_cmd --
+ *
+ *	Implements "th8testlib::normalize_no_callback".  Drives R-10315:
+ *	if the platform provides no path-normalization callback,
+ *	`file normalize` returns its argument unchanged.
+ *
+ * Why / How:
+ *	The shipped POSIX/Win32 platforms always provide xNormalizePath,
+ *	so the no-callback fallback is unreachable through the normal
+ *	interpreter.  This helper clones the platform, clears
+ *	xNormalizePath on the clone, and runs `file normalize` in a child
+ *	interpreter built on it: Th8_NormalizePath returns NULL, and the
+ *	command falls back to echoing the argument unchanged.
+ *
+ * Results:
+ *	TH8_OK with {unchanged ok|FAIL}.
+ *
+ * Side effects:
+ *	Creates and deletes a child interpreter.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_normalize_no_callback_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParentPlat;
+    Th8_Platform *pChildPlat;
+    Th8_Interp *pChild;
+    const char *zRes;
+    size_t nRes = 0;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    int ok;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::normalize_no_callback");
+    }
+
+    pParentPlat = Th8_GetPlatform(interp);
+    pChildPlat = Th8_ClonePlatform(pParentPlat);
+    if (pChildPlat == NULL) {
+	Th8_SetResultStatic(
+	    interp, "normalize_no_callback: cannot clone platform",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    pChildPlat->xNormalizePath = NULL; /* R-10315: no normalize callback */
+    pChild = Th8_CreateInterp(pChildPlat);
+    if (pChild == NULL) {
+	Th8_FreePlatform(pChildPlat);
+	Th8_SetResultStatic(
+	    interp, "normalize_no_callback: cannot create child interp",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    Th8_RegisterLanguage(pChild);
+
+    (void)Th8_Eval(pChild, 0, "file normalize /a/b/../c", TH8_NOLEN, "t", 1);
+    zRes = Th8_GetResult(pChild, &nRes);
+    ok =
+        (zRes != NULL && nRes == 9 &&
+         Th8_Memcmp(interp, zRes, "/a/b/../c", 9) == 0);
+
+    Th8_ListAppend(interp, &zOut, &nOut, "unchanged", TH8_NOLEN);
+    Th8_ListAppend(interp, &zOut, &nOut, ok ? "ok" : "FAIL", TH8_NOLEN);
+
+    Th8_DeleteInterp(pChild);
+
+    Th8_SetResult(interp, zOut, nOut);
+    Th8_Free(interp, zOut);
+    return TH8_OK;
+}
+
+
+/*
+ * Sentinel + capture state for th8test_output_error_channel_cmd.  The
+ * child's xGetErrorOutput hands back &th8test_oe_sentinel as the error
+ * channel; the child's xOutputError records the channel it was passed so
+ * the test can confirm the two are threaded together.  Single-threaded
+ * test use only.
+ */
+static int th8test_oe_sentinel;
+static void *th8test_oe_channel;
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_geterroroutput_cb --
+ *
+ *	xGetErrorOutput platform callback for
+ *	th8test_output_error_channel_cmd: reports &th8test_oe_sentinel as
+ *	the current error channel.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_geterroroutput_cb(Th8_Interp *interp, void *pCtx, void **pChannel)
+{
+    (void)interp;
+    (void)pCtx;
+    if (pChannel) *pChannel = &th8test_oe_sentinel;
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_outputerror_cb --
+ *
+ *	xOutputError platform callback for
+ *	th8test_output_error_channel_cmd: records the pChannel it is
+ *	handed so the test can confirm it matches xGetErrorOutput's.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_outputerror_cb(
+    Th8_Interp *interp,
+    void *pCtx,
+    const char *z,
+    size_t n,
+    void *pChannel)
+{
+    (void)interp;
+    (void)pCtx;
+    (void)z;
+    (void)n;
+    th8test_oe_channel = pChannel;
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_output_error_channel_cmd --
+ *
+ *	Implements "th8testlib::output_error_channel".  Drives R-64687:
+ *	Th8_OutputError SHALL query the current error output channel via
+ *	xGetErrorOutput before invoking xOutputError, passing that channel
+ *	to xOutputError.
+ *
+ * Why / How:
+ *	Clones the platform, installs a matched pair of callbacks on the
+ *	clone (xGetErrorOutput yields a sentinel channel; xOutputError
+ *	captures whatever channel it is handed), and calls Th8_OutputError
+ *	on a child built from it.  The test confirms the sentinel produced
+ *	by xGetErrorOutput is exactly what xOutputError received.
+ *
+ * Results:
+ *	TH8_OK with {channel_passed ok|FAIL}.
+ *
+ * Side effects:
+ *	Creates and deletes a child interpreter; writes the capture state.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_output_error_channel_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParentPlat;
+    Th8_Platform *pChildPlat;
+    Th8_Interp *pChild;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    int rc;
+    int ok;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::output_error_channel");
+    }
+
+    pParentPlat = Th8_GetPlatform(interp);
+    pChildPlat = Th8_ClonePlatform(pParentPlat);
+    if (pChildPlat == NULL) {
+	Th8_SetResultStatic(
+	    interp, "output_error_channel: cannot clone platform", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    pChildPlat->xGetErrorOutput = th8test_geterroroutput_cb;
+    pChildPlat->xOutputError = th8test_outputerror_cb;
+    pChild = Th8_CreateInterp(pChildPlat);
+    if (pChild == NULL) {
+	Th8_FreePlatform(pChildPlat);
+	Th8_SetResultStatic(
+	    interp, "output_error_channel: cannot create child interp",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    Th8_RegisterLanguage(pChild);
+
+    th8test_oe_channel = NULL;
+    rc = Th8_OutputError(pChild, "err", 3);
+    ok = (rc == TH8_OK && th8test_oe_channel == &th8test_oe_sentinel);
+
+    Th8_ListAppend(interp, &zOut, &nOut, "channel_passed", TH8_NOLEN);
+    Th8_ListAppend(interp, &zOut, &nOut, ok ? "ok" : "FAIL", TH8_NOLEN);
+
+    Th8_DeleteInterp(pChild);
+
+    Th8_SetResult(interp, zOut, nOut);
+    Th8_Free(interp, zOut);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_close_veto_cb --
+ *
+ *	xCloseTemporaryData platform callback for th8test_close_veto_cmd:
+ *	always returns TH8_ERROR to veto the close.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_close_veto_cb(
+    Th8_Interp *interp,
+    void *pCtx,
+    const char *zName,
+    size_t nName,
+    void *pChannel)
+{
+    (void)interp;
+    (void)pCtx;
+    (void)zName;
+    (void)nName;
+    (void)pChannel;
+    return TH8_ERROR;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_close_veto_cmd --
+ *
+ *	Implements "th8testlib::close_veto".  Drives R-16003: the
+ *	xCloseTemporaryData platform callback is consulted before closing
+ *	a temporary channel, and a non-TH8_OK return vetoes the close so
+ *	the channel remains open.
+ *
+ * Why / How:
+ *	Clones the platform, installs a vetoing xCloseTemporaryData on the
+ *	clone, and in a child interpreter creates an in-memory temporary
+ *	channel via [file tempname] and attempts to [close] it.  The close
+ *	is refused ("close vetoed by platform").
+ *
+ * Results:
+ *	TH8_OK with {vetoed ok|FAIL}.
+ *
+ * Side effects:
+ *	Creates and deletes a child interpreter and a temporary channel.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_close_veto_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParentPlat;
+    Th8_Platform *pChildPlat;
+    Th8_Interp *pChild;
+    const char *zRes;
+    size_t nRes = 0;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    int evalRc;
+    int ok;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::close_veto");
+    }
+
+    pParentPlat = Th8_GetPlatform(interp);
+    pChildPlat = Th8_ClonePlatform(pParentPlat);
+    if (pChildPlat == NULL) {
+	Th8_SetResultStatic(
+	    interp, "close_veto: cannot clone platform", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    pChildPlat->xCloseTemporaryData = th8test_close_veto_cb;
+    pChild = Th8_CreateInterp(pChildPlat);
+    if (pChild == NULL) {
+	Th8_FreePlatform(pChildPlat);
+	Th8_SetResultStatic(
+	    interp, "close_veto: cannot create child interp", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    Th8_RegisterLanguage(pChild);
+
+    evalRc = Th8_Eval(
+        pChild, 0, "set c [file tempname 16]\nclose $c", TH8_NOLEN, "t", 1);
+    zRes = Th8_GetResult(pChild, &nRes);
+    ok = (evalRc == TH8_ERROR && th8test_contains(interp, zRes, "vetoed"));
+
+    Th8_ListAppend(interp, &zOut, &nOut, "vetoed", TH8_NOLEN);
+    Th8_ListAppend(interp, &zOut, &nOut, ok ? "ok" : "FAIL", TH8_NOLEN);
+
+    Th8_DeleteInterp(pChild);
+
+    Th8_SetResult(interp, zOut, nOut);
+    Th8_Free(interp, zOut);
+    return TH8_OK;
+}
 
 
 /*
@@ -18933,16 +19884,36 @@ th8test_faulteval_impl(
     unsigned char fctxBuf[sizeof(void *) * 256]; /* oversized */
     Th8_FaultCtx *pFCtx = (Th8_FaultCtx *)fctxBuf;
     th8_int64_t nOp = 0;
+    th8_int64_t nErrno = 0;
+    th8_int64_t bOnce = 0;
+    int iScript;
     int rc;
     char *zSaved = NULL;
     size_t nSaved = 0;
     const char *zRes;
     const char *zCmd = posix ? "posixfaulteval" : "osslfaulteval";
 
-    if (argc != 3) {
+    /*
+     * `posixfaulteval` accepts an extended form -- `opBit errno once
+     * script` -- that selects the errno set on the forced failure and
+     * a one-shot flag (fail only the first armed call, then pass
+     * through so a retry loop makes progress).  The 2-argument form
+     * (`opBit script`) keeps the default errno (EIO) and always-fail
+     * behavior.  `osslfaulteval` takes only the 2-argument form.
+     */
+    if (argc == 3) {
+	iScript = 2;
+    } else if (posix && argc == 5) {
+	if (Th8_ToWideInt(interp, argv[2], argl[2], &nErrno) != TH8_OK ||
+	    Th8_ToWideInt(interp, argv[3], argl[3], &bOnce) != TH8_OK) {
+	    return TH8_ERROR;
+	}
+	iScript = 4;
+    } else {
 	return Th8_WrongNumArgs(
-	    interp, posix ? "th8testlib::posixfaulteval opBit script"
-	                  : "th8testlib::osslfaulteval opBit script");
+	    interp,
+	    posix ? "th8testlib::posixfaulteval opBit ?errno once? script"
+	          : "th8testlib::osslfaulteval opBit script");
     }
     if (Th8_FaultCtxSize() > sizeof(fctxBuf)) {
 	Th8_SetResultStatic(
@@ -18963,6 +19934,8 @@ th8test_faulteval_impl(
     Th8_FaultConfigInit(&cfg);
     if (posix) {
 	cfg.nFailPosixMask = ((th8_uint64_t)1 << (unsigned int)nOp);
+	cfg.nFailPosixErrno = (int)nErrno;
+	cfg.nFailPosixOnce = (bOnce != 0);
     } else {
 	cfg.nFailOsslMask = ((th8_uint64_t)1 << (unsigned int)nOp);
     }
@@ -18970,8 +19943,9 @@ th8test_faulteval_impl(
     if (Th8_FaultInstall(interp, &cfg, pFCtx) != TH8_OK) {
 	return TH8_ERROR;
     }
-    rc =
-        Th8_Eval(interp, 0, argv[2], argl[2], zCmd, Th8_Strlen(interp, zCmd));
+    rc = Th8_Eval(
+        interp, 0, argv[iScript], argl[iScript], zCmd,
+        Th8_Strlen(interp, zCmd));
 
     /*
      * Preserve the eval's result string across Th8_FaultUninstall
@@ -19039,15 +20013,21 @@ th8test_osslfaulteval_cmd(
  *
  * th8test_posixfaulteval_cmd --
  *
- *	Implements "::th8testlib::posixfaulteval opBit script".
- *	Thin wrapper that forwards to th8test_faulteval_impl with
- *	the POSIX flag set, arming POSIX-op fault bit `opBit`.
+ *	Implements "::th8testlib::posixfaulteval opBit ?errno once?
+ *	script".  Thin wrapper that forwards to th8test_faulteval_impl
+ *	with the POSIX flag set, arming POSIX-op fault bit `opBit`.
  *
  * Why / How:
  *	The bit selects an op id in
  *	Th8_FaultConfig.nFailPosixMask so the corresponding POSIX
  *	wrapper forces a failure, and `script` is evaluated in the
- *	current interpreter so its error arm runs.
+ *	current interpreter so its error arm runs.  The optional
+ *	`errno` and `once` arguments select the errno set on the
+ *	forced failure and one-shot mode (fail only the first armed
+ *	call), letting a test drive an errno-inspecting retry branch
+ *	such as `nRead < 0 && errno == EINTR` exactly once.  A NEGATIVE
+ *	`errno` is the short-read sentinel: the wrapped read() returns
+ *	0 instead of -1, driving a read loop's `nRead == 0` break arm.
  *
  * Results:
  *	The script's return code and result, as produced by
@@ -20128,6 +21108,162 @@ th8test_debug_callback(
 	return TH8_BREAK;
     }
 
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_debug_breakcycle_cmd --
+ *
+ *	Implements "th8testlib::debug_breakcycle".  Drives the full
+ *	freeze-on-breakpoint cycle end to end and returns "ok".
+ *
+ * Why / How:
+ *	No other test actually HITS a breakpoint (the debug tests only
+ *	set/clear them), so the debugger's break -> freeze -> resume
+ *	contract was unexercised -- and driving it uncovered a real
+ *	crash (Bug 73).  This helper installs the debug callback (which
+ *	returns TH8_BREAK on a breakpoint), plants a breakpoint on
+ *	line 3 of a four-command script, evaluates that script under the
+ *	matching origin name, and asserts the whole R-54392 contract:
+ *	on the breakpoint the interpreter freezes so `Th8_Ready` returns
+ *	TH8_SUSPEND; after the breakpoint is cleared and `Th8_Thaw` runs,
+ *	`Th8_Ready` returns TH8_OK AND the suspended NRE continuation
+ *	resumes -- the remaining commands ("format c", "format resumed")
+ *	execute, leaving "resumed" as the interpreter result.  Firing
+ *	MID-script (not at the first command) is what exercises the
+ *	suspend-detach path that saves pSuspendedCallbacks; a breakpoint
+ *	on the very first line would suspend before any callback is
+ *	pushed (the Bug 73 pCallbacks == pBottom edge case, now guarded).
+ *	Matches the dedicated-helper pattern of cancel_recover /
+ *	freezecycle.
+ *
+ * Results:
+ *	"ok" on the full cycle succeeding; TH8_ERROR with a message if
+ *	the interpreter did not suspend on the breakpoint, did not become
+ *	ready again after thaw, or did not resume the remaining commands.
+ *
+ * Side effects:
+ *	Temporarily installs a debug callback and a breakpoint on the
+ *	calling interpreter (both removed before returning) and evaluates
+ *	a side-effect-free `format` script.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_debug_breakcycle_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    int bpId = 0;
+    const char *zName = "breakcycle";
+    /*
+     * Four commands, one per line.  The breakpoint is on line 3
+     * ("format c"), so the freeze fires MID-script: "format a" and
+     * "format b" have run, "format c" and "format resumed" have not.
+     * A resume that works "from the exact point of suspension" must run
+     * both remaining commands, leaving the result of the last one
+     * ("resumed") as the interpreter result.  Line 3 (not 1 or 2) is
+     * chosen so th8EvalLocal's entry readiness check -- which runs at the
+     * CALLER's line, <= 2 in the driving test -- cannot spuriously match
+     * the (breakcycle, 3) key before the script's own lines are reached.
+     */
+    const char *zScript = "format a\nformat b\nformat c\nformat resumed\n";
+    const char *zRes;
+    size_t nRes = 0;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::debug_breakcycle");
+    }
+
+    th8test_debug_break_on_bp = 1;
+    if (Th8_SetDebugCallback(interp, th8test_debug_callback, NULL) !=
+        TH8_OK) {
+	th8test_debug_break_on_bp = 0;
+	Th8_SetResultStatic(
+	    interp, "debug_breakcycle: set callback failed", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    if (Th8_SetBreakpoint(
+            interp, zName, Th8_Strlen(interp, zName), 3, &bpId) != TH8_OK) {
+	th8test_debug_break_on_bp = 0;
+	Th8_SetDebugCallback(interp, NULL, NULL);
+	Th8_SetResultStatic(
+	    interp, "debug_breakcycle: set breakpoint failed", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /*
+     * The breakpoint table is keyed on Th8_GetSourceName + line, and that
+     * name is only populated by the source-name stack (which [source]
+     * pushes).  A bare Th8_Eval does not push it, so mirror source_command
+     * here: push "breakcycle" so the (name, line 3) breakpoint key matches
+     * during evaluation, then pop it once the cycle is complete.
+     */
+
+    Th8_PushSourceName(interp, zName, Th8_Strlen(interp, zName));
+    (void)Th8_Eval(
+        interp, 0, zScript, Th8_Strlen(interp, zScript), zName,
+        Th8_Strlen(interp, zName));
+
+    if (Th8_Ready(interp) != TH8_SUSPEND) {
+	Th8_PopSourceName(interp);
+	th8test_debug_break_on_bp = 0;
+	Th8_ClearBreakpoint(interp, bpId);
+	Th8_SetDebugCallback(interp, NULL, NULL);
+	Th8_Thaw(interp);
+	Th8_SetResult(interp, 0, 0);
+	Th8_SetResultStatic(
+	    interp, "debug_breakcycle: did not suspend on breakpoint",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /*
+     * Continue past the breakpoint: clear the breakpoint and debug
+     * callback FIRST so the resumed evaluation does not immediately
+     * re-break at the same (breakcycle, 3) key, then thaw to resume the
+     * suspended NRE continuation ("format c" then "format resumed").
+     */
+
+    th8test_debug_break_on_bp = 0;
+    Th8_ClearBreakpoint(interp, bpId);
+    Th8_SetDebugCallback(interp, NULL, NULL);
+
+    Th8_Thaw(interp);
+    Th8_PopSourceName(interp);
+    if (Th8_Ready(interp) != TH8_OK) {
+	Th8_SetResultStatic(
+	    interp, "debug_breakcycle: not ready after thaw", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /*
+     * Prove the resume actually ran the remaining commands: the last
+     * command evaluated was "format resumed", so its result must be the
+     * live interpreter result now.  If the continuation had been lost
+     * (the Bug 73 failure mode), the result would still be "b".
+     */
+
+    zRes = Th8_GetResult(interp, &nRes);
+    if (zRes == NULL || nRes != 7 ||
+        Th8_Memcmp(interp, zRes, "resumed", 7) != 0) {
+	Th8_SetResultStatic(
+	    interp, "debug_breakcycle: resume did not run remaining commands",
+	    TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    Th8_SetResult(interp, 0, 0);
+    Th8_SetResultStatic(interp, "ok", 2);
     return TH8_OK;
 }
 
@@ -21528,6 +22664,186 @@ th8test_event_stress_cmd(
 
 
 /*
+ * Per-worker state for th8test_env_stress_cmd: each worker owns a
+ * distinct child interpreter (so per-interp state and the debug heap
+ * tracker never race), and all workers hammer the SAME `::env` key so
+ * their setenv/unsetenv calls contend maximally on the shared file-scope
+ * env mutex (R-00313).
+ */
+typedef struct th8test_env_worker {
+    Th8_Interp *interp; /* this worker's own child interpreter */
+    int nIters;
+    int ok; /* successful set+unset cycles */
+} th8test_env_worker;
+
+/* Every worker runs this: one setenv + one unsetenv per cycle, all
+ * routed through the env platform's mutex-protected xKeyValue callback. */
+static const char
+    TH8TEST_ENV_STRESS_SCRIPT[] = "set ::env(TH8_ENVSTRESS) 1\n"
+                                  "unset -nocomplain ::env(TH8_ENVSTRESS)\n";
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_env_worker_fn --
+ *
+ *	Worker body for th8test_env_stress_cmd: evaluate the set/unset
+ *	env script nIters times on this worker's own interpreter.
+ *
+ *----------------------------------------------------------------------
+ */
+TH8TEST_WORKER_DECL(th8test_env_worker_fn)
+{
+    th8test_env_worker *w = (th8test_env_worker *)arg;
+    int i;
+
+    for (i = 0; i < w->nIters; i++) {
+	if (Th8_Eval(
+	        w->interp, 0, TH8TEST_ENV_STRESS_SCRIPT, TH8_NOLEN, "es",
+	        2) == TH8_OK) {
+	    w->ok++;
+	}
+    }
+    TH8TEST_WORKER_RETURN;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_env_stress_cmd --
+ *
+ *	Implements "th8testlib::env_stress NTHREADS NITERS".  Drives
+ *	R-00313: the environment variable backend serializes all
+ *	operations with a file-scope mutex to prevent data races on
+ *	concurrent access to the process environment.
+ *
+ * Why / How:
+ *	Pre-creates NTHREADS child interpreters on the calling thread
+ *	(each with a clone of the parent's merged platform, whose
+ *	xKeyValue slot is the env backend's mutex-protected callback),
+ *	then spawns one worker per interpreter that concurrently sets and
+ *	unsets the SAME `::env` key NITERS times.  Every set/unset goes
+ *	through the shared th8EnvMutex; each worker's interpreter is
+ *	otherwise private, so the only cross-thread contention is on the
+ *	env mutex.  If the serialization holds, no operation corrupts the
+ *	backend and every cycle completes -- a correct mutex makes this a
+ *	stable pass (a broken one would crash or lose cycles).
+ *
+ * Results:
+ *	TH8_OK with "ok" when every worker completed all its cycles;
+ *	otherwise a "FAIL got/expected" diagnostic.
+ *
+ * Side effects:
+ *	Creates and deletes NTHREADS child interpreters; transiently
+ *	sets/unsets the TH8_ENVSTRESS process environment variable.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_env_stress_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    th8_int64_t nThreads, nIters;
+    th8test_env_worker *aWorker = NULL;
+    th8test_thread_t *aTid = NULL;
+    const Th8_Platform *pParentPlat;
+    int i, nCreated = 0, nSpawned = 0, total = 0, expected;
+    char zBuf[64];
+    size_t nBuf;
+
+    (void)ctx;
+
+    if (argc != 3) {
+	return Th8_WrongNumArgs(
+	    interp, "th8testlib::env_stress nthreads niters");
+    }
+    if (Th8_ToWideInt(interp, argv[1], TH8_LEN(argl[1]), &nThreads) !=
+            TH8_OK ||
+        nThreads < 1 || nThreads > 64) {
+	Th8_SetResultStatic(interp, "nthreads must be 1..64", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    if (Th8_ToWideInt(interp, argv[2], TH8_LEN(argl[2]), &nIters) != TH8_OK ||
+        nIters < 1 || nIters > 5000) {
+	Th8_SetResultStatic(interp, "niters must be 1..5000", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    aWorker = (th8test_env_worker *)
+        TH8_ALLOC_MUL(interp, (size_t)nThreads, sizeof(th8test_env_worker));
+    aTid = (th8test_thread_t *)
+        TH8_ALLOC_MUL(interp, (size_t)nThreads, sizeof(th8test_thread_t));
+    if (!aWorker || !aTid) {
+	if (aWorker) Th8_Free(interp, aWorker);
+	if (aTid) Th8_Free(interp, aTid);
+	return TH8_ERROR;
+    }
+
+    /* Phase 1: pre-create one child interpreter per worker (this thread). */
+    pParentPlat = Th8_GetPlatform(interp);
+    for (i = 0; i < (int)nThreads; i++) {
+	Th8_Platform *pcp = Th8_ClonePlatform(pParentPlat);
+
+	aWorker[i].interp = NULL;
+	aWorker[i].nIters = (int)nIters;
+	aWorker[i].ok = 0;
+	if (pcp == NULL) break;
+	aWorker[i].interp = Th8_CreateInterp(pcp);
+	if (aWorker[i].interp == NULL) {
+	    Th8_FreePlatform(pcp);
+	    break;
+	}
+	Th8_RegisterLanguage(aWorker[i].interp);
+	nCreated++;
+    }
+    if (nCreated != (int)nThreads) {
+	for (i = 0; i < nCreated; i++)
+	    Th8_DeleteInterp(aWorker[i].interp);
+	Th8_Free(interp, aWorker);
+	Th8_Free(interp, aTid);
+	Th8_SetResultStatic(
+	    interp, "env_stress: child interp create failed", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /* Phase 2: spawn workers. */
+    for (i = 0; i < (int)nThreads; i++) {
+	if (th8test_thread_create(
+	        &aTid[i], th8test_env_worker_fn, &aWorker[i]) != 0) {
+	    break;
+	}
+	nSpawned++;
+    }
+    /* Phase 3: join everything that spawned. */
+    for (i = 0; i < nSpawned; i++) {
+	th8test_thread_join(aTid[i]);
+    }
+
+    /* Phase 4: tally, then tear down the child interpreters. */
+    for (i = 0; i < (int)nThreads; i++) {
+	total += aWorker[i].ok;
+	Th8_DeleteInterp(aWorker[i].interp);
+    }
+    Th8_Free(interp, aWorker);
+    Th8_Free(interp, aTid);
+
+    expected = (int)nThreads * (int)nIters;
+    if (nSpawned == (int)nThreads && total == expected) {
+	Th8_SetResultStatic(interp, "ok", 2);
+	return TH8_OK;
+    }
+    nBuf = (size_t)snprintf(
+        zBuf, sizeof(zBuf), "FAIL got %d expected %d (spawned %d/%d)", total,
+        expected, nSpawned, (int)nThreads);
+    return Th8_SetResult(interp, zBuf, nBuf);
+}
+
+
+/*
  *----------------------------------------------------------------------
  *
  * th8test_event_delete_race_cmd --
@@ -22206,6 +23522,14 @@ Th8test_Init(Th8_Interp *interp)
     Th8_CreateCommand(
         interp, "::th8testlib::splitlist_probe", th8test_splitlist_probe_cmd,
         0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::normalize_no_callback",
+        th8test_normalize_no_callback_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::output_error_channel",
+        th8test_output_error_channel_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::close_veto", th8test_close_veto_cmd, 0, 0, 0);
 #  if defined(TH8_ENABLE_CRYPTOGRAPHY)
     Th8_CreateCommand(
         interp, "::th8testlib::result_sensitive_tainted",
@@ -22366,6 +23690,21 @@ Th8test_Init(Th8_Interp *interp)
         interp, "::th8testlib::policy_depth_test", th8test_policy_depth_cmd,
         0, 0, 0);
     Th8_CreateCommand(
+        interp, "::th8testlib::signed_reject", th8test_signed_reject_cmd, 0,
+        0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::signed_inherit", th8test_signed_inherit_cmd, 0,
+        0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::rsa_short_key", th8test_rsa_short_key_cmd, 0,
+        0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::verify_trace", th8test_verify_trace_cmd, 0, 0,
+        0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::preload_key", th8test_preload_key_cmd, 0, 0,
+        0);
+    Th8_CreateCommand(
         interp, "::th8testlib::signed_only", th8test_signed_only_cmd, 0, 0,
         0);
 #  endif
@@ -22473,6 +23812,9 @@ Th8test_Init(Th8_Interp *interp)
 
     Th8_CreateCommand(
         interp, "::th8testlib::debug", th8test_debug_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::debug_breakcycle",
+        th8test_debug_breakcycle_cmd, 0, 0, 0);
 
     Th8_CreateCommand(
         interp, "::th8testlib::array_searches", th8test_array_searches_cmd, 0,
@@ -22487,6 +23829,8 @@ Th8test_Init(Th8_Interp *interp)
     Th8_CreateCommand(
         interp, "::th8testlib::event_stress", th8test_event_stress_cmd, 0, 0,
         0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::env_stress", th8test_env_stress_cmd, 0, 0, 0);
     Th8_CreateCommand(
         interp, "::th8testlib::event_delete_race",
         th8test_event_delete_race_cmd, 0, 0, 0);

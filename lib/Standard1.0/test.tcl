@@ -45,7 +45,7 @@ namespace eval ::th8test {
   variable file ""
 
   variable verbose 1
-
+
   #
   # ldifferences --
   #
@@ -53,9 +53,9 @@ namespace eval ::th8test {
   #   a list of two-element sub-lists: elements present in list1
   #   but not list2 are tagged {MISSING <element>}, and elements
   #   present in list2 but not list1 are tagged {EXTRA <element>}.
-  #   Used by the test framework to detect namespace mutations
-  #   (leaked or deleted procedures and variables) after each test
-  #   body executes.
+  #   Used by the test framework to detect resource mutations
+  #   (leaked or deleted procedures and variables, etc) after each
+  #   test body executes.
   #
   proc ldifferences { list1 list2 } {
     set result [list]
@@ -73,6 +73,27 @@ namespace eval ::th8test {
     }
 
     return $result
+  }
+
+  #
+  # normalizeFloat --
+  #
+  #   Return a floating-point VALUE using the trailing-".0" string
+  #   representation that native Tcl and TH8 produce for a whole
+  #   double (e.g. "3.0").  Eagle's managed (.NET) value model
+  #   renders a whole double as a bare integer ("3"), so ONLY under
+  #   Eagle is the value reformatted via [format] to the requested
+  #   number of decimal places.  Under Tcl and TH8 the value is
+  #   returned untouched, so those engines still verify the native
+  #   float rendering the test exists to check; the [format] gate
+  #   applies to Eagle alone.
+  #
+  proc normalizeFloat { value {precision 1} } {
+    if {[isEagle]} then {
+      return [format "%.${precision}f" $value]
+    }
+
+    return $value
   }
 
   #
@@ -595,6 +616,30 @@ namespace eval ::th8test {
   #   packages created during probing are cleaned up afterward.
   #
   proc setupCommonConstraints {} {
+    #
+    # NOTE: The "not_eagle" constraint marks tests whose expected
+    #       result reflects a behavior shared by native Tcl and TH8
+    #       but NOT reproduced by Eagle's managed (.NET) value model
+    #       -- e.g. whole doubles rendering as "X.0", [expr] rejecting
+    #       barewords, [incr]/[dict set] auto-creating a missing
+    #       variable, and the [exec] "<<" here-string stdin redirect.
+    #       These are genuine engine divergences (not TH8-specific
+    #       features), so the test still runs under Tcl and TH8 and
+    #       only skips under Eagle.
+    #
+    testConstraint not_eagle [expr {![isEagle]}]
+
+    #
+    # NOTE: The "breakOptArg" constraint marks tests of the optional
+    #       result-string form of [break] / [continue] -- an Eagle
+    #       compatible extension supported by TH8 and Eagle but NOT by
+    #       native Tcl (whose [break] / [continue] take no arguments).
+    #       Probe it by trapping [break foo]: TH8 and Eagle return the
+    #       break code (3), whereas native Tcl reports a "wrong # args"
+    #       error (1).
+    #
+    testConstraint breakOptArg [expr {[catch {break foo}] == 3}]
+
     testConstraint regsub_nocase [expr {
       [llength [info commands regsub]] > 0 && \
           [catch {regsub -nocase {abc} ABC x _prologue_r}] == 0
@@ -1436,7 +1481,7 @@ namespace eval ::th8test {
     return [lindex $result 3]
   }
 
-  namespace export ldifferences isAdministrator hasSubCommand
+  namespace export ldifferences normalizeFloat isAdministrator hasSubCommand
 
   namespace export initializeTests haveConstraint testConstraint test \
       runTest runAllTests cleanupTests

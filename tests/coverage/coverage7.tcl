@@ -126,7 +126,7 @@ runTest {test coverage7-3.2 {expr very small float} -body {
 ###############################################################################
 
 runTest {test coverage7-3.3 {expr float multiplication} -body {
-    expr {1.5 * 2.0}
+    normalizeFloat [expr {1.5 * 2.0}]
 } -result {3.0}}
 
 ###############################################################################
@@ -138,7 +138,7 @@ runTest {test coverage7-3.4 {expr float division} -body {
 ###############################################################################
 
 runTest {test coverage7-3.5 {expr double() conversion} -body {
-    expr {double(5)}
+    normalizeFloat [expr {double(5)}]
 } -result {5.0}}
 
 ###############################################################################
@@ -156,7 +156,7 @@ runTest {test coverage7-3.7 {expr round()} -body {
 ###############################################################################
 
 runTest {test coverage7-3.8 {expr ceil and floor} -body {
-    list [expr {ceil(2.3)}] [expr {floor(2.7)}]
+    list [normalizeFloat [expr {ceil(2.3)}]] [normalizeFloat [expr {floor(2.7)}]]
 } -result {3.0 2.0}}
 
 ###############################################################################
@@ -375,7 +375,7 @@ runTest {test coverage7-9.1 {expr abs} -body {
 ###############################################################################
 
 runTest {test coverage7-9.2 {expr sqrt and pow} -body {
-    list [expr {sqrt(16.0)}] [expr {pow(2,10)}]
+    list [normalizeFloat [expr {sqrt(16.0)}]] [normalizeFloat [expr {pow(2,10)}]]
 } -result {4.0 1024.0}}
 
 ###############################################################################

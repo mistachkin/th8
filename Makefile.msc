@@ -253,7 +253,7 @@ CRYPTOGRAPHY_LIBS     =
 #
 
 !IFNDEF MIMALLOC_DIR
-MIMALLOC_DIR = externals\mimalloc
+MIMALLOC_DIR = externals\mimalloc\build
 !ENDIF
 
 !IF $(ENABLE_MIMALLOC)
@@ -680,6 +680,15 @@ tommath_vendor:
 !ENDIF
 
 # ----------------------------------------------------------------
+# mimalloc vendoring: repopulate externals\mimalloc\build from the
+# pristine vendor tree with patches overlaid.  mimalloc is linked
+# statically, so its fixes live as tracked patches, never suppressions.
+# ----------------------------------------------------------------
+
+mimalloc_vendor:
+	tclsh tools/mimalloc_vendor.tcl
+
+# ----------------------------------------------------------------
 # Compilation rules.
 # ----------------------------------------------------------------
 
@@ -959,10 +968,36 @@ $(B)\th8_bigint.obj: $(S)\th8_bigint.c $(S)\th8.h $(S)\th8_bigint.h \
 MI_SRC = $(MIMALLOC_DIR)\src
 MI_INC = $(MIMALLOC_DIR)\include
 
+# static.c #includes every other mimalloc translation unit, so the object
+# must depend on those too -- otherwise a vendored PATCH to (e.g.) init.c
+# leaves static.c's mtime untouched and an incremental build silently reuses a
+# stale object WITHOUT the patch (see the GNU Makefile MI_AMAL_* note and Bug
+# 72).  NMAKE has no wildcard function, so enumerate the amalgamation's
+# #include closure explicitly; keep this list in sync with build/src/static.c
+# (and its nested includes) on a mimalloc upgrade.
+MI_AMAL = \
+	$(MI_SRC)\alloc.c $(MI_SRC)\alloc-override.c $(MI_SRC)\free.c \
+	$(MI_SRC)\alloc-aligned.c $(MI_SRC)\alloc-posix.c \
+	$(MI_SRC)\arena.c $(MI_SRC)\arena-meta.c $(MI_SRC)\bitmap.c \
+	$(MI_SRC)\heap.c $(MI_SRC)\init.c $(MI_SRC)\libc.c \
+	$(MI_SRC)\options.c $(MI_SRC)\os.c \
+	$(MI_SRC)\page.c $(MI_SRC)\page-queue.c $(MI_SRC)\page-map.c \
+	$(MI_SRC)\random.c $(MI_SRC)\stats.c $(MI_SRC)\theap.c \
+	$(MI_SRC)\threadlocal.c \
+	$(MI_SRC)\prim\prim.c $(MI_SRC)\prim\windows\prim.c \
+	$(MI_SRC)\prim\osx\prim.c $(MI_SRC)\prim\unix\prim.c \
+	$(MI_SRC)\prim\wasi\prim.c $(MI_SRC)\prim\emscripten\prim.c \
+	$(MI_SRC)\prim\osx\alloc-override-zone.c \
+	$(MI_INC)\mimalloc.h $(MI_INC)\mimalloc-override.h \
+	$(MI_INC)\mimalloc-new-delete.h $(MI_INC)\mimalloc-stats.h \
+	$(MI_INC)\mimalloc\atomic.h $(MI_INC)\mimalloc\bits.h \
+	$(MI_INC)\mimalloc\internal.h $(MI_INC)\mimalloc\prim.h \
+	$(MI_INC)\mimalloc\track.h $(MI_INC)\mimalloc\types.h
+
 # mimalloc's static.c #includes all source files.  Compile with
 # reduced warnings since mimalloc uses MSVC extensions internally.
 # CRT flag must match the main build (/MD for release, /MDd for debug).
-$(MIMALLOC_STATIC_OBJ): $(MI_SRC)\static.c
+$(MIMALLOC_STATIC_OBJ): $(MI_SRC)\static.c $(MI_AMAL)
 	-if not exist "$(B)" mkdir "$(B)"
 # Debug uses the maximal detection level (MI_SECURE=5 encoded/guarded free
 # lists + metadata guard pages, MI_DEBUG=3 per-operation invariant checks,
@@ -1370,7 +1405,7 @@ check-crt:
 # Mirrors the POSIX `audit` target.
 # ----------------------------------------------------------------
 
-audit: check-deps check-headers check-amal
+audit: check-deps check-headers check-amal check-mcdc-doc check-cmdindex
 	tclsh tools\audit_patterns.tcl source
 	tclsh tools\audit_patterns.tcl crt-objects $(B)
 
@@ -1404,6 +1439,24 @@ check-headers:
 #
 check-amal:
 	tclsh tools\check_amal.tcl
+
+#
+# MC/DC waiver-register audit (tools/mkmcdcwaiverdoc.tcl --check).  Requires
+# every declared waiver in tools/data/mcdc_waivers.tsv to be documented in
+# the public register docs/public/mcdc_waivers.md (which is generated from
+# the TSV); fails if the committed register is out of date.  Compiler-free.
+#
+check-mcdc-doc:
+	tclsh tools\mkmcdcwaiverdoc.tcl --check
+
+#
+# Command-index audit (tools/gencmdindex.tcl --check).  Requires Appendix G
+# (the Command Index) of the language standard to stay in sync with the
+# standard's own "#### N.M  command" sections; regenerates the appendix in
+# memory and fails if the embedded copy is out of date.  Compiler-free.
+#
+check-cmdindex:
+	tclsh tools\gencmdindex.tcl --check docs\pending\tcl_language_standard_v1.md
 
 #
 # Requirements-marker audit (tools/mkreq.tcl).  Catches:

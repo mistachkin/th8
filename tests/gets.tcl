@@ -59,7 +59,7 @@ runTest {test gets-1.3 {
 runTest {test gets-1.4 {
   gets: only stdin channel is supported
 } -constraints {
-    gets
+    gets not_eagle
 } -body {
   gets stdout
 } -returnCodes 1 -match glob -result {*stdout*}}
@@ -79,7 +79,7 @@ runTest {test gets-2.1 {
   R-07337-52920: gets reads one line, excluding the newline R-62412-53550:
                  without a variable name, gets returns the line
 } -constraints {
-    gets test_only_exec
+    gets test_only_exec not_eagle
 } -body {
   test_only_exec tests/helpers/gets_novar.tcl \
       << "hello world\n"
@@ -91,7 +91,7 @@ runTest {test gets-2.2 {
   R-12363-41715: with a variable, gets stores the line and returns the
                  character count
 } -constraints {
-    gets test_only_exec
+    gets test_only_exec not_eagle
 } -body {
   test_only_exec tests/helpers/gets_var.tcl \
       << "abc\n"
@@ -102,7 +102,7 @@ runTest {test gets-2.2 {
 runTest {test gets-2.3 {
   R-07337-52920: gets strips trailing newline from the line
 } -constraints {
-    gets test_only_exec
+    gets test_only_exec not_eagle
 } -body {
   test_only_exec tests/helpers/gets_novar.tcl \
       << "hello\n"
@@ -113,7 +113,7 @@ runTest {test gets-2.3 {
 runTest {test gets-2.4 {
   R-62412-53550: gets returns empty string on empty input line
 } -constraints {
-    gets test_only_exec
+    gets test_only_exec not_eagle
 } -body {
   test_only_exec tests/helpers/gets_novar.tcl \
       << "\n"
@@ -142,7 +142,7 @@ runTest {test gets-2.5 {
 runTest {test gets-3.1 {
   R-06032-53760: puts -nonewline suppresses the trailing newline
 } -constraints {
-    puts test_only_exec
+    puts test_only_exec not_eagle
 } -body {
   test_only_exec tests/helpers/puts_nonewline.tcl
 } -result {helloworld}}
@@ -153,7 +153,7 @@ runTest {test gets-3.2 {
   R-24090-61568: puts (without -nonewline) appends newline R-06032-53760:
                  contrast with -nonewline variant
 } -constraints {
-    puts test_only_exec
+    puts test_only_exec not_eagle
 } -body {
   #
   # Two puts without -nonewline produce two lines.

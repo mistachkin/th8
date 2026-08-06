@@ -787,7 +787,7 @@ runTest {test string-19.2 {
 
 runTest {test string-19.3 {
   R-56057-18552: string bytelength returns byte count
-} -body {
+} -constraints {not_eagle} -body {
   string bytelength hello
 } -result {5}}
 
@@ -809,7 +809,7 @@ runTest {test string-19.3.2 {
   character returns the byte count; string length returns
   the code-point count.  Compare against `string length`
   to make the byte-vs-char distinction explicit.
-} -body {
+} -constraints {not_eagle} -body {
   set s "é"
   list [string length $s] [string bytelength $s]
 } -cleanup {

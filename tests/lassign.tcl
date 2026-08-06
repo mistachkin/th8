@@ -57,7 +57,7 @@ runTest {test lassign-1.3 {
 
 runTest {test lassign-1.4 {
   R-61728-16131: no variables (return whole list)
-} -body {
+} -constraints {not_eagle} -body {
   lassign {x y z}
 } -result {x y z}}
 

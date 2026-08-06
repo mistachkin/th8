@@ -43,7 +43,7 @@ runTest {test io_read_stdin-1.1 {
   vector.  No numChars limit so L783 stays at (F,-) and
   L790 stays at (F,-).
 } -constraints {
-    test_only_exec
+    test_only_exec not_eagle
 } -body {
   test_only_exec tests/helpers/read_stdin_all.tcl \
       << "alpha beta gamma"
@@ -56,7 +56,7 @@ runTest {test io_read_stdin-1.2 {
   L783 (T,T) -- per-iter limit reached -- and L790 (T,T)
   -- post-loop truncation.
 } -constraints {
-    test_only_exec
+    test_only_exec not_eagle
 } -body {
   test_only_exec tests/helpers/read_stdin_n.tcl \
       << "hello world\n"
@@ -71,7 +71,7 @@ runTest {test io_read_stdin-1.2b {
   read loop hits EOF before reaching the limit and the
   post-loop truncation is skipped.
 } -constraints {
-    test_only_exec
+    test_only_exec not_eagle
 } -body {
   test_only_exec tests/helpers/read_stdin_n100.tcl \
       << "hi"
@@ -84,7 +84,7 @@ runTest {test io_read_stdin-1.3 {
   '\n', driving L795 (T,T,T) -- bNoNewline AND non-empty
   AND trailing '\n'.
 } -constraints {
-    test_only_exec
+    test_only_exec not_eagle
 } -body {
   test_only_exec tests/helpers/read_stdin_nonewline.tcl \
       << "abc\n"
@@ -98,7 +98,7 @@ runTest {test io_read_stdin-1.3b {
   bNoNewline is T but nAll is 0, so the trailing-newline
   strip is skipped without entering the body.
 } -constraints {
-    test_only_exec
+    test_only_exec not_eagle
 } -body {
   test_only_exec tests/helpers/read_stdin_nonewline.tcl \
       << ""
@@ -114,7 +114,7 @@ runTest {test io_read_stdin-1.3c {
   through and the raw content (without truncation) is
   returned.
 } -constraints {
-    test_only_exec
+    test_only_exec not_eagle
 } -body {
   test_only_exec tests/helpers/read_stdin_nonewline.tcl \
       << "abc"

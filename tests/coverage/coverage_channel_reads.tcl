@@ -31,7 +31,7 @@ runTest {test chanread-1.1 {
   (T, T) MC/DC vector at th8_channel.c L372 (the
   `nLine > 0 && zLine[nLine - 1] == '\n'` strip check).
 } -constraints {
-    file_tempname seek
+    file_tempname seek th8
 } -setup {
 } -body {
   set ch [file tempname 100]
@@ -50,7 +50,7 @@ runTest {test chanread-1.2 {
   Channel read of content ending with \r\n -- drives the
   (T, T) vector at L373 (the `\r` strip).
 } -constraints {
-    file_tempname seek
+    file_tempname seek th8
 } -setup {
 } -body {
   set ch [file tempname 100]

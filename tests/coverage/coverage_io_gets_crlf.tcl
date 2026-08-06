@@ -34,7 +34,7 @@ runTest {test io_gets_crlf-1.1 {
   helper prints the cleaned line; we expect "hello" without
   any trailing CR.
 } -constraints {
-    gets test_only_exec
+    gets test_only_exec not_eagle
 } -body {
   test_only_exec tests/helpers/gets_novar.tcl \
       << "hello\r\n"

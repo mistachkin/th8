@@ -226,17 +226,22 @@ catch_posteval(Th8_Interp *interp, void *pData[], int rc)
  *
  * break_command --
  *
- *	Terminate the innermost loop.
+ *	Terminate the innermost loop, optionally supplying a result.
  *
- *	break
+ *	break ?string?
  *
  * Why / How:
- *	Implements the Tcl [break] command.  Simply returns
- *	TH8_BREAK, which is caught by the enclosing loop command
- *	(while, for, foreach) to terminate iteration.
+ *	Implements the Tcl [break] command.  Returns TH8_BREAK, which
+ *	is caught by the enclosing loop command (while, for, foreach)
+ *	to terminate iteration.  When the optional ?string? argument
+ *	is supplied it becomes the interpreter result; that result is
+ *	visible to a [catch] that traps the break directly.  An
+ *	enclosing loop discards it -- the loop resets the result to
+ *	the empty string on TH8_BREAK -- so the loop itself still
+ *	returns "".  This mirrors Eagle's [break ?string?] extension.
  *
  * Results:
- *	TH8_BREAK.
+ *	TH8_BREAK.  Sets the interpreter result to ?string? when given.
  *
  * Side effects:
  *	None.
@@ -252,8 +257,11 @@ break_command(
     const char **argv,  /* Argument values. */
     size_t *argl)  /* Argument lengths. */
 {
-    if (argc != 1) {
-	return Th8_WrongNumArgs(interp, "break");
+    if (argc > 2) {
+	return Th8_WrongNumArgs(interp, "break ?string?");
+    }
+    if (argc == 2) {
+	Th8_SetResult(interp, argv[1], argl[1]);
     }
     return TH8_BREAK;
 }
@@ -264,17 +272,23 @@ break_command(
  *
  * continue_command --
  *
- *	Skip to the next loop iteration.
+ *	Skip to the next loop iteration, optionally supplying a result.
  *
- *	continue
+ *	continue ?string?
  *
  * Why / How:
- *	Implements the Tcl [continue] command.  Simply returns
- *	TH8_CONTINUE, which is caught by the enclosing loop command
- *	(while, for, foreach) to skip to the next iteration.
+ *	Implements the Tcl [continue] command.  Returns TH8_CONTINUE,
+ *	which is caught by the enclosing loop command (while, for,
+ *	foreach) to skip to the next iteration.  When the optional
+ *	?string? argument is supplied it becomes the interpreter
+ *	result; that result is visible to a [catch] that traps the
+ *	continue directly.  An enclosing loop discards it (the loop
+ *	resets the result to the empty string when it resumes), so it
+ *	does not affect the loop's own value.  This mirrors Eagle's
+ *	[continue ?string?] extension.
  *
  * Results:
- *	TH8_CONTINUE.
+ *	TH8_CONTINUE.  Sets the interpreter result to ?string? when given.
  *
  * Side effects:
  *	None.
@@ -290,8 +304,11 @@ continue_command(
     const char **argv,  /* Argument values. */
     size_t *argl)  /* Argument lengths. */
 {
-    if (argc != 1) {
-	return Th8_WrongNumArgs(interp, "continue");
+    if (argc > 2) {
+	return Th8_WrongNumArgs(interp, "continue ?string?");
+    }
+    if (argc == 2) {
+	Th8_SetResult(interp, argv[1], argl[1]);
     }
     return TH8_CONTINUE;
 }

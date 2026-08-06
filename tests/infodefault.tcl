@@ -89,7 +89,7 @@ runTest {test infodefault-2.1 {
   set msg
 } -cleanup {
   unset -nocomplain msg result
-} -match regexp -result {(not a procedure|isn't a procedure)}}
+} -match regexp -result {(not a procedure|isn't a procedure|invalid command name)}}
 
 ###############################################################################
 
@@ -132,7 +132,7 @@ runTest {test infodefault-3.1 {
 runTest {test infodefault-3.2 {
   R-23634-54601: info default with nproc
 } -constraints {
-    nproc
+    nproc not_eagle
 } -body {
   nproc ::ns::myproc {{x hello}} {}
   info default ::ns::myproc x result

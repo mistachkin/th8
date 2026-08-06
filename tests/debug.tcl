@@ -432,7 +432,11 @@ runTest {test debug-7.3 {
 ###############################################################################
 
 runTest {test debug-7.4 {
-  debug callback with zero overhead when removed
+  R-60983-44621: When no debug callback is installed (xDebug is NULL), the
+                 debug check in Th8_Ready is a no-op (zero overhead beyond a
+                 single pointer comparison).  With the callback removed, step
+                 mode is armed but produces no events and does not perturb
+                 evaluation -- the expression still evaluates normally.
 } -constraints {
     th8
 } -body {
@@ -450,6 +454,26 @@ runTest {test debug-7.4 {
   catch {::th8testlib::debug callback remove}
   unset -nocomplain x y
 } -result {3}}
+
+###############################################################################
+
+runTest {test debug-8.1 {
+  R-54392-24527: When the debug callback returns TH8_BREAK, the interpreter
+                 SHALL be frozen via Th8_Freeze and Th8_Ready SHALL return
+                 TH8_SUSPEND; the suspended NRE callback chain is preserved on
+                 the heap so Th8_Thaw resumes evaluation from the exact point
+                 of suspension.  debug_breakcycle installs the break callback,
+                 plants a breakpoint mid-script, evaluates a four-command
+                 script that hits it, asserts the interpreter suspended
+                 (Th8_Ready == TH8_SUSPEND), then clears the breakpoint, thaws,
+                 and asserts it became ready (Th8_Ready == TH8_OK) AND that the
+                 remaining commands ran (the resumed result is "resumed").
+                 Regression for Bug 73 (freeze-detach NULL-deref).
+} -constraints {
+    loadLib th8
+} -body {
+  ::th8testlib::debug_breakcycle
+} -result {ok}}
 
 ###############################################################################
 

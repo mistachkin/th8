@@ -101,6 +101,7 @@ runAllTests {
   coverage/coverage_expr_bigint_type.tcl
   coverage/coverage_expr_int_min_no_bigint.tcl
   coverage/coverage_expr_logical.tcl
+  coverage/coverage_expr_overflow_mcdc.tcl
   coverage/coverage_expr_partial.tcl
   coverage/coverage_expr_strict.tcl
   coverage/coverage_expr_sweep.tcl
@@ -162,6 +163,8 @@ runAllTests {
   coverage/coverage_lsort_real.tcl
   coverage/coverage_math_mcdc.tcl
   coverage/coverage_math_misc.tcl
+  coverage/coverage_mcdc_drive.tcl
+  coverage/coverage_mcdc_fruit.tcl
   coverage/coverage_namespace.tcl
   coverage/coverage_namespace_empty.tcl
   coverage/coverage_namespace_export.tcl
@@ -189,6 +192,7 @@ runAllTests {
   coverage/coverage_policy_find_key_mcdc.tcl
   coverage/coverage_policy_verify_data_mcdc.tcl
   coverage/coverage_posix_fault.tcl
+  coverage/coverage_posix_fault_errno.tcl
   coverage/coverage_posix_path_mcdc.tcl
   coverage/coverage_proc_args.tcl
   coverage/coverage_proc_lambda.tcl

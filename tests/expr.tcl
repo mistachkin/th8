@@ -325,7 +325,7 @@ runTest {test expr-6.3 {
 runTest {test expr-6.4 {
   R-63118-53739: double conversion
 } -body {
-  expr {double(3)}
+  normalizeFloat [expr {double(3)}]
 } -match regexp -result {^3\.0+$}}
 
 ###############################################################################
@@ -349,7 +349,7 @@ runTest {test expr-6.6 {
 runTest {test expr-6.7 {
   R-63118-53739: sqrt
 } -body {
-  expr {sqrt(16.0)}
+  normalizeFloat [expr {sqrt(16.0)}]
 } -match regexp -result {^4\.0+$}}
 
 ###############################################################################
@@ -381,7 +381,7 @@ runTest {test expr-6.10 {
 runTest {test expr-6.11 {
   R-63118-53739: sin of zero
 } -body {
-  expr {sin(0.0)}
+  normalizeFloat [expr {sin(0.0)}]
 } -match regexp -result {^0\.0+$}}
 
 ###############################################################################
@@ -389,7 +389,7 @@ runTest {test expr-6.11 {
 runTest {test expr-6.12 {
   R-63118-53739: cos of zero
 } -body {
-  expr {cos(0.0)}
+  normalizeFloat [expr {cos(0.0)}]
 } -match regexp -result {^1\.0+$}}
 
 ###############################################################################
@@ -437,7 +437,7 @@ runTest {test expr-7.4 {
 runTest {test expr-8.1 {
   R-58455-48961: large integer multiplication
 } -body {
-  expr {1000000 * 1000000}
+  expr {wide(1000000) * 1000000}
 } -result {1000000000000}}
 
 ###############################################################################
@@ -922,7 +922,7 @@ runTest {test expr-20.6 {
 runTest {test expr-21.1 {
   R-39874-12230: 0b binary literal
 } -body {
-  expr {0b1010}
+  format %d [expr {0b1010}]
 } -result {10}}
 
 ###############################################################################
@@ -930,7 +930,7 @@ runTest {test expr-21.1 {
 runTest {test expr-21.2 {
   R-39874-12230: 0o octal literal
 } -body {
-  expr {0o17}
+  format %d [expr {0o17}]
 } -result {15}}
 
 ###############################################################################
@@ -938,7 +938,7 @@ runTest {test expr-21.2 {
 runTest {test expr-21.3 {
   R-39874-12230: 0b with leading zeros
 } -body {
-  expr {0b00001111}
+  format %d [expr {0b00001111}]
 } -result {15}}
 
 ###############################################################################

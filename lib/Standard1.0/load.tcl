@@ -63,7 +63,12 @@ namespace eval ::th8test {
           break
         }
       }
-    } else {
+    } elseif {![isEagle]} {
+      #
+      # Eagle (managed .NET) cannot [load] the native libtclth8test C
+      # extension, so under Eagle testlib_name stays unset: loadLib is
+      # false and every ::th8testlib:: test skips via its constraint.
+      #
       foreach rootName {libtclth8test tclth8test} {
         foreach extension {.dylib .so .dll} {
           set fileName [file join bin ${rootName}${extension}]

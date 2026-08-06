@@ -508,7 +508,9 @@ runTest {test if-9.12 {
   R-06371-03281: non-numeric, non-keyword bareword is rejected (by the bareword-rejection security envelope before reaching boolean coercion)
 } -setup {
 } -body {
-  list [catch {if {hello} then {set x 1}} msg] [string match {*invalid bareword*} $msg]
+  list [catch {if {hello} then {set x 1}} msg] [expr {
+      [string match {*invalid bareword*} $msg] || \
+          [string match {*variable references require*} $msg]}]
 } -cleanup {
   unset -nocomplain msg x
 } -result {1 1}}

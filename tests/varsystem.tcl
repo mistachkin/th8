@@ -253,7 +253,7 @@ runTest {test varsystem-4.4 {
   unset -- {-dashvar}
   info exists {-dashvar}
 } -cleanup {
-  unset -nocomplain {-dashvar}
+  unset -nocomplain -- {-dashvar}
 } -result {0}}
 
 ###############################################################################

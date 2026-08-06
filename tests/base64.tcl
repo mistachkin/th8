@@ -40,7 +40,7 @@ runTest {test base64-1.2 {
   list [catch {base64 badcmd "x"} msg] $msg
 } -cleanup {
   unset -nocomplain msg
-} -match glob -result {1 {bad subcommand *}}}
+} -match glob -result {1 {bad *}}}
 
 ###############################################################################
 #
@@ -186,7 +186,7 @@ runTest {test base64-3.3 {
 runTest {test base64-3.4 {
   R-10516-34894: base64 decode rejects invalid characters
 } -constraints {
-    base64
+    base64 not_eagle
 } -body {
   list [catch {base64 decode "SGVs!bG8="} msg] $msg
 } -cleanup {

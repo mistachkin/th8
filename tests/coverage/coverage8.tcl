@@ -38,7 +38,7 @@ source tests/prologue.tcl
 runTest {test coverage8-1.4 {
   R-00642-28910: exit clears result
 } -constraints {
-    test_only_exec
+    test_only_exec not_eagle
 } -body {
   # exit is tested via subprocess since it terminates the interp
   catch {
@@ -143,7 +143,7 @@ runTest {test coverage8-3.2 {
 runTest {test coverage8-3.3 {
   R-39874-12230: expr 0b and 0o literals
 } -body {
-  list [expr {0b1010}] [expr {0o17}]
+  list [format %d [expr {0b1010}]] [format %d [expr {0o17}]]
 } -result {10 15}}
 
 ###############################################################################
@@ -216,7 +216,7 @@ runTest {test coverage8-5.2 {
 runTest {test coverage8-5.3 {
   R-18288-38201: gets with variable returns byte count
 } -constraints {
-    gets test_only_exec
+    gets test_only_exec not_eagle
 } -body {
   # Use subprocess to test gets with stdin
   test_only_exec tests/helpers/gets_count.tcl << "hello"
@@ -493,7 +493,7 @@ runTest {test coverage8-11.1 {
 runTest {test coverage8-11.2 {
   R-28652-29370: seek sets file position
 } -constraints {
-    seek tell file_tempname
+    seek tell file_tempname th8
 } -body {
   set ch [file tempname 10]
   puts -nonewline $ch "abcdefghij"
@@ -510,7 +510,7 @@ runTest {test coverage8-11.2 {
 runTest {test coverage8-11.3 {
   R-60631-05666: seek with origin start/current/end
 } -constraints {
-    seek tell file_tempname
+    seek tell file_tempname th8
 } -body {
   set ch [file tempname 10]
   puts -nonewline $ch "0123456789"
@@ -531,7 +531,7 @@ runTest {test coverage8-11.3 {
 runTest {test coverage8-11.4 {
   R-34046-08322: tell returns byte position
 } -constraints {
-    tell file_tempname
+    tell file_tempname th8
 } -body {
   set ch [file tempname 5]
   puts -nonewline $ch "hello"
@@ -554,7 +554,7 @@ runTest {test coverage8-12.1 {
   # Verify a representative set of core math functions
   list [expr {abs(-5)}] \
       [expr {int(3.7)}] \
-      [expr {double(5)}] \
+      [normalizeFloat [expr {double(5)}]] \
       [string is double [expr {sin(1.0)}]] \
       [string is double [expr {cos(1.0)}]]
 } -result {5 3 5.0 1 1}}

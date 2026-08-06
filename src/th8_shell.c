@@ -1418,7 +1418,7 @@ Th8Shell_SetArgv(
  */
 
 void
-Th8Shell_EmitResult(Th8_Interp *interp, int rc)
+Th8Shell_EmitResult(Th8_Interp *interp, int rc, int repl)
 {
     int nOutput = 0;
     size_t nResult = 0;
@@ -1446,6 +1446,10 @@ Th8Shell_EmitResult(Th8_Interp *interp, int rc)
 	nOutput++;
     } else if (TH8_LEN(nResult) > 0) {
 	fwrite(zResult, 1, TH8_LEN(nResult), pFile);
+	nOutput++;
+    } else if (repl) {
+	static const char zEmpty[] = "<empty value>";
+	fwrite(zEmpty, 1, sizeof(zEmpty) - 1, pFile);
 	nOutput++;
     }
     if (nOutput > 0) {
@@ -1610,13 +1614,13 @@ Th8Shell_EvalString(
 
     rc = Th8_EvalTrusted(interp, 0, zScript, nScript, NULL, 0);
     if (rc == TH8_OK) {
-	Th8Shell_EmitResult(interp, rc);
+	Th8Shell_EmitResult(interp, rc, 0);
 	if (pExitCode) {
 	    *pExitCode = Th8_IsExited(interp) ? TH8_EXIT_DEMAND
 	                                      : TH8_EXIT_SUCCESS;
 	}
     } else {
-	Th8Shell_EmitResult(interp, rc);
+	Th8Shell_EmitResult(interp, rc, 0);
 	if (pExitCode) {
 	    *pExitCode = TH8_EXIT_FAILURE;
 	}
@@ -1687,7 +1691,7 @@ Th8Shell_EvalFile(
 
     rc = Th8_EvalFile(interp, zPath, TH8_NOLEN);
     if (rc != TH8_OK) {
-	Th8Shell_EmitResult(interp, rc);
+	Th8Shell_EmitResult(interp, rc, 0);
 	if (pExitCode) {
 	    *pExitCode = TH8_EXIT_FAILURE;
 	}
@@ -1837,7 +1841,7 @@ Th8Shell_RunRepl(
     if (!Th8_DoesEnvExist(interp, "TH8SH_NO_SCRIPT_LIBRARY")) {
 	evalRc = Th8_EvalFile(interp, "lib/th8/init.th8", TH8_NOLEN);
 	if (evalRc != TH8_OK) {
-	    Th8Shell_EmitResult(interp, evalRc);
+	    Th8Shell_EmitResult(interp, evalRc, 1);
 	    exitCode = TH8_EXIT_FAILURE;
 	    goto done;
 	} else if (Th8_IsExited(interp)) {
@@ -1888,7 +1892,7 @@ Th8Shell_RunRepl(
 	TH8SHELL_ADD_HISTORY(zCmd);
 
 	evalRc = Th8_EvalTrusted(interp, 0, zCmd, nCmd, NULL, 0);
-	Th8Shell_EmitResult(interp, evalRc);
+	Th8Shell_EmitResult(interp, evalRc, 1);
 
 #if defined(TH8_BENCHMARKING)
 	{

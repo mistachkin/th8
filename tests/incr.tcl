@@ -139,7 +139,7 @@ runTest {test incr-3.3 {
 
 runTest {test incr-4.1 {
   R-42497-30621: incr creates variable with initial value 0 if nonexistent
-} -setup {
+} -constraints {not_eagle} -setup {
 } -body {
   incr x
   set x
@@ -151,7 +151,7 @@ runTest {test incr-4.1 {
 
 runTest {test incr-4.2 {
   R-42497-30621: incr creates variable with initial value 0 if nonexistent
-} -setup {
+} -constraints {not_eagle} -setup {
 } -body {
   incr x 42
   set x

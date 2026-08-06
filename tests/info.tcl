@@ -210,13 +210,13 @@ runTest {test info-6.1 {
   R-38991-58513: info script returns current source file
 } -body {
   info script
-} -match regexp -result {^(?:tests/info.tcl|tests\\info.tcl)$}}
+} -match regexp -result {(?:^|[/\\])tests[/\\]info\.tcl$}}
 
 ###############################################################################
 
 runTest {test info-6.2 {
   R-51523-46504: info script with arg sets script name
-} -setup {
+} -constraints {not_eagle} -setup {
   set origScript [info script]
 } -body {
   info script "test.tcl"
@@ -401,8 +401,16 @@ runTest {test info-10.2 {
 runTest {test info-10.3 {
   info cmdcount: wrong # args
 } -setup {
+  #
+  # NOTE: Use THREE extra arguments so the invocation is over-arity
+  #       on every engine.  Eagle's [info cmdcount] accepts up to two
+  #       optional arguments (?path? ?type?), so one or two extra
+  #       words parse as a (bad) interpreter path rather than an arity
+  #       error; three words exceed even that and yield "wrong # args"
+  #       everywhere, matching native Tcl / TH8 (arity zero).
+  #
 } -body {
-  list [catch {info cmdcount extra} msg] $msg
+  list [catch {info cmdcount a b c} msg] $msg
 } -cleanup {
   unset -nocomplain msg
 } -match glob -result {1 {wrong # args:*}}}

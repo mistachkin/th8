@@ -30,7 +30,7 @@ runTest {test lremove-1.1 {
 
 runTest {test lremove-1.2 {
   R-05764-04130: remove multiple elements
-} -constraints {lremove} -body {
+} -constraints {lremove th8} -body {
   lremove {a b c d e} 0 4
 } -result {b c d}}
 
@@ -54,7 +54,7 @@ runTest {test lremove-1.4 {
 
 runTest {test lremove-1.5 {
   R-05764-04130: remove from empty list
-} -constraints {lremove} -body {
+} -constraints {lremove th8} -body {
   lremove {} 0
 } -result {}}
 
@@ -62,7 +62,7 @@ runTest {test lremove-1.5 {
 
 runTest {test lremove-1.6 {
   R-64017-07410: no indices (returns original)
-} -constraints {lremove} -body {
+} -constraints {lremove th8} -body {
   lremove {a b c d e}
 } -result {a b c d e}}
 
@@ -81,7 +81,7 @@ runTest {test lremove-2.1 {
 
 runTest {test lremove-3.1 {
   R-12457-39560: out-of-range index silently ignored
-} -constraints {lremove} -body {
+} -constraints {lremove th8} -body {
   lremove {a b c} 10
 } -result {a b c}}
 
@@ -89,7 +89,7 @@ runTest {test lremove-3.1 {
 
 runTest {test lremove-3.2 {
   R-12457-39560: duplicate indices
-} -constraints {lremove} -body {
+} -constraints {lremove th8} -body {
   lremove {a b c d e} 1 1
 } -result {a c d e}}
 
@@ -97,7 +97,7 @@ runTest {test lremove-3.2 {
 
 runTest {test lremove-3.3 {
   R-05764-04130: remove all elements
-} -constraints {lremove} -body {
+} -constraints {lremove th8} -body {
   lremove {a b c} 0 1 2
 } -result {}}
 

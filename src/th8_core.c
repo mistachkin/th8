@@ -15015,10 +15015,40 @@ th8EvalIteration(
     rc = th8SplitCommand(
         interp, pState->zFirst, (size_t)(pState->zInput - pState->zFirst),
         &argv, &argl, &argc, pState->zName, pState->nName);
-    if (rc == TH8_SUSPEND || rc == TH8_YIELD) {
+    if (rc == TH8_SUSPEND) {
 	/*
-	 * Suspension or yield detected during word splitting.
-	 * Propagate -- th8EvalCleanup handles it.
+	 * Freeze detected during word splitting -- a debug breakpoint
+	 * (R-54392) or an async Th8_Freeze -- BEFORE this command was
+	 * dispatched.  This is the boundary Th8_Ready in th8SplitCommand;
+	 * th8SplitCommand allocates no argv on the suspend path, so there
+	 * is nothing to free.  To honor "resume from the exact point of
+	 * suspension", rewind pState to the START of the current command
+	 * (this iteration's top scan already advanced pState->zInput to
+	 * the command's END) and push a fresh th8EvalIteration.  After
+	 * Th8_Thaw re-attaches and drains the suspended chain, iteration
+	 * re-processes this not-yet-run command and everything after it.
+	 * Without the rewind + re-push, only the bottom cleanup callbacks
+	 * survive the suspend-detach, silently dropping every remaining
+	 * command (the deeper half of Bug 73).  The newline preceding the
+	 * command was consumed before zFirst, so the re-scan does not
+	 * re-count it.
+	 */
+
+	pState->nInput += (size_t)(pState->zInput - pState->zFirst);
+	pState->zInput = pState->zFirst;
+	if (Th8_NRAddCallback(interp, th8EvalIteration, pState, 0, 0, 0) !=
+	    TH8_OK) {
+	    /* Push failed: the cleanup callback below us still frees
+	     * pState when the caller drains the chain. */
+	    return TH8_ERROR;
+	}
+	return TH8_SUSPEND;
+    }
+    if (rc == TH8_YIELD) {
+	/*
+	 * Defensive: word splitting itself does not yield (yield is a
+	 * command that suspends from dispatch, where the continuation is
+	 * already on the chain).  Propagate -- th8EvalCleanup handles it.
 	 */
 
 	return rc;
@@ -22917,7 +22947,7 @@ th8EvalCommon(
 	}
 
 	if ((rc == TH8_SUSPEND || rc == TH8_YIELD) &&
-	    ALWAYS(interp->pCallbacks != pBottom)) {
+	    interp->pCallbacks != pBottom) {
 	    /*
 	     * Suspend or yield: detach the remaining callbacks
 	     * from the chain and save them on the interpreter.
@@ -22926,9 +22956,28 @@ th8EvalCommon(
 	     * the coroutine resume (for yield) re-attaches and
 	     * drains them.
 	     *
+	     * The `pCallbacks != pBottom` test is a REAL runtime
+	     * check, NOT an invariant -- do not wrap it in ALWAYS
+	     * (Bug 73).  th8EvalLocal can return TH8_SUSPEND from its
+	     * entry readiness check (PHASE 3) BEFORE pushing any NRE
+	     * callbacks -- e.g. freeze-on-break, or any bSuspended
+	     * pending when a nested eval begins.  In that case nothing
+	     * was pushed above pBottom, so pCallbacks == pBottom and
+	     * there is nothing to detach: skip the block, leaving
+	     * pSuspendedCallbacks untouched (Th8_Thaw then correctly
+	     * finds nothing to resume, since no command ran).  Wrapping
+	     * this in ALWAYS made it a constant-true in the omit build,
+	     * so the block ran with an empty segment, the walk below ran
+	     * off the end of the chain, and the (equally mis-wrapped)
+	     * ALWAYS(pTail->pNext) failed to stop the NULL deref.
+	     *
 	     * We must NULL-terminate the detached chain by
 	     * finding the callback just before pBottom and
-	     * setting its pNext to NULL.
+	     * setting its pNext to NULL.  Here pCallbacks != pBottom
+	     * is established, and by construction the pushed segment is
+	     * a prefix that terminates at pBottom, so pBottom is always
+	     * reachable before NULL -- ALWAYS(pTail->pNext) below is a
+	     * genuine invariant given that guarantee.
 	     */
 
 	    {

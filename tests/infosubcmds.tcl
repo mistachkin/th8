@@ -142,7 +142,7 @@ runTest {test infosubcmds-2.3 {
 runTest {test infosubcmds-3.1 {
   R-05560-54350: info subcommands non-ensemble error
 } -constraints {
-    info_subcommands
+    info_subcommands th8
 } -setup {
 } -body {
   list [catch {info subcommands set} msg] [expr {$msg ne ""}]
@@ -259,7 +259,7 @@ runTest {test infosubcmds-4.6 {
 runTest {test infosubcmds-4.7 {
   R-05560-54350: info subcommands namespace returns expected list
 } -constraints {
-    info_subcommands
+    info_subcommands th8
 } -setup {
 } -body {
   lsort [info subcommands namespace]
@@ -272,7 +272,7 @@ runTest {test infosubcmds-4.7 {
 runTest {test infosubcmds-4.8 {
   R-05560-54350: info subcommands array returns expected list
 } -constraints {
-    info_subcommands
+    info_subcommands th8
 } -setup {
 } -body {
   lsort [info subcommands array]
@@ -300,7 +300,7 @@ runTest {test infosubcmds-4.9 {
 #
 ###############################################################################
 
-runTest {test infosubcmds-4.1 {
+runTest {test infosubcmds-4.10 {
   R-01803-53009: info expansions returns registered operators
 } -constraints {info_expansions} -body {
   set result [info expansions]
@@ -311,7 +311,7 @@ runTest {test infosubcmds-4.1 {
 
 ###############################################################################
 
-runTest {test infosubcmds-4.2 {
+runTest {test infosubcmds-4.11 {
   R-01803-53009: info expansions with glob pattern
 } -constraints {info_expansions} -body {
   info expansions {[*]}
@@ -319,7 +319,7 @@ runTest {test infosubcmds-4.2 {
 
 ###############################################################################
 
-runTest {test infosubcmds-4.3 {
+runTest {test infosubcmds-4.12 {
   R-01803-53009: info expansions no-match pattern returns empty
 } -constraints {info_expansions} -body {
   info expansions {no_such_*}

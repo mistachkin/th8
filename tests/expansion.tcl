@@ -26,7 +26,7 @@ source tests/prologue.tcl
 runTest {test expansion-1.1 {
   R-12647-27646: {*} splits word as list and each element becomes a separate
                  argument
-} -setup {
+} -constraints {not_eagle} -setup {
 } -body {
   set result [list {*}{a b c}]
 } -cleanup {
@@ -37,7 +37,7 @@ runTest {test expansion-1.1 {
 
 runTest {test expansion-1.2 {
   R-12647-27646: {*} with variable expansion
-} -setup {
+} -constraints {not_eagle} -setup {
 } -body {
   set args {hello world}
   set result [list {*}$args]
@@ -49,7 +49,7 @@ runTest {test expansion-1.2 {
 
 runTest {test expansion-1.3 {
   R-12647-27646: multiple {*} expansions in same command
-} -setup {
+} -constraints {not_eagle} -setup {
 } -body {
   set a {1 2}
   set b {3 4}
@@ -62,7 +62,7 @@ runTest {test expansion-1.3 {
 
 runTest {test expansion-1.4 {
   R-49538-15893: expansion of empty value produces zero arguments
-} -setup {
+} -constraints {not_eagle} -setup {
 } -body {
   set result [list {*}{}]
 } -cleanup {
@@ -73,7 +73,7 @@ runTest {test expansion-1.4 {
 
 runTest {test expansion-1.5 {
   R-12647-27646: mixed regular and expanded arguments
-} -setup {
+} -constraints {not_eagle} -setup {
 } -body {
   set result [list before {*}{x y} after]
 } -cleanup {
@@ -95,7 +95,7 @@ runTest {test expansion-1.6 {
 
 runTest {test expansion-1.7 {
   R-12647-27646: {*} with command substitution
-} -setup {
+} -constraints {not_eagle} -setup {
 } -body {
   set result [list {*}[list a b c]]
 } -cleanup {
@@ -106,7 +106,7 @@ runTest {test expansion-1.7 {
 
 runTest {test expansion-1.8 {
   R-12647-27646: {*} with single-element list
-} -setup {
+} -constraints {not_eagle} -setup {
 } -body {
   set result [list {*}{hello}]
 } -cleanup {

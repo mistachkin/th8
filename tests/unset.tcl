@@ -376,7 +376,7 @@ runTest {test unset-7.3 {
 runTest {test unset-7.4 {
   R-58795-26380: unset -- allows var names starting with dash
 } -setup {
-  unset -nocomplain {-myvar}
+  unset -nocomplain -- {-myvar}
 } -body {
   set {-myvar} "dashed"
   unset -- {-myvar}

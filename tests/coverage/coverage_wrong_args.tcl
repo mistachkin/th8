@@ -211,12 +211,13 @@ runTest {test wrongargs-for-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-break-1.1 {
-  R-43802-31448:The break command SHALL raise a
-  "wrong # args" error if invoked with any arguments.
+  R-45025-64498:The break command SHALL raise a
+  "wrong # args" error if invoked with more than one
+  argument.
 } -constraints {
     th8
 } -body {
-  set rc [catch {break extra} m]
+  set rc [catch {break a b} m]
   list $rc [expr {[string length $m] > 0}]
 } -cleanup {
   unset -nocomplain rc m
@@ -306,12 +307,13 @@ runTest {test wrongargs-lreverse-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-continue-1.1 {
-  R-29116-38630:The continue command SHALL raise a
-  "wrong # args" error if invoked with any arguments.
+  R-32518-10683:The continue command SHALL raise a
+  "wrong # args" error if invoked with more than one
+  argument.
 } -constraints {
     th8
 } -body {
-  set rc [catch {continue extra} m]
+  set rc [catch {continue a b} m]
   list $rc [expr {[string length $m] > 0}]
 } -cleanup {
   unset -nocomplain rc m

@@ -413,7 +413,7 @@ void Th8Shell_SetArgv(
  *----------------------------------------------------------------------
  */
 
-void Th8Shell_EmitResult(Th8_Interp *interp, int rc);
+void Th8Shell_EmitResult(Th8_Interp *interp, int rc, int repl);
 
 
 /*

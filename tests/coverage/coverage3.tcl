@@ -312,20 +312,36 @@ runTest {test coverage3-7.1 {
 } -setup {
 } -body {
   #
-  # The string literal below contains a single LATIN SMALL LETTER
-  # E WITH ACUTE (U+00E9), which is encoded as TWO bytes in UTF-8
-  # (0xC3 0xA9).  An implementation that decodes the source as
-  # UTF-8 reports [string length] == 1 (one character).  An
-  # implementation that treats the source as ASCII / Latin-1 /
-  # ISO-8859 would report [string length] == 2 (two bytes).
+  # U+00E9 (é) is TWO bytes in UTF-8 (0xC3 0xA9).  An implementation
+  # that decodes the source as UTF-8 reports [string length] == 1;
+  # one that treats the source as Latin-1 / ISO-8859 reports 2.  The
+  # parallel "abc" assertion guards against an implementation that
+  # returns 1 for every literal regardless of content.
   #
-  # The parallel "abc" assertion guards against an implementation
-  # that returns 1 for every literal regardless of content.
+  # TH8 and native Tcl decode script source as UTF-8 by default, so
+  # the inline literal is a single code point.  Eagle's default
+  # script encoding is (by design) iso-8859-1, so under Eagle the
+  # same U+00E9 byte sequence is re-read from a temporary file with
+  # [source -encoding utf-8] -- exercising Eagle's UTF-8 decoding via
+  # the explicit override.  (An unsigned temp source is fine under
+  # Eagle, which does not enforce signatures; TH8's signed-only
+  # policy is why TH8 uses the inline literal instead.)
   #
-  set s "é"
+  if {[isEagle]} then {
+    set _f _cov3_utf8.tcl
+    set _fd [open $_f w]
+    fconfigure $_fd -encoding binary -translation binary
+    puts -nonewline $_fd [encoding convertto utf-8 [format "set s %c\n" 0xe9]]
+    close $_fd
+    source -encoding utf-8 $_f
+    file delete $_f
+  } else {
+    set s "é"
+  }
   list [string length $s] [string length "abc"]
 } -cleanup {
-  unset -nocomplain s
+  catch {file delete _cov3_utf8.tcl}
+  unset -nocomplain s _f _fd
 } -result {1 3}}
 
 ###############################################################################

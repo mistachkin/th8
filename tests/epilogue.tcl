@@ -33,4 +33,16 @@ testUnloadLib
 
 ###############################################################################
 
+if {[isEagle] && \
+    [info exists eagle_debugger(savedExpressionFlags)]} then {
+  object invoke \
+      -flags +NonPublic -objectflags +AutoFlagsEnum \
+      Interpreter.GetActive expressionFlags \
+      $eagle_debugger(savedExpressionFlags)
+
+  unset -nocomplain eagle_debugger(savedExpressionFlags)
+}
+
+###############################################################################
+
 cleanupTests

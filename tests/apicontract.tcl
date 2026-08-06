@@ -233,4 +233,95 @@ runTest {test apicontract-4.2 {
 
 ###############################################################################
 
+runTest {test apicontract-5.1 {
+  R-63239-00519: Th8_SplitList returns *pazElem and *panElem as pointers into
+                 a SINGLE allocation block -- *panElem is the interior lengths
+                 array laid out immediately after the element pointers
+                 (== &(*pazElem)[nCount]), so only *pazElem (the block start)
+                 is a valid Th8_Free target and *panElem MUST NOT be freed
+                 separately.  splitlist_probe block does a full split, asserts
+                 the exact interior relationship, and reclaims the whole block
+                 with a single free (the debug heap checks would flag a
+                 wrong/partial free).
+} -constraints {
+    loadLib th8
+} -body {
+  ::th8testlib::splitlist_probe block {alpha beta gamma delta}
+} -result {interior}}
+
+###############################################################################
+
+runTest {test apicontract-6.1 {
+  R-10315-21713: If the platform does not provide a path normalization
+                 callback, [file normalize] returns its argument unchanged.
+                 normalize_no_callback runs [file normalize] in a child
+                 interpreter whose xNormalizePath has been cleared, and
+                 confirms the argument is echoed back unchanged.
+} -constraints {
+    loadLib th8
+} -body {
+  set result [::th8testlib::normalize_no_callback]
+  set idx [lsearch -exact $result "unchanged"]
+  lindex $result [expr {$idx + 1}]
+} -cleanup {
+  unset -nocomplain result idx
+} -result {ok}}
+
+###############################################################################
+
+runTest {test apicontract-7.1 {
+  R-64687-40860: Th8_OutputError SHALL query the current error output channel
+                 via xGetErrorOutput before invoking xOutputError, passing that
+                 channel pointer to xOutputError.  output_error_channel installs
+                 a matched callback pair on a child interpreter (xGetErrorOutput
+                 yields a sentinel channel; xOutputError captures the channel it
+                 receives) and confirms the two are the same pointer.
+} -constraints {
+    loadLib th8
+} -body {
+  set result [::th8testlib::output_error_channel]
+  set idx [lsearch -exact $result "channel_passed"]
+  lindex $result [expr {$idx + 1}]
+} -cleanup {
+  unset -nocomplain result idx
+} -result {ok}}
+
+###############################################################################
+
+runTest {test apicontract-8.1 {
+  R-16003-05438: The xCloseTemporaryData platform callback SHALL be called
+                 before explicitly closing a temporary channel; if it returns
+                 non-TH8_OK the close is vetoed and the channel remains open.
+                 close_veto installs a vetoing xCloseTemporaryData on a child
+                 interpreter, creates an in-memory temporary channel via [file
+                 tempname], and confirms [close] is refused with the veto error.
+} -constraints {
+    loadLib th8
+} -body {
+  set result [::th8testlib::close_veto]
+  set idx [lsearch -exact $result "vetoed"]
+  lindex $result [expr {$idx + 1}]
+} -cleanup {
+  unset -nocomplain result idx
+} -result {ok}}
+
+###############################################################################
+
+runTest {test apicontract-9.1 {
+  R-00313-45995: The environment variable backend SHALL serialize all
+                 operations with a file-scope mutex to prevent data races on
+                 concurrent access to the process environment.  env_stress
+                 spawns 8 worker threads, each with its own interpreter, that
+                 concurrently set and unset the SAME ::env key 200 times
+                 (1600 mutex-serialized setenv/unsetenv pairs).  A correct
+                 mutex serializes them so no cycle is lost or corrupted --
+                 the helper returns "ok" only when all 1600 cycles complete.
+} -constraints {
+    loadLib th8
+} -body {
+  ::th8testlib::env_stress 8 200
+} -result {ok}}
+
+###############################################################################
+
 source tests/epilogue.tcl

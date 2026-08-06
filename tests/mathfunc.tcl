@@ -728,7 +728,8 @@ runTest {test mathfunc-10.10 {
   bare word rejection: invalid bareword in expr
 } -body {
   catch {expr {abs(hello)}} msg
-  string match "*invalid bareword*" $msg
+  expr {[string match {*invalid bareword*} $msg] || \
+      [string match {*variable references require*} $msg]}
 } -cleanup {
   unset -nocomplain msg
 } -result {1}}
@@ -750,7 +751,7 @@ runTest {test mathfunc-10.7 {
 runTest {test mathfunc-10.8 {
   nested 2-arg functions: pow(max(2,3), min(4,5))
 } -body {
-  expr {pow(max(2,3), min(4,5))}
+  normalizeFloat [expr {pow(max(2,3), min(4,5))}]
 } -result {81.0}}
 
 ###############################################################################

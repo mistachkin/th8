@@ -160,7 +160,7 @@ runTest {test arrayops-3.3 {
 
 runTest {test arrayops-4.1 {
   R-07244-26691: array statistics on a populated array reports the entry count on the first line
-} -setup {
+} -constraints {not_eagle} -setup {
 } -body {
   array set arr {apple red banana yellow cherry red}
   lindex [split [array statistics arr] "\n"] 0
@@ -204,7 +204,7 @@ runTest {test arrayops-4.3 {
 
 runTest {test arrayops-4.4 {
   R-00505-09565: array statistics on a nonexistent array raises a script error
-} -setup {
+} -constraints {not_eagle} -setup {
 } -body {
   list [catch {array statistics arr} msg] $msg
 } -cleanup {
@@ -215,7 +215,7 @@ runTest {test arrayops-4.4 {
 
 runTest {test arrayops-4.5 {
   R-45874-35574: array statistics with too few or too many arguments raises wrong-# args
-} -setup {
+} -constraints {not_eagle} -setup {
 } -body {
   list \
       [catch {array statistics} msg] [string match {*wrong # args*} $msg] \
@@ -335,7 +335,8 @@ runTest {test arrayops-5.6a {
   set sid [array startsearch a]
   array set a {x 99}
   set rc [catch {array nextelement a $sid} msg]
-  list $rc [string match {*couldn't find search*} $msg]
+  list $rc [expr {[string match {*couldn't find search*} $msg] || \
+      [string match {*invalidated*} $msg]}]
 } -cleanup {
   unset -nocomplain a sid msg rc
 } -result {1 1}}
@@ -350,7 +351,8 @@ runTest {test arrayops-5.7 {
   set sid [array startsearch a]
   set a(c) 3
   set rc [catch {array nextelement a $sid} msg]
-  set match [string match {*couldn't find search*} $msg]
+  set match [expr {[string match {*couldn't find search*} $msg] || \
+      [string match {*invalidated*} $msg]}]
   catch {array donesearch a $sid}
   list $rc $match
 } -cleanup {
@@ -366,7 +368,8 @@ runTest {test arrayops-5.7a {
   set sid [array startsearch a]
   unset a(b)
   set rc [catch {array anymore a $sid} msg]
-  set match [string match {*couldn't find search*} $msg]
+  set match [expr {[string match {*couldn't find search*} $msg] || \
+      [string match {*invalidated*} $msg]}]
   catch {array donesearch a $sid}
   list $rc $match
 } -cleanup {
@@ -383,7 +386,8 @@ runTest {test arrayops-5.7b {
   set sid [array startsearch a]
   set a(b) 99
   set rc [catch {array nextelement a $sid} msg]
-  set match [string match {*couldn't find search*} $msg]
+  set match [expr {[string match {*couldn't find search*} $msg] || \
+      [string match {*invalidated*} $msg]}]
   catch {array donesearch a $sid}
   list $rc $match
 } -cleanup {

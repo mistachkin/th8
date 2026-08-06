@@ -138,7 +138,13 @@ runTest {test mathfunc2-3.1 {
   R-30069-08069: epsilon() returns the IEEE 754 double-precision
   machine epsilon
 } -constraints {mathfunc_epsilon} -body {
-  expr {epsilon()}
+  #
+  # NOTE: [string tolower] normalizes the exponent marker so the
+  #       result matches on every engine: native Tcl / TH8 render
+  #       "...e-16" while Eagle (.NET double formatting) renders
+  #       "...E-16"; lower-casing makes both "...e-16".
+  #
+  string tolower [expr {epsilon()}]
 } -result {2.220446049250313e-16}}
 
 ###############################################################################

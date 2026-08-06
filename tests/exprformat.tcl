@@ -57,7 +57,7 @@ runTest {test exprformat-1.3 {
 runTest {test exprformat-2.1 {
   R-10236-64979: hex literal 0x10 is 16
 } -body {
-  expr {0x10}
+  format %d [expr {0x10}]
 } -result {16}}
 
 ###############################################################################
@@ -65,7 +65,7 @@ runTest {test exprformat-2.1 {
 runTest {test exprformat-2.2 {
   R-10236-64979: hex literal 0xFF is 255
 } -body {
-  expr {0xFF}
+  format %d [expr {0xFF}]
 } -result {255}}
 
 ###############################################################################
@@ -73,7 +73,7 @@ runTest {test exprformat-2.2 {
 runTest {test exprformat-2.3 {
   R-10236-64979: hex literal 0x0 is 0
 } -body {
-  expr {0x0}
+  format %d [expr {0x0}]
 } -result {0}}
 
 ###############################################################################

@@ -30,19 +30,22 @@
 #
 
 .PHONY: all static shared stubs shell static-shell testlib bridge \
-        genstubs audit audit-reqs regex_vendor bestline_vendor tommath_vendor clean install debug memdebug FORCE \
+        genstubs audit audit-reqs regex_vendor bestline_vendor tommath_vendor mimalloc_vendor clean install debug memdebug FORCE \
         th8test tcltest eagletest \
         amalgamation amalgamation-test \
         asan ubsan msan sanitize asan-test asan-test-macos \
         sanitize-test sanitize-test-macos valgrind check-crt check-crt-debug \
         coverage coverage-report coverage-branches coverage-clean \
-        mcdc mcdc-report mcdc-uncovered mcdc-clean \
+        mcdc mcdc-report mcdc-uncovered mcdc-clean check-mcdc check-mcdc-doc \
+        check-cmdindex \
         fuzz-corpus fuzz fuzz-eval fuzz-expr fuzz-list fuzz-harpy \
         fuzz-snk fuzz-format \
         afl-run-all afl-run-eval afl-run-expr afl-run-list \
         afl-run-format afl-run-harpy afl-run-snk \
         afl-status afl-stop \
-        profile-shell profile profile-mimalloc-shell profile-mimalloc
+        profile-shell profile profile-mimalloc-shell profile-mimalloc \
+        check-deps check-headers check-amal check-tcl86 check-eagle \
+        manlint
 
 #
 # Source and build output directories.
@@ -365,7 +368,7 @@ ENABLE_MIMALLOC ?= 1
 
 ifeq ($(ENABLE_MIMALLOC),1)
   MIMALLOC_DEFS    = -DTH8_USE_MIMALLOC
-  MIMALLOC_INC     = -Iexternals/mimalloc/vendor/include
+  MIMALLOC_INC     = -Iexternals/mimalloc/build/include
   MIMALLOC_OBJ     = $(B)th8_mimalloc.o $(B)mimalloc_static.o
   MIMALLOC_OBJ_PIC = $(B)th8_mimalloc.pic.o $(B)mimalloc_static.pic.o
 else
@@ -1433,8 +1436,8 @@ $(B)th8_unbound.pic.o: $(S)th8_unbound.c $(S)th8.h $(S)th8_int.h \
 endif
 
 ifeq ($(ENABLE_MIMALLOC),1)
-MI_SRC = externals/mimalloc/vendor/src
-MI_INC = externals/mimalloc/vendor/include
+MI_SRC = externals/mimalloc/build/src
+MI_INC = externals/mimalloc/build/include
 #
 # mimalloc's static.c includes all source files.  We suppress
 # warnings that conflict with TH8's -pedantic -Wall flags since
@@ -1468,14 +1471,33 @@ MI_CFLAGS = -std=c11 $(MI_MODE_FLAGS) $(MI_TRACK_FLAGS) -DMI_STATIC_LIB \
 	    -Wno-strict-prototypes -Wno-missing-prototypes \
 	    -Wno-old-style-definition
 
+#
+# static.c #includes every other mimalloc translation unit (init.c, prim.c,
+# alloc.c, ...), so the object must ALSO depend on those.  Otherwise a vendored
+# PATCH to, e.g., init.c -- regenerated into build/ by `make mimalloc_vendor`,
+# which preserves mtimes so static.c is NOT bumped -- leaves an incremental
+# build silently reusing a stale object WITHOUT the patch.  (This exact gap hid
+# the Bug 72 thread-done fix until the object was force-removed.)  Enumerate the
+# amalgamation's sources + headers via wildcard: build/ is a generated tree, so
+# a fixed list would drift on a mimalloc upgrade, and check_deps.tcl does not
+# cover this tree -- these deps are the guard.
+#
+MI_AMAL_SRCS = $(wildcard $(MI_SRC)/*.c) $(wildcard $(MI_SRC)/prim/*.c) \
+	$(wildcard $(MI_SRC)/prim/unix/*.c) $(wildcard $(MI_SRC)/prim/osx/*.c) \
+	$(wildcard $(MI_SRC)/prim/windows/*.c) $(wildcard $(MI_SRC)/prim/wasi/*.c) \
+	$(wildcard $(MI_SRC)/prim/emscripten/*.c)
+MI_AMAL_HDRS = $(wildcard $(MI_INC)/*.h) $(wildcard $(MI_INC)/mimalloc/*.h) \
+	$(wildcard $(MI_INC)/mimalloc/prim/*.h)
+
 # NB: depend on Makefile so that changes to MI_CFLAGS / MI_MODE_FLAGS (the
 # mimalloc security/debug level) force a recompile.  Without this, editing the
 # flags and running an incremental build silently reuses a stale object built
 # with the old level -- which produces confusing ABI/assertion mismatches.
-$(B)mimalloc_static.o: $(MI_SRC)/static.c Makefile | $(B)
+# The MI_AMAL_* prerequisites do the same for a vendored source patch.
+$(B)mimalloc_static.o: $(MI_SRC)/static.c $(MI_AMAL_SRCS) $(MI_AMAL_HDRS) Makefile | $(B)
 	$(CC) $(MI_CFLAGS) -c -o $@ $(MI_SRC)/static.c
 
-$(B)mimalloc_static.pic.o: $(MI_SRC)/static.c Makefile | $(B)
+$(B)mimalloc_static.pic.o: $(MI_SRC)/static.c $(MI_AMAL_SRCS) $(MI_AMAL_HDRS) Makefile | $(B)
 	$(CC) $(MI_CFLAGS) -fPIC -c -o $@ $(MI_SRC)/static.c
 
 $(B)th8_mimalloc.o: $(S)th8_mimalloc.c $(S)th8.h $(S)th8_int.h | $(B)
@@ -1755,7 +1777,7 @@ genstubs:
 # line to suppress the check; see the tool header for details.
 #
 
-audit: check-deps check-headers check-amal
+audit: check-deps check-headers check-amal check-mcdc-doc check-cmdindex
 	$(TCLSH) tools/audit_patterns.tcl source
 	$(TCLSH) tools/audit_patterns.tcl crt-objects $(B)
 	$(TCLSH) tools/audit_patterns.tcl format
@@ -1798,7 +1820,90 @@ check-deps:
 check-amal:
 	$(TCLSH) tools/check_amal.tcl
 
-.PHONY: check-deps check-headers check-amal
+#
+# Tcl 8.6 differential-conformance gate.  Runs the full test suite under a
+# stock reference Tcl 8.6 interpreter and requires ZERO failures and ZERO
+# mutations.  The harness is engine-aware: TH8-specific tests auto-skip via
+# their `th8` / feature constraints, so what runs is the "common shared
+# subset" of standard-Tcl semantics.  A failure here means a test asserts a
+# TH8-specific command/behaviour/message WITHOUT a guarding constraint -- it
+# would also fail under Eagle -- so the fix is to add the missing constraint
+# (or universalize the test with a regexp-OR for divergent error wording).
+# This is what proves TH8's expected results encode genuine Tcl-standard
+# behaviour rather than TH8-isms.  Not part of `audit` (it needs an external
+# interpreter and runs the whole suite); intended for CI / pre-release.
+#
+# Override the interpreter if `tclsh8.6` is not on PATH, e.g.:
+#   make check-tcl86 TCLSH86=/opt/homebrew/opt/tcl-tk@8/bin/tclsh
+#
+TCLSH86 ?= tclsh8.6
+check-tcl86:
+	@if ! command -v $(TCLSH86) >/dev/null 2>&1 && [ ! -x "$(TCLSH86)" ]; then \
+	  echo "check-tcl86: SKIP -- reference interpreter '$(TCLSH86)' not found"; \
+	  echo "  (override: make check-tcl86 TCLSH86=/path/to/tclsh8.6)"; \
+	else \
+	  echo "=== RTM conformance gate: applicable tests under $(TCLSH86) ==="; \
+	  printf 'package provide th8sqlite3 1.0\nsource tests/all.tcl\n' \
+	    | $(TCLSH86) > $(B)tcl86.log 2>&1 || true; \
+	  grep -E '(Total|Passed|Failed|Mutated|Skipped):|OVERALL STATUS' \
+	    $(B)tcl86.log | tail -6 || true; \
+	  if ! grep -q 'OVERALL STATUS' $(B)tcl86.log; then \
+	    echo "check-tcl86: FAIL -- suite did not run to completion:"; \
+	    tail -8 $(B)tcl86.log; \
+	    exit 1; \
+	  fi; \
+	  if grep -qE '^==== .* (FAILED|MUTATED)' $(B)tcl86.log; then \
+	    echo ""; \
+	    echo "check-tcl86: FAIL -- these tests run on non-TH8 engines but"; \
+	    echo "  assert TH8-specific behaviour; add a th8/feature constraint"; \
+	    echo "  (or a regexp-OR for divergent error wording).  Offenders:"; \
+	    grep -E '^==== .* (FAILED|MUTATED)' $(B)tcl86.log; \
+	    exit 1; \
+	  fi; \
+	  echo "check-tcl86: OK -- 0 failed / 0 mutated under $(TCLSH86)"; \
+	fi
+
+#
+# check-eagle -- the sibling RTM conformance gate to check-tcl86, but run
+# under Eagle (the .NET/managed Tcl) instead of native Tcl 8.6.  It proves
+# that every test which runs on a non-TH8 engine is either engine-neutral
+# or guarded by a constraint: tests asserting TH8-specific behaviour must
+# skip (via th8/feature constraints), never fail.  Eagle is launched through
+# its POSIX wrapper (EAGLESH, default "eagle.sh" on PATH); the wrapper locates
+# EagleShell.dll from the EAGLE_SHELL / EAGLE env vars (see eagle.sh --help).
+# Override the launcher if it is not on PATH, e.g.:
+#   make check-eagle EAGLESH=/path/to/hdr/thorium/tooling/eagle.sh
+# Eagle has no stdin under -evaluate and ignores script signatures, so the
+# suite is sourced directly with a th8sqlite3 provide-stub (as check-tcl86).
+#
+EAGLESH ?= eagle.sh
+check-eagle:
+	@if ! command -v $(EAGLESH) >/dev/null 2>&1 && [ ! -x "$(EAGLESH)" ]; then \
+	  echo "check-eagle: SKIP -- Eagle launcher '$(EAGLESH)' not found"; \
+	  echo "  (override: make check-eagle EAGLESH=/path/to/eagle.sh;"; \
+	  echo "   the launcher finds EagleShell.dll via EAGLE_SHELL / EAGLE)"; \
+	else \
+	  echo "=== RTM conformance gate: applicable tests under Eagle ==="; \
+	  $(EAGLESH) -evaluate \
+	    'package provide th8sqlite3 1.0; source tests/all.tcl' \
+	    > $(B)eagle.log 2>&1 || true; \
+	  grep -E '(Total|Passed|Failed|Mutated|Skipped):|OVERALL STATUS' \
+	    $(B)eagle.log | tail -6 || true; \
+	  if ! grep -q 'OVERALL STATUS' $(B)eagle.log; then \
+	    echo "check-eagle: FAIL -- suite did not run to completion:"; \
+	    tail -8 $(B)eagle.log; \
+	    exit 1; \
+	  fi; \
+	  if grep -qE '^==== .* (FAILED|MUTATED)' $(B)eagle.log; then \
+	    echo ""; \
+	    echo "check-eagle: FAIL -- these tests run on non-TH8 engines but"; \
+	    echo "  assert TH8-specific behaviour; add a th8/feature constraint"; \
+	    echo "  (or a regexp-OR for divergent error wording).  Offenders:"; \
+	    grep -E '^==== .* (FAILED|MUTATED)' $(B)eagle.log; \
+	    exit 1; \
+	  fi; \
+	  echo "check-eagle: OK -- 0 failed / 0 mutated under Eagle"; \
+	fi
 
 #
 # Formatting check (clang-format).  Kept as a separate target for
@@ -1858,6 +1963,14 @@ bestline_vendor:
 
 tommath_vendor:
 	$(TCLSH) tools/tommath_amalg.tcl bin/
+
+#
+# mimalloc vendoring: repopulate externals/mimalloc/build/ from the
+# pristine vendor/ tree with patches/ overlaid.  mimalloc is linked
+# statically, so its fixes live as tracked patches, never suppressions.
+#
+mimalloc_vendor:
+	$(TCLSH) tools/mimalloc_vendor.tcl
 
 #
 # Spencer regex engine objects.
@@ -1995,8 +2108,6 @@ manlint:
 	else \
 	    echo "manlint: $(MANDOC) not installed, skipping."; \
 	fi
-
-.PHONY: manlint
 
 # ----------------------------------------------------------------
 # Clean.
@@ -2838,3 +2949,42 @@ mcdc-uncovered:
 
 mcdc-clean:
 	rm -f $(MCDC_PROFRAW) $(MCDC_PROFDATA) $(B)*.profraw
+
+#
+# check-mcdc -- the RTM "reachable-denominator" MC/DC gate.  Requires the
+# MC/DC profile (run `make mcdc` first).  Computes covered / (total -
+# waived) against the waiver file and fails on a below-threshold reachable
+# percentage or any stale waiver.  See docs/internal/mcdc_reachable_criterion.md
+# and tools/mcdc_gate.tcl.
+#
+check-mcdc:
+	@tclsh tools/mcdc_gate.tcl \
+	    --profdata $(MCDC_PROFDATA) --bin $(SHELL_BIN) --object $(SHARED_LIB) \
+	    --waivers tools/data/mcdc_waivers.tsv --srcdir $(S)
+
+#
+# check-mcdc-doc -- require every declared MC/DC waiver in
+# tools/data/mcdc_waivers.tsv to be documented in the PUBLIC register
+# docs/public/mcdc_waivers.md.  The register is generated from the TSV by
+# tools/mkmcdcwaiverdoc.tcl; --check regenerates it in memory and fails if
+# the committed file differs (a waiver added/changed/removed without
+# regenerating, a stale entry, or a hand-edit).  A waiver that is not
+# documented is not valid.  Static-file only (no MC/DC profile needed), so
+# this runs as part of the `audit` gate.
+#
+check-mcdc-doc:
+	@tclsh tools/mkmcdcwaiverdoc.tcl --check
+
+#
+# check-cmdindex -- require Appendix G (the Command Index) of the
+# language standard to stay in sync with the standard's own command
+# sections.  Appendix G is generated from the `#### N.M  command`
+# headers by tools/gencmdindex.tcl; --check regenerates it in memory
+# and fails if the embedded appendix differs (a command section
+# added / renamed / removed, or the appendix hand-edited, without
+# regenerating).  Static-file only (no build needed), so this runs as
+# part of the `audit` gate.
+#
+check-cmdindex:
+	@tclsh tools/gencmdindex.tcl --check \
+	    docs/pending/tcl_language_standard_v1.md

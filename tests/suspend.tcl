@@ -238,7 +238,7 @@ runTest {test suspend-5.2 {
   R-07502-38675: interp cancel stops script execution (commands after cancel do
                  not run, TIP #285)
 } -constraints {
-    tip285 test_only_exec
+    tip285 test_only_exec not_eagle
 } -setup {
 } -body {
   #
@@ -260,7 +260,7 @@ runTest {test suspend-5.2 {
 runTest {test suspend-5.3 {
   R-07502-38675: interp cancel with a custom result message (TIP #285)
 } -constraints {
-    tip285 test_only_exec
+    tip285 test_only_exec not_eagle
 } -setup {
 } -body {
   set rc [catch {
@@ -319,7 +319,7 @@ runTest {test suspend-5.6 {
 runTest {test suspend-5.7 {
   TIP #285: interp cancel -unwind with empty path and message
 } -constraints {
-    tip285 test_only_exec
+    tip285 test_only_exec not_eagle
 } -setup {
 } -body {
   set rc [catch {
@@ -342,7 +342,11 @@ runTest {test suspend-5.7 {
 ###############################################################################
 
 runTest {test suspend-6.1 {
-  R-07502-38675: catch intercepts interp cancel (no -unwind)
+  R-07502-38675 R-16309-49714: catch intercepts interp cancel (no -unwind).
+                 At the C-API level this is the NRE trampoline consuming the
+                 non-unwind cancellation flag in a one-shot manner and turning
+                 it into an error, which is exactly what lets the surrounding
+                 catch intercept it here (rc == 1, "eval canceled").
 } -constraints {
     tip285 interp_cancel
 } -setup {
@@ -387,7 +391,7 @@ runTest {test suspend-6.4 {
   R-00559-15113: catch does NOT intercept cancel -unwind (subprocess test --
                  unwind escapes all catches)
 } -constraints {
-    tip285 test_only_exec
+    tip285 test_only_exec not_eagle
 } -setup {
 } -body {
   set rc [catch {
@@ -467,7 +471,7 @@ runTest {test suspend-7.2 {
 runTest {test suspend-7.3 {
   R-64643-23093: exit prevents subsequent commands from running
 } -constraints {
-    test_only_exec
+    test_only_exec not_eagle
 } -setup {
 } -body {
   set rc [catch {

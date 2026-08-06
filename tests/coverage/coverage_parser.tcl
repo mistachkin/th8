@@ -952,7 +952,7 @@ runTest {test parser-mcdc-8.4 {
 
 runTest {test parser-mcdc-9.1 {
   expansion: {*} followed by literal list expands the elements
-} -body {
+} -constraints {not_eagle} -body {
   list a {*}{1 2 3} b
 } -result {a 1 2 3 b}}
 
@@ -960,7 +960,7 @@ runTest {test parser-mcdc-9.1 {
 
 runTest {test parser-mcdc-9.2 {
   expansion: {*} followed by variable substitution
-} -body {
+} -constraints {not_eagle} -body {
   set L {x y z}
   list a {*}$L b
 } -cleanup {
@@ -971,7 +971,7 @@ runTest {test parser-mcdc-9.2 {
 
 runTest {test parser-mcdc-9.3 {
   expansion: {*} of empty list contributes zero arguments
-} -body {
+} -constraints {not_eagle} -body {
   set L {}
   list a {*}$L b
 } -cleanup {
@@ -982,7 +982,7 @@ runTest {test parser-mcdc-9.3 {
 
 runTest {test parser-mcdc-9.4 {
   expansion: {*} followed by command substitution
-} -body {
+} -constraints {not_eagle} -body {
   list a {*}[list 1 2 3] b
 } -result {a 1 2 3 b}}
 

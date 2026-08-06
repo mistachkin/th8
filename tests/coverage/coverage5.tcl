@@ -272,7 +272,7 @@ runTest {test coverage5-2.12 {regexp no match with variables} -constraints {
 #
 ###############################################################################
 
-runTest {test coverage5-3.1 {file dirname /} -body {
+runTest {test coverage5-3.1 {file dirname /} -constraints {not_eagle} -body {
     file dirname /
 } -result {/}}
 

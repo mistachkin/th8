@@ -13,7 +13,7 @@
 
 if {![package vsatisfies [package provide Tcl] 8.4]} then {return}
 if {![package vsatisfies [package provide Eagle] 1.0]} then {return}
-if {[string length [package provide TH8]] > 0} then {return}
+if {[catch {package provide TH8}] == 0} then {return}
 
 package ifneeded th8 1.0 \
     [list source [file join $dir init.th8]]
