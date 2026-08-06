@@ -5590,22 +5590,22 @@ struct Th8_FaultFilter {
 #  define TH8_OSSL_OP_V_DVINIT      10 /* verify: EVP_DigestVerifyInit */
 #  define TH8_OSSL_OP_V_DVUPDATE    11 /* verify: EVP_DigestVerifyUpdate */
 /* --- RSA sign path (th8RsaSign) --- */
-#  define TH8_OSSL_OP_S_BN_N    12 /* sign: BN_bin2bn (modulus) */
-#  define TH8_OSSL_OP_S_BN_E    13 /* sign: BN_new (pub exp) */
-#  define TH8_OSSL_OP_S_BN_D    14 /* sign: BN_bin2bn (priv exp) */
-#  define TH8_OSSL_OP_S_BN_P    15 /* sign: BN_bin2bn (prime1) */
-#  define TH8_OSSL_OP_S_BN_Q    16 /* sign: BN_bin2bn (prime2) */
-#  define TH8_OSSL_OP_S_BLD     17 /* sign: OSSL_PARAM_BLD_new */
-#  define TH8_OSSL_OP_S_PUSH_N  18 /* sign: push_BN N */
-#  define TH8_OSSL_OP_S_PUSH_E  19 /* sign: push_BN E */
-#  define TH8_OSSL_OP_S_PUSH_D  20 /* sign: push_BN D */
-#  define TH8_OSSL_OP_S_PUSH_P  21 /* sign: push_BN FACTOR1 */
-#  define TH8_OSSL_OP_S_PUSH_Q  22 /* sign: push_BN FACTOR2 */
-#  define TH8_OSSL_OP_S_PUSH_DP 23 /* sign: push_BN EXPONENT1 */
-#  define TH8_OSSL_OP_S_PUSH_DQ 24 /* sign: push_BN EXPONENT2 */
-#  define TH8_OSSL_OP_S_PUSH_QI 25 /* sign: push_BN COEFFICIENT */
-#  define TH8_OSSL_OP_S_TOPARAM 26 /* sign: OSSL_PARAM_BLD_to_param */
-#  define TH8_OSSL_OP_S_CTX     27 /* sign: EVP_PKEY_CTX_new_from_name */
+#  define TH8_OSSL_OP_S_BN_N          12 /* sign: BN_bin2bn (modulus) */
+#  define TH8_OSSL_OP_S_BN_E          13 /* sign: BN_new (pub exp) */
+#  define TH8_OSSL_OP_S_BN_D          14 /* sign: BN_bin2bn (priv exp) */
+#  define TH8_OSSL_OP_S_BN_P          15 /* sign: BN_bin2bn (prime1) */
+#  define TH8_OSSL_OP_S_BN_Q          16 /* sign: BN_bin2bn (prime2) */
+#  define TH8_OSSL_OP_S_BLD           17 /* sign: OSSL_PARAM_BLD_new */
+#  define TH8_OSSL_OP_S_PUSH_N        18 /* sign: push_BN N */
+#  define TH8_OSSL_OP_S_PUSH_E        19 /* sign: push_BN E */
+#  define TH8_OSSL_OP_S_PUSH_D        20 /* sign: push_BN D */
+#  define TH8_OSSL_OP_S_PUSH_P        21 /* sign: push_BN FACTOR1 */
+#  define TH8_OSSL_OP_S_PUSH_Q        22 /* sign: push_BN FACTOR2 */
+#  define TH8_OSSL_OP_S_PUSH_DP       23 /* sign: push_BN EXPONENT1 */
+#  define TH8_OSSL_OP_S_PUSH_DQ       24 /* sign: push_BN EXPONENT2 */
+#  define TH8_OSSL_OP_S_PUSH_QI       25 /* sign: push_BN COEFFICIENT */
+#  define TH8_OSSL_OP_S_TOPARAM       26 /* sign: OSSL_PARAM_BLD_to_param */
+#  define TH8_OSSL_OP_S_CTX           27 /* sign: EVP_PKEY_CTX_new_from_name */
 #  define TH8_OSSL_OP_S_FROMDATA_INIT 28 /* sign: EVP_PKEY_fromdata_init */
 #  define TH8_OSSL_OP_S_FROMDATA      29 /* sign: EVP_PKEY_fromdata */
 #  define TH8_OSSL_OP_S_MDCTX         30 /* sign: EVP_MD_CTX_new */
@@ -5625,7 +5625,7 @@ struct Th8_FaultFilter {
 #  define TH8_POSIX_OP_GETDATA_OPEN  0 /* th8PosixGetData: open() */
 #  define TH8_POSIX_OP_GETDATA_FSTAT 1 /* th8PosixGetData: fstat() */
 #  define TH8_POSIX_OP_GETDATA_READ  2 /* th8PosixGetData: read() */
-#  define TH8_POSIX_OP_RANDOM_READ 3 /* th8PosixRandomBytes: read(urandom) */
+#  define TH8_POSIX_OP_RANDOM_READ   3 /* th8PosixRandomBytes: read(urandom) */
 
 typedef struct Th8_FaultConfig Th8_FaultConfig;
 struct Th8_FaultConfig {

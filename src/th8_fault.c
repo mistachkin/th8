@@ -360,15 +360,15 @@ th8FaultShouldFailAlloc(Th8_FaultConfig *pCfg)
 
 #  define PT_V4(name, T1, T2, T3, T4)                                        \
       static void                                                            \
-      pt_##name(Th8_Interp *i, void *c, T1 a1, T2 a2, T3 a3, T4 a4)          \
+	  pt_##name(Th8_Interp *i, void *c, T1 a1, T2 a2, T3 a3, T4 a4)      \
       {                                                                      \
 	  if (REAL(c)->name) REAL(c)->name(i, RCTX(c), a1, a2, a3, a4);      \
       }
 
 /* (interp, pCtx, a1, a2, a3, a4, a5) -> rettype */
 #  define PT_5(name, R, T1, T2, T3, T4, T5)                                  \
-      static R                                                               \
-      pt_##name(Th8_Interp *i, void *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5)   \
+      static R pt_##name(                                                    \
+	  Th8_Interp *i, void *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5)         \
       {                                                                      \
 	  return REAL(c)->name                                               \
 	           ? REAL(c)->name(i, RCTX(c), a1, a2, a3, a4, a5)           \

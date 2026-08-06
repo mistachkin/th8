@@ -30,7 +30,7 @@
 #
 
 .PHONY: all static shared stubs shell static-shell testlib bridge \
-        genstubs audit audit-reqs regex_vendor bestline_vendor tommath_vendor mimalloc_vendor vendoring apt-deps apt-deps-static clean install debug memdebug FORCE \
+        genstubs audit audit-reqs audit-format regex_vendor bestline_vendor tommath_vendor mimalloc_vendor vendoring apt-deps apt-deps-static clean install debug memdebug FORCE \
         th8test tcltest eagletest \
         amalgamation amalgamation-test \
         asan ubsan msan sanitize asan-test asan-test-macos \
@@ -1801,10 +1801,9 @@ genstubs:
 # line to suppress the check; see the tool header for details.
 #
 
-audit: check-deps check-headers check-amal check-mcdc-doc check-cmdindex
+audit: check-deps check-headers check-amal check-mcdc-doc check-cmdindex audit-format
 	$(TCLSH) tools/audit_patterns.tcl source
 	$(TCLSH) tools/audit_patterns.tcl crt-objects $(B)
-	$(TCLSH) tools/audit_patterns.tcl format
 
 #
 # Function-header audit (tools/check_headers.tcl).  Every function
@@ -1935,8 +1934,33 @@ check-eagle:
 # hooks).  Also runs as part of the main `audit` gate above.
 #
 
+# Canonical clang-format major version the tree is formatted to.  clang-format's
+# OUTPUT is not stable across major versions, so the format audit enforces ONLY
+# when the running clang-format matches; any other version (or none installed)
+# WARNS and SKIPS rather than failing the build -- so a build on e.g. stock
+# Ubuntu 24.04 (default clang-format 18, which mis-indents comments) is never
+# blocked.  `make apt-deps` installs clang-format-$(CLANG_FORMAT_VERSION).  To
+# re-baseline onto a different version: reformat with it (`make format` under
+# that clang-format), then bump this number.
+CLANG_FORMAT_VERSION ?= 19
+
 audit-format:
-	$(TCLSH) tools/audit_patterns.tcl format
+	@cfbin="$$CLANG_FORMAT"; \
+	if [ -z "$$cfbin" ]; then \
+	    if command -v clang-format-$(CLANG_FORMAT_VERSION) >/dev/null 2>&1; then \
+	        cfbin=clang-format-$(CLANG_FORMAT_VERSION); \
+	    else \
+	        cfbin=clang-format; \
+	    fi; \
+	fi; \
+	cfver=`command -v "$$cfbin" >/dev/null 2>&1 && "$$cfbin" --version | grep -oE '[0-9]+' | head -1`; \
+	if [ "$$cfver" = "$(CLANG_FORMAT_VERSION)" ]; then \
+	    CLANG_FORMAT="$$cfbin" $(TCLSH) tools/audit_patterns.tcl format; \
+	elif [ -z "$$cfver" ]; then \
+	    echo "audit-format: SKIP -- no clang-format found (canonical: clang-format-$(CLANG_FORMAT_VERSION); run 'make apt-deps')."; \
+	else \
+	    echo "audit-format: SKIP -- clang-format $$cfver found, but the tree is formatted with clang-format $(CLANG_FORMAT_VERSION); install clang-format-$(CLANG_FORMAT_VERSION) to enforce (or set CLANG_FORMAT=)."; \
+	fi
 
 #
 # Requirements-marker audit (tools/mkreq.tcl).
@@ -2018,7 +2042,9 @@ vendoring: regex_vendor tommath_vendor mimalloc_vendor bestline_vendor spilornis
 #   build-essential       gcc + make + libc headers (-lm / -ldl / -lpthread)
 #   pkg-config            locates openssl / unbound (curl via curl-config)
 #   tcl-dev               tclsh8.6 (vendoring + genstubs) + Tcl stubs (bridge/testlib)
-#   clang-format          formats generated stubs in `genstubs` (else a cosmetic warning)
+#   clang-format-N        the canonical clang-format for `make audit-format`
+#                         (N = CLANG_FORMAT_VERSION); also pretty-prints the
+#                         generated stubs in `genstubs`
 #   libssl-dev            OpenSSL   (TH8_ENABLE_CRYPTOGRAPHY)
 #   libcurl4-openssl-dev  libcurl   (TH8_ENABLE_LIBCURL)
 #   libunbound-dev        unbound   (TH8_ENABLE_UNBOUND)
@@ -2028,7 +2054,7 @@ vendoring: regex_vendor tommath_vendor mimalloc_vendor bestline_vendor spilornis
 # (-lz -lnghttp2 -lbrotlidec -lzstd and -levent -lhogweed -lnettle -lgmp).
 #
 SUDO ?= sudo
-APT_DEPS = build-essential pkg-config tcl-dev clang-format \
+APT_DEPS = build-essential pkg-config tcl-dev clang-format-$(CLANG_FORMAT_VERSION) \
            libssl-dev libcurl4-openssl-dev libunbound-dev
 APT_DEPS_STATIC = zlib1g-dev libnghttp2-dev libbrotli-dev libzstd-dev \
                   libevent-dev nettle-dev libgmp-dev

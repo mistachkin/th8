@@ -10,6 +10,17 @@
 #     `tools/format_code.tcl --check` to see what would change before
 #     committing the new ruleset.
 #
+# clang-format version:
+#     clang-format's OUTPUT is not stable across major versions, so the
+#     tree is formatted to ONE canonical version -- CLANG_FORMAT_VERSION in
+#     the Makefile (currently 19) -- and `make audit-format` enforces only
+#     under that version, warning-and-skipping otherwise (so a build on a
+#     host with a different clang-format is never blocked).  `make apt-deps`
+#     installs clang-format-<version>.  To move to a newer clang-format:
+#     reformat the whole tree with it (`make format`), then bump
+#     CLANG_FORMAT_VERSION.  (clang-format 18 in particular mis-indents block
+#     comments with UseTab:ForIndentation -- avoid it as a baseline.)
+#
 # Preservation guarantees:
 #     The defaults below are deliberately conservative about touching
 #     comments, includes, and string literals so that hand-tuned layout

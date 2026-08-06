@@ -140,25 +140,25 @@ typedef int *se_LPBOOL;
  * Constants from SpilornisInt.h.
  */
 
-#define LIBRARY_NAME                "TH8"
-#define LIBRARY_PATCH_LEVEL         "1.0.0.0"
-#define STRINGIFY1(x)               #x
-#define STRINGIFY(x)                STRINGIFY1(x)
-#define SOURCE_ID                   "th8"
-#define SOURCE_TIMESTAMP            "2026"
-#define LIBRARY_UNICODE_NAME        UNICODIFY(LIBRARY_NAME)
-#define LIBRARY_UNICODE_PATCH_LEVEL UNICODIFY(STRINGIFY(LIBRARY_PATCH_LEVEL))
-#define LIBRARY_UNICODE_SOURCE_ID   UNICODIFY(SOURCE_ID)
+#define LIBRARY_NAME                     "TH8"
+#define LIBRARY_PATCH_LEVEL              "1.0.0.0"
+#define STRINGIFY1(x)                    #x
+#define STRINGIFY(x)                     STRINGIFY1(x)
+#define SOURCE_ID                        "th8"
+#define SOURCE_TIMESTAMP                 "2026"
+#define LIBRARY_UNICODE_NAME             UNICODIFY(LIBRARY_NAME)
+#define LIBRARY_UNICODE_PATCH_LEVEL      UNICODIFY(STRINGIFY(LIBRARY_PATCH_LEVEL))
+#define LIBRARY_UNICODE_SOURCE_ID        UNICODIFY(SOURCE_ID)
 #define LIBRARY_UNICODE_SOURCE_TIMESTAMP UNICODIFY(SOURCE_TIMESTAMP)
 #define LIBRARY_MAXIMUM_SIZE_T           ((se_SIZE_T)0x7FFFFFFF)
 #define LIBRARY_RESULT_LENGTH            192
 #define LIBRARY_LOCAL_FLAGS              20
 #define LIBRARY_VAR_BUFFER_LENGTH        20
-#define LIBRARY_TRACE_BUFFER_LENGTH ((se_SIZE_T)(4096 - sizeof(se_DWORD)))
-#define LIBRARY_VERSION_LENGTH      256
-#define LIBRARY_VERSION_FORMAT      "%s v%s [%s %s]"
-#define NO_TRACE_VAR_NAME           "NoTraceSpilornis"
-#define NO_TRACE_UNICODE_VAR_NAME   UNICODIFY(NO_TRACE_VAR_NAME)
+#define LIBRARY_TRACE_BUFFER_LENGTH      ((se_SIZE_T)(4096 - sizeof(se_DWORD)))
+#define LIBRARY_VERSION_LENGTH           256
+#define LIBRARY_VERSION_FORMAT           "%s v%s [%s %s]"
+#define NO_TRACE_VAR_NAME                "NoTraceSpilornis"
+#define NO_TRACE_UNICODE_VAR_NAME        UNICODIFY(NO_TRACE_VAR_NAME)
 #define AllocateMemoryWrapper(size)                                          \
     th8_spilornis_calloc((size), sizeof(se_BYTE))
 #define FreeMemoryWrapper(p) th8_spilornis_free(p)

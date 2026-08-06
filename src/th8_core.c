@@ -14347,9 +14347,8 @@ th8NRCmdDispatch(Th8_Interp *interp, void *pData[], int rc)
 		    if (TH8_SAFE_MUL_SIZE(
 		            sizeof(char *), (size_t)nNew, &u1)) {
 			overflowed = 1;
-		    } else if (
-		        TH8_SAFE_MUL_SIZE(
-		            sizeof(size_t), (size_t)nNew, &u2)) {
+		    } else if (TH8_SAFE_MUL_SIZE(
+		                   sizeof(size_t), (size_t)nNew, &u2)) {
 			overflowed = 1;
 		    } else if (TH8_SAFE_ADD_SIZE(u1, u2, &nUA)) {
 			overflowed = 1;
@@ -21988,8 +21987,8 @@ Th8_Initialize(Th8_Platform *pPlatform) /* Platform (for mutex callbacks). */
  */
 
 int
-Th8_Finalize(
-    Th8_Platform *pPlatform) /* Platform (reserved for future use). */
+Th8_Finalize(Th8_Platform
+                 *pPlatform) /* Platform (reserved for future use). */
 {
     (void)pPlatform;
     if (!Th8_IntCmpXchg(NULL, &th8Initialized, 0, 0)) {
@@ -22064,8 +22063,8 @@ Th8_Finalize(
  */
 
 Th8_Interp *
-Th8_CreateInterp(
-    Th8_Platform *pPlatform) /* Platform abstraction (not owned). */
+Th8_CreateInterp(Th8_Platform
+                     *pPlatform) /* Platform abstraction (not owned). */
 {
     size_t nByte;
     Th8_Interp *p;

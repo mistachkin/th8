@@ -13,6 +13,14 @@ inside a container).  The vendored libraries below marked "Compiled into
 TH8 (no external library)" need no packages — the `make vendoring` target
 regenerates them from `externals/*/vendor/`.
 
+The build's `clang-format` style audit (`make audit-format`, part of `make
+audit`) is pinned to one canonical clang-format major version
+(`CLANG_FORMAT_VERSION` in the Makefile, currently **19**), because
+clang-format's output is not stable across major versions.  `make apt-deps`
+installs `clang-format-19`; the audit **warns and skips** under any other
+version (or none), so a build is never blocked by the clang-format a host
+happens to ship — only the canonical version enforces.
+
 ---
 
 ## 1. C Language Standard
