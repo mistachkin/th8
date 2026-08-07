@@ -576,6 +576,9 @@ namespace eval ::th8test {
   #   if this proc is called more than once.
   #
   proc setupCurlConstraints {} {
+    variable clockNtpProbed
+    variable clockNtpNetwork
+
     if {![haveConstraint libcurl]} then {
       testConstraint libcurl [expr {
         [catch {
@@ -585,6 +588,29 @@ namespace eval ::th8test {
 
       catch {rename helloWorld ""}
     }
+
+    #
+    # clock_ntp_network -- true only when a LIVE NTP exchange actually
+    # succeeds: the [clock ntp] subcommand exists AND a real query to a
+    # public server returns a value.  This is distinct from the
+    # "clock_ntp" subcommand-existence constraint used by offline tests
+    # (e.g. the option-parse cases in coverage_mcdc_fruit): NTP uses
+    # UDP/123, which is commonly blocked in CI sandboxes even where HTTPS
+    # works, so the live-server tests must gate on reachability rather than
+    # on the command merely being compiled in.  Probed exactly once and
+    # cached in a package-level flag (the shared suite interp persists it
+    # across files) so the blocking case does not incur a per-file 3s
+    # timeout on all 265 files.  The `&&` short-circuits, so no network
+    # query is attempted on engines without [clock ntp].
+    #
+    if {![info exists clockNtpProbed]} then {
+      set clockNtpNetwork [expr {
+        [hasSubCommand clock ntp] &&
+        [catch {clock ntp -server pool.ntp.org -timeout 3000}] == 0
+      }]
+      set clockNtpProbed 1
+    }
+    testConstraint clock_ntp_network $clockNtpNetwork
   }
 
   #

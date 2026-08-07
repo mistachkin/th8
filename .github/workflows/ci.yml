@@ -124,6 +124,51 @@ jobs:
           if-no-files-found: ignore
 
   # --------------------------------------------------------------------
+  # Fully-static shell (Linux) -- validates the static-link deliverable
+  # with libcurl statically linked in.  This is a separate job on purpose:
+  # a missing static -dev archive fails only here, never the test suite.
+  #
+  # The policy lives HERE, not in the Makefile: the Makefile defaults
+  # STATIC_ENABLE_LIBCURL off (a plain static build needs no extra
+  # archives), and CI opts in via the make argument + `pkg-deps-static`.
+  # macOS is excluded -- Apple ld rejects -static.
+  # --------------------------------------------------------------------
+  static-shell:
+    name: Static shell (Linux, libcurl)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # pkg-deps-static installs pkg-deps-core PLUS the -dev archives that
+      # libcurl's fully-static link pulls in (see tools/data/packages.tsv).
+      - name: Install deps (pkg-deps-static)
+        run: make pkg-deps-static
+
+      # STATIC_ENABLE_LIBCURL=1 is the CI's choice, not a Makefile default.
+      # `genstubs` is listed explicitly so the generated stub sources exist on
+      # a clean tree (the `all`/`debug` targets run it, but `static-shell`
+      # reaches `shell` directly, which does not).
+      - name: Build fully-static shell (libcurl enabled)
+        run: make -j"$(getconf _NPROCESSORS_ONLN)" ENABLE_TEST_KEY=1 STATIC_ENABLE_LIBCURL=1 clean genstubs static-shell
+
+      - name: Verify the static shell runs
+        run: |
+          file bin-static/th8sh
+          echo 'puts [expr 6*7]' | bin-static/th8sh | grep -q 42
+
+      - name: Upload static shell
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: th8sh-static-linux
+          path: bin-static/th8sh
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # --------------------------------------------------------------------
   # Valgrind run.  Builds the non-static debug shell, then runs
   # tests/all.tcl under `valgrind --leak-check=full --error-exitcode=1`
   # with the project's tools/data/th8.supp suppressions.  Linux-only:

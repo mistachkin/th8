@@ -538,12 +538,45 @@ ifeq ($(PLUGIN_VARIABLES),1)
   PLUGIN_DEFS += -DTH8_PLUGIN_VARIABLES
 endif
 
-CFLAGS_RELEASE = $(CFLAGS_BASE) $(REGEXP_DEFS) $(CURL_DEFS) $(BIGINT_DEFS) $(CRYPTOGRAPHY_DEFS) $(UNBOUND_DEFS) $(EXPR_DEFS) $(LOAD_DEFS) $(VARIABLES_DEFS) $(PLUGIN_DEFS) $(MIMALLOC_DEFS) $(BESTLINE_DEFS) $(TEST_DEFS) $(FAULT_DEFS) $(HARDEN_CFLAGS) -O2 -DTH8_BENCHMARKING -DNDEBUG
-CFLAGS_DEBUG   = $(CFLAGS_BASE) $(REGEXP_DEFS) $(CURL_DEFS) $(BIGINT_DEFS) $(CRYPTOGRAPHY_DEFS) $(UNBOUND_DEFS) $(EXPR_DEFS) $(LOAD_DEFS) $(VARIABLES_DEFS) $(PLUGIN_DEFS) $(MIMALLOC_DEFS) $(BESTLINE_DEFS) $(TEST_DEFS) $(FAULT_DEFS) $(HARDEN_CFLAGS) -g -O0 -DTH8_BENCHMARKING -DTH8_DEBUG -DTH8_HEAP_CHECKS
+# FEATURE_DEFS -- the compile-time feature defines, each gated by its own
+# ENABLE_* variable (above).  Factoring the feature set out here, rather than
+# freezing it into a single CFLAGS string, is what lets a sub-make change the
+# feature set consistently: `static-shell` re-invokes make with ENABLE_LIBCURL=0
+# (and STATIC_BUILD=1 implies ENABLE_UNBOUND=0), and because FEATURE_DEFS is
+# expanded in that sub-make, its curl/unbound defines drop in lock-step with the
+# object lists (CURL_OBJ / UNBOUND_OBJ).  A frozen `CFLAGS=` override would
+# desync the two and leave undefined references (Th8_GetCurlPlatform,
+# th8UnboundResolve, ...).
+FEATURE_DEFS = $(REGEXP_DEFS) $(CURL_DEFS) $(BIGINT_DEFS) $(CRYPTOGRAPHY_DEFS) \
+               $(UNBOUND_DEFS) $(EXPR_DEFS) $(LOAD_DEFS) $(VARIABLES_DEFS) \
+               $(PLUGIN_DEFS) $(MIMALLOC_DEFS) $(BESTLINE_DEFS) $(TEST_DEFS) \
+               $(FAULT_DEFS)
+
+# MODE -- build-mode selector: `release` (default) or `debug`.  Targets that
+# want a debug build set MODE=debug (NOT a hardcoded CFLAGS override), so the
+# ENABLE_*-driven feature set stays authoritative in every sub-make.
+# MODE_CFLAGS carries only the optimization / assertion flags that differ.
+MODE ?= release
+ifeq ($(MODE),debug)
+  MODE_CFLAGS = -g -O0 -DTH8_BENCHMARKING -DTH8_DEBUG -DTH8_HEAP_CHECKS
+else
+  MODE_CFLAGS = -O2 -DTH8_BENCHMARKING -DNDEBUG
+endif
+
+# CFLAGS_RELEASE / CFLAGS_DEBUG remain defined for callers that reference them
+# explicitly (the sanitizer / coverage / MC-DC targets and the -static-pie
+# example below).  Those build `all-non-static` / `shell`, never `static-shell`,
+# so the frozen-string form is harmless there.
+CFLAGS_RELEASE = $(CFLAGS_BASE) $(FEATURE_DEFS) $(HARDEN_CFLAGS) -O2 -DTH8_BENCHMARKING -DNDEBUG
+CFLAGS_DEBUG   = $(CFLAGS_BASE) $(FEATURE_DEFS) $(HARDEN_CFLAGS) -g -O0 -DTH8_BENCHMARKING -DTH8_DEBUG -DTH8_HEAP_CHECKS
 
 EXTRA_CFLAGS  ?=
 EXTRA_LDFLAGS ?=
-CFLAGS  ?= $(CFLAGS_RELEASE) $(EXTRA_CFLAGS)
+
+# Default CFLAGS: recomputed (recursive `?=`) from the ENABLE_*-driven
+# FEATURE_DEFS plus the selected MODE flags, so it stays correct when a sub-make
+# changes ENABLE_* or MODE.  An explicit `make CFLAGS=...` overrides it entirely.
+CFLAGS  ?= $(CFLAGS_BASE) $(FEATURE_DEFS) $(HARDEN_CFLAGS) $(MODE_CFLAGS) $(EXTRA_CFLAGS)
 
 #
 # Common include path: source dir + build dir (for generated header).
@@ -2534,7 +2567,7 @@ fresh:
 # ----------------------------------------------------------------
 
 debug:
-	$(MAKE) CFLAGS="$(CFLAGS_DEBUG)" all
+	$(MAKE) MODE=debug all
 
 # memdebug:  A debug build with the allocation-site memory tracker
 #            (th8_memtrack.c) compiled in via -DTH8_MEM_DEBUG.  Every
@@ -2545,7 +2578,7 @@ debug:
 #            See docs/internal/design_notes_memtrack.md.  Usage:
 #              make ENABLE_TEST_KEY=1 clean memdebug
 memdebug:
-	$(MAKE) CFLAGS="$(CFLAGS_DEBUG) -DTH8_MEM_DEBUG" all
+	$(MAKE) MODE=debug EXTRA_CFLAGS="-DTH8_MEM_DEBUG" all
 
 # ----------------------------------------------------------------
 # Amalgamation.

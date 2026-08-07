@@ -402,7 +402,7 @@ runTest {test coverage8-9.5 {
 
 runTest {test coverage8-10.1 {
   R-14640-47759: clock ntp returns epoch seconds
-} -constraints {clock_ntp} -body {
+} -constraints {clock_ntp_network} -body {
   set t [clock ntp -timeout 5000]
   # Should be a reasonable epoch time (after 2024-01-01)
   expr {$t > 1704067200}

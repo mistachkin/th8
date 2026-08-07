@@ -34,7 +34,7 @@ developed in sustained collaboration with an LLM, and this paper
 describes the methodology, its strengths, and its limitations.
 
 The paper covers TH8's architecture, the Tcl Language Standard v1
-plus its companion specifications (1,140 normative requirements
+plus its companion specifications (1,151 normative requirements
 across the standard, the C API spec, and the language extensions;
 three conformance profiles), the defense-in-depth security model,
 compile-time modularity (16 independently gateable plugins plus
@@ -93,7 +93,7 @@ compatibility.
 This paper makes the following contributions:
 
 1.  **Formal specification.**  The Tcl Language Standard v1
-    (and its companion specifications) carry 1,140 normative
+    (and its companion specifications) carry 1,151 normative
     requirements, three conformance profiles, and an MD5-based
     requirement marking system traceable to tests.
 
@@ -166,14 +166,14 @@ requirement marking system used by the SQLite project, providing
 a stable, content-addressed link between specification text and
 test cases.
 
-As of this writing (July 2026), the standard and its companion
+As of this writing (August 2026), the standard and its companion
 specifications (Tcl Language Standard v1, TH8 Public C API
-Specification, Tcl Language Extensions) contain **1,140
+Specification, Tcl Language Extensions) contain **1,151
 normative requirements** across 41 sections.  The TH8 test
-suite provides coverage for **97.19%** of these requirements
-(1,108 of 1,140) across 2,467 conformance test invocations in
-250 top-level test files under `tests/`, with
-`mkreq.tcl --check-tests` reporting zero orphan markers.  The remaining 32 uncovered requirements
+suite provides coverage for **98.52%** of these requirements
+(1,134 of 1,151) across 2,511 conformance test invocations in
+265 test files under `tests/`, with
+`mkreq.tcl --check-tests` reporting zero orphan markers.  The remaining 17 uncovered requirements
 are concentrated in platform / C-API, crypto / security, and
 debug-API sections that require specialized C-level test
 infrastructure not yet built out.
@@ -1900,9 +1900,9 @@ Two specific lessons emerged:
     static checker is supposed to produce.
 
 A natural meta-finding falls out of the survey that drove this
-case study.  Of TH8's 1,140 R-marker'd normative requirements
-(767 in the language standard, 261 in the language extensions,
-258 in the C API specification), an LLM-assisted survey
+case study.  Of TH8's 1,151 R-marker'd normative requirements
+(834 in the language standard, 260 in the language extensions,
+248 in the C API specification), an LLM-assisted survey
 identified roughly 10 candidate rules that
 might be codifiable into a regex-on-line audit tool.  Of those 10,
 only 4 turned out to be genuinely lexical-static-checkable; the
@@ -1922,14 +1922,14 @@ discipline now lives in a 650-line tcl scanner.
 
 ### 6.17  Case Study: Failure Modes in Synthetic Test Generation
 
-A specification with 1,140 normative requirements is only as
+A specification with 1,151 normative requirements is only as
 strong as the test suite that verifies it.  TH8's authoring
 process tracks coverage with `tools/mkreq.tcl --check-tests`,
 which reports the count of orphan markers (test references
 pointing at no-longer-present standard text) and the count of
 covered markers (markers cited by at least one test).  At the
-2026-07-03 cutoff, that tool reports zero orphans and 1,108 of
-1,140 markers covered (97.19%) -- the residual 32 are
+2026-08-07 cutoff, that tool reports zero orphans and 1,134 of
+1,151 markers covered (98.52%) -- the residual 17 are
 concentrated in C-API and platform requirements that need
 specialized C-level test infrastructure.  The headline metric
 looks healthy.
@@ -2647,8 +2647,8 @@ explicitly:
     and reports any non-empty diff as MUTATED.  No xUnit
     framework offers this out of the box; each leak class
     needs a per-test cleanup discipline that the author
-    writes by hand.  The 2026-06-22 audit reports
-    `MUTATED: 0` across 4,289 tests -- a property xUnit
+    writes by hand.  The 2026-08-07 audit reports
+    `MUTATED: 0` across 4,451 tests -- a property xUnit
     suites generally cannot claim without per-test cleanup
     boilerplate.
 
@@ -3951,9 +3951,9 @@ The lessons generalise past this one macro:
 |--------|-------|
 | C source lines | ~71,000 code lines (amalgamation, excluding comments and blanks) |
 | Source files | 65 (core + plugins + platform + crypto + test) |
-| Normative requirements | 830 (language standard) + 259 (language extensions) + 242 (C API spec) + 13 (internal API spec) = 1,344 raw across all four; 1,140 unique |
-| Test coverage | 2,467 R-marker invocations across 89 top-level files (161 including subdirs); 1,108 covered markers (97.19%); 0 orphans |
-| Test pass rate | 100% (4,280 passed / 0 fail / 9 skipped / 0 mutated as of 2026-07-03) |
+| Normative requirements | 834 (language standard) + 260 (language extensions) + 248 (C API spec) + 13 (internal API spec) = 1,355 raw across all four; 1,151 unique |
+| Test coverage | 2,511 R-marker invocations across 87 top-level files (103 including subdirs); 1,134 covered markers (98.52%); 0 orphans |
+| Test pass rate | 100% (4,445 passed / 0 fail / 6 skipped / 0 mutated as of 2026-08-07) |
 | Conformance profiles | 3 (Core, Standard, Full) |
 | Independently gateable plugins | 16 top-level + crypto + regexp subdir plugins |
 | Compile-time feature gates | 3 core + 14 plugin + 4 optional |
@@ -4177,8 +4177,8 @@ event-loop architecture.
 
 The Tcl Language Standard v1, together with its companion
 specifications (TH8 Public C API Specification, Tcl Language
-Extensions), carries 1,140 normative requirements with 97.19%
-R-marker test coverage and 2,467 conformance test citations.
+Extensions), carries 1,151 normative requirements with 98.52%
+R-marker test coverage and 2,511 conformance test citations.
 The current draft is a **working text**, not a submission-ready
 formal standard: it has the specification discipline needed to
 give embedders confidence that the interpreter behaves as

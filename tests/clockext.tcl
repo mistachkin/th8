@@ -27,7 +27,7 @@ source tests/prologue.tcl
 runTest {test clockext-1.1 {
   R-14640-47759: clock ntp returns a plausible Unix epoch timestamp
 } -constraints {
-    th8 crypto_testlib
+    th8 crypto_testlib clock_ntp_network
 } -body {
   set t [clock ntp -server pool.ntp.org]
   # Must be after 2025-01-01 and before 2100-01-01
@@ -41,7 +41,7 @@ runTest {test clockext-1.1 {
 runTest {test clockext-1.2 {
   R-14640-47759: clock ntp with a custom server returns a timestamp
 } -constraints {
-    th8 crypto_testlib
+    th8 crypto_testlib clock_ntp_network
 } -body {
   set t [clock ntp -server pool.ntp.org -timeout 5000]
   set local [clock seconds]

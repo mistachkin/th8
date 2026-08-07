@@ -103,11 +103,9 @@ that the script *will* be hostile and the embedder *will* care.
 
   * **MC/DC-instrumented coverage** as a first-class concern, not a
     final-mile afterthought.  `make mcdc` produces a per-condition
-    coverage report.  The convention for decomposing compounds so
-    clang can attribute MC/DC is written down in
-    `docs/internal/FINDINGS.md` Finding 005.  As of the 1.0.0
-    release, lib-wide MC/DC sits at roughly **87%** with the
-    long-tail uncovered arms documented by category.
+    coverage report.  As of the 1.0.0 release, lib-wide MC/DC sits
+    at roughly **87%** with the long-tail uncovered arms documented
+    by category.
 
   * **One-binary deployment via Cosmopolitan.**  `make cosmo` builds
     `th8sh.com`, a single Actually Portable Executable that runs on
@@ -170,7 +168,7 @@ source source.tcl
 ## Getting it built
 
 ```
-git clone --recurse-submodules https://github.com/<owner>/th8.git
+git clone --recurse-submodules https://github.com/mistachkin/th8.git
 cd th8
 make fresh           # release: clean build + audit + tests/all.tcl
 make ENABLE_TEST_KEY=1 clean debug   # debug build (for hacking)
@@ -310,8 +308,7 @@ working pattern looked like this:
     "every public function gets a per-function header", "MC/DC must
     measurably move per iteration or the iteration is reverted").
   * Claude executed within those invariants: wrote the code, wrote
-    the tests, kept the bug ledger in `docs/internal/incomplete.md`
-    and the per-iteration analysis in `docs/internal/FINDINGS.md`,
+    the tests, kept the bug ledger and the per-iteration analysis,
     re-ran the suite, signed the scripts, and reported the delta.
   * Joe reviewed, corrected, sometimes reverted, sometimes said
     "yes exactly, keep doing that", and the loop continued.
@@ -323,11 +320,6 @@ The artefacts this style produced are visible in the repository:
     `tools/audit_patterns.tcl` gate works.  It is the single most
     important document for any AI agent (or human) coming to TH8
     fresh.
-  * `docs/internal/FINDINGS.md` (excluded from the public release;
-    kept in the contributor's tree) captures each engineering
-    decision with a *why* and a *how-to-apply*, so the next
-    iteration -- human or agent -- starts with full context rather
-    than reconstructed guesswork.
   * The Tcl conference paper in `docs/public/tcl_conference_paper.md`
     documents the agent/human interaction case studies in detail.
 
