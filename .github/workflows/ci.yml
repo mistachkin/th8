@@ -41,8 +41,15 @@ on:
 
 # Cancel old in-flight PR runs when a new commit lands; never cancel
 # scheduled or push-to-trunk runs.
+#
+# `github.event_name` is part of the group so that different event types on
+# the SAME ref do not serialize against each other.  Without it, a push to
+# `trunk` and the nightly `schedule` run share one group on refs/heads/trunk;
+# because the scheduled run's self-hosted `fuzz-campaign` job can sit queued
+# indefinitely (no runner online), it would block every subsequent push run
+# behind it -- which looks exactly like "CI never runs on push."
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -66,6 +73,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          # externals/mimalloc/vendor and externals/tommath/vendor are git
+          # submodules (see .gitmodules); the build needs their sources
+          # (-DTH8_USE_MIMALLOC, -DTH8_ENABLE_BIGINT), so fetch them here.
+          submodules: recursive
 
       # Install system deps the SAME way an end-user does: `make pkg-deps-core`
       # reads tools/data/packages.tsv (the single source of truth) and drives
@@ -126,6 +138,11 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          # externals/mimalloc/vendor and externals/tommath/vendor are git
+          # submodules (see .gitmodules); the build needs their sources
+          # (-DTH8_USE_MIMALLOC, -DTH8_ENABLE_BIGINT), so fetch them here.
+          submodules: recursive
 
       # End-user install path: core build deps + the analysis toolchain
       # (pkg-deps-test brings in valgrind).  pkg-deps-core links tclsh.
@@ -164,6 +181,11 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          # externals/mimalloc/vendor and externals/tommath/vendor are git
+          # submodules (see .gitmodules); the build needs their sources
+          # (-DTH8_USE_MIMALLOC, -DTH8_ENABLE_BIGINT), so fetch them here.
+          submodules: recursive
 
       # End-user install path: core build deps + the analysis toolchain
       # (pkg-deps-test brings in clang + llvm; pkg-deps-core links tclsh).
@@ -231,6 +253,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          # externals/mimalloc/vendor and externals/tommath/vendor are git
+          # submodules (see .gitmodules); the build needs their sources
+          # (-DTH8_USE_MIMALLOC, -DTH8_ENABLE_BIGINT), so fetch them here.
+          submodules: recursive
 
       # libFuzzer uses clang (from pkg-deps-test); pkg-deps-core links tclsh.
       - name: Install deps (pkg-deps-core + pkg-deps-test)
@@ -287,7 +314,23 @@ jobs:
   # --------------------------------------------------------------------
   fuzz-campaign:
     name: Fuzz campaign (AFL++ rotation)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Only run when a self-hosted fuzz runner is actually configured.  Actions
+    # has no native "is a matching runner online" condition, and listing
+    # self-hosted runners via the API needs an admin PAT (the built-in
+    # GITHUB_TOKEN cannot), so this gates on a repository variable you set once
+    # when you bring the runner up:
+    #
+    #     gh variable set FUZZ_RUNNER_CONFIGURED --body true
+    #
+    # (or Settings -> Secrets and variables -> Actions -> Variables -> New).
+    # Until it is set to "true", the nightly schedule SKIPS this job instead of
+    # queueing one that waits forever for a runner that does not exist -- which
+    # is what previously wedged the trunk push runs behind a stuck scheduled
+    # run (see the concurrency note above).  Unset the variable if the runner
+    # is decommissioned.
+    if: >-
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      && vars.FUZZ_RUNNER_CONFIGURED == 'true'
     runs-on: [self-hosted, linux, fuzz]
     # 26h cap: the default 24h campaign + slack for build / sync /
     # artifact upload.  Override via inputs.fuzz_hours if you bump the
@@ -299,6 +342,11 @@ jobs:
       FUZZ_OUT: ${{ github.workspace }}/build/fuzz_rotate
     steps:
       - uses: actions/checkout@v4
+        with:
+          # externals/mimalloc/vendor and externals/tommath/vendor are git
+          # submodules (see .gitmodules); the build needs their sources
+          # (-DTH8_USE_MIMALLOC, -DTH8_ENABLE_BIGINT), so fetch them here.
+          submodules: recursive
 
       - name: Sanity-check toolchain
         run: |
