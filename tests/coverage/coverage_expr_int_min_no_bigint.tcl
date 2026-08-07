@@ -42,14 +42,15 @@ runTest {test exprmin-1.1 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   set min [expr {-9223372036854775807 - 1}]
   catch {expr {$min / -1}} m
   string match {*overflow*} $m
 } -cleanup {
-  ::th8testlib::bigint enable
-  unset -nocomplain min m
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint min m
 } -result {1}}
 
 ###############################################################################
@@ -62,13 +63,14 @@ runTest {test exprmin-2.1 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   set min [expr {-9223372036854775807 - 1}]
   expr {$min % -1}
 } -cleanup {
-  ::th8testlib::bigint enable
-  unset -nocomplain min
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint min
 } -result {0}}
 
 ###############################################################################
@@ -82,6 +84,7 @@ runTest {test exprmin-2.2 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   set min [expr {-9223372036854775807 - 1}]
@@ -90,8 +93,8 @@ runTest {test exprmin-2.2 {
       [expr {$min % 7}] \
       [expr {$min % -3}]
 } -cleanup {
-  ::th8testlib::bigint enable
-  unset -nocomplain min
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint min
 } -match glob -result {*}}
 
 ###############################################################################
@@ -104,14 +107,15 @@ runTest {test exprmin-3.1 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   set min [expr {-9223372036854775807 - 1}]
   catch {expr {-$min}} m
   string match {*overflow*} $m
 } -cleanup {
-  ::th8testlib::bigint enable
-  unset -nocomplain min m
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint min m
 } -result {1}}
 
 ###############################################################################

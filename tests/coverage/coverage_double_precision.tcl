@@ -241,11 +241,14 @@ runTest {test dblprec-6.1 {
 } -constraints {
     th8 bigint
 } -setup {
+  # save/restore bigint state
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint enable
 } -body {
   list [expr {1e23}] [expr {1.5e2}] [expr {5e-324}]
 } -cleanup {
-  ::th8testlib::bigint disable
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint
 } -result {1e+23 150.0 5e-324}}
 
 ###############################################################################

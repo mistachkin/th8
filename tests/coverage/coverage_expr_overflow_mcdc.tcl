@@ -62,13 +62,14 @@ runTest {test exprovf-1.1 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   catch {expr {4611686018427387904 * -3}} m
   string match {*overflow*} $m
 } -cleanup {
-  ::th8testlib::bigint enable
-  unset -nocomplain m
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint m
 } -result {1}}
 
 ###############################################################################
@@ -81,11 +82,13 @@ runTest {test exprovf-1.2 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   expr {1000000 * -3}
 } -cleanup {
-  ::th8testlib::bigint enable
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint
 } -result {-3000000}}
 
 ###############################################################################
@@ -97,13 +100,14 @@ runTest {test exprovf-1.3 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   catch {expr {-4611686018427387904 * 3}} m
   string match {*overflow*} $m
 } -cleanup {
-  ::th8testlib::bigint enable
-  unset -nocomplain m
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint m
 } -result {1}}
 
 ###############################################################################
@@ -115,11 +119,13 @@ runTest {test exprovf-1.4 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   expr {-1000000 * 3}
 } -cleanup {
-  ::th8testlib::bigint enable
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint
 } -result {-3000000}}
 
 ###############################################################################
@@ -132,11 +138,13 @@ runTest {test exprovf-1.5 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   expr {-1000 * -1000}
 } -cleanup {
-  ::th8testlib::bigint enable
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint
 } -result {1000000}}
 
 ###############################################################################
@@ -149,13 +157,14 @@ runTest {test exprovf-2.1 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   set min [expr {-9223372036854775807 - 1}]
   list [expr {$min / 2}] [expr {$min / 4}]
 } -cleanup {
-  ::th8testlib::bigint enable
-  unset -nocomplain min
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint min
 } -result {-4611686018427387904 -2305843009213693952}}
 
 ###############################################################################
@@ -169,11 +178,13 @@ runTest {test exprovf-2.2 {
 } -constraints {
     th8
 } -setup {
+  set savedOverflow [::th8testlib::overflow_check query]
   ::th8testlib::overflow_check disable
 } -body {
   expr {12 / -4}
 } -cleanup {
-  ::th8testlib::overflow_check enable
+  if {$savedOverflow} then { ::th8testlib::overflow_check enable } else { ::th8testlib::overflow_check disable }
+  unset -nocomplain savedOverflow
 } -result {-3}}
 
 ###############################################################################
@@ -186,11 +197,13 @@ runTest {test exprovf-3.1 {
 } -constraints {
     th8
 } -setup {
+  set savedOverflow [::th8testlib::overflow_check query]
   ::th8testlib::overflow_check disable
 } -body {
   expr {2 ** 10}
 } -cleanup {
-  ::th8testlib::overflow_check enable
+  if {$savedOverflow} then { ::th8testlib::overflow_check enable } else { ::th8testlib::overflow_check disable }
+  unset -nocomplain savedOverflow
 } -result {1024}}
 
 ###############################################################################
@@ -202,6 +215,7 @@ runTest {test exprovf-3.2 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   list \
@@ -210,8 +224,8 @@ runTest {test exprovf-3.2 {
       [string match {*overflow*} $a] \
       [string match {*overflow*} $b]
 } -cleanup {
-  ::th8testlib::bigint enable
-  unset -nocomplain a b
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint a b
 } -result {1 1 1 1}}
 
 ###############################################################################
@@ -225,6 +239,7 @@ runTest {test exprovf-3.3 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   list \
@@ -235,8 +250,8 @@ runTest {test exprovf-3.3 {
       [string match {*overflow*} $b] \
       [string match {*overflow*} $c]
 } -cleanup {
-  ::th8testlib::bigint enable
-  unset -nocomplain a b c
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint a b c
 } -result {1 1 1 1 1 1}}
 
 ###############################################################################
@@ -249,6 +264,7 @@ runTest {test exprovf-3.4 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   list \
@@ -257,8 +273,8 @@ runTest {test exprovf-3.4 {
       [string match {*overflow*} $a] \
       [string match {*overflow*} $b]
 } -cleanup {
-  ::th8testlib::bigint enable
-  unset -nocomplain a b
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint a b
 } -result {1 1 1 1}}
 
 ###############################################################################

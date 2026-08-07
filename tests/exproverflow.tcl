@@ -33,6 +33,7 @@ runTest {test exproverflow-1.1 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   set max 9223372036854775807
@@ -42,8 +43,8 @@ runTest {test exproverflow-1.1 {
   lappend r [catch {expr {2 ** 100}} m] [string match *overflow* $m]
   set r
 } -cleanup {
-  ::th8testlib::bigint enable
-  unset -nocomplain max r m
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint max r m
 } -result {1 1 1 1 1 1}}
 
 ###############################################################################

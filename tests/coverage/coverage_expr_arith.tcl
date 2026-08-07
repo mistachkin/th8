@@ -372,6 +372,7 @@ runTest {test exprarith-3.16 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   set rcs {}
@@ -379,8 +380,8 @@ runTest {test exprarith-3.16 {
   lappend rcs [expr {1 << 64}]
   set rcs
 } -cleanup {
-  catch {::th8testlib::bigint enable}
-  unset -nocomplain rcs
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint rcs
 } -result {68719476736 1}}
 
 ###############################################################################
@@ -416,6 +417,7 @@ runTest {test exprarith-3.18 {
 } -constraints {
     th8 bigint_toggle
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   set rcs {}
@@ -424,8 +426,8 @@ runTest {test exprarith-3.18 {
   lappend rcs [catch {expr {99 ** 10}} m]
   set rcs
 } -cleanup {
-  catch {::th8testlib::bigint enable}
-  unset -nocomplain rcs m
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint rcs m
 } -result {1 1 1}}
 
 ###############################################################################
@@ -832,6 +834,7 @@ runTest {test exprarith-5.3 {
 } -constraints {
     th8
 } -setup {
+  set savedOverflow [::th8testlib::overflow_check query]
   ::th8testlib::overflow_check disable
 } -body {
   list \
@@ -840,7 +843,8 @@ runTest {test exprarith-5.3 {
       [expr {7 ** 4}] \
       [expr {10 ** 10}]
 } -cleanup {
-  ::th8testlib::overflow_check enable
+  if {$savedOverflow} then { ::th8testlib::overflow_check enable } else { ::th8testlib::overflow_check disable }
+  unset -nocomplain savedOverflow
 } -result {1073741824 243 2401 10000000000}}
 
 ###############################################################################
@@ -855,6 +859,7 @@ runTest {test exprarith-5.4 {
 } -constraints {
     th8
 } -setup {
+  set savedOverflow [::th8testlib::overflow_check query]
   ::th8testlib::overflow_check disable
 } -body {
   list \
@@ -865,7 +870,8 @@ runTest {test exprarith-5.4 {
       [expr {-50 + -50}] \
       [expr {-100 - -50}]
 } -cleanup {
-  ::th8testlib::overflow_check enable
+  if {$savedOverflow} then { ::th8testlib::overflow_check enable } else { ::th8testlib::overflow_check disable }
+  unset -nocomplain savedOverflow
 } -result {6 300 400 1000000 -100 -50}}
 
 ###############################################################################
@@ -995,6 +1001,8 @@ runTest {test exprarith-5.10 {
   F (overflow check disabled).
 } -constraints {
     th8
+} -setup {
+  set savedOverflow [::th8testlib::overflow_check query]
 } -body {
   set rcs {}
   lappend rcs [expr {-9223372036854775808 / -1}]
@@ -1005,8 +1013,8 @@ runTest {test exprarith-5.10 {
   ::th8testlib::overflow_check enable
   set rcs
 } -cleanup {
-  ::th8testlib::overflow_check enable
-  unset -nocomplain rcs
+  if {$savedOverflow} then { ::th8testlib::overflow_check enable } else { ::th8testlib::overflow_check disable }
+  unset -nocomplain savedOverflow rcs
 } -result {9223372036854775808 4611686018427387904 -4611686018427387904 9223372036854775808}}
 
 ###############################################################################

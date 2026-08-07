@@ -55,6 +55,7 @@ runTest {test mathmisc-2.1 {
 } -constraints {
     th8 bigint
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   set rcs {}
@@ -63,8 +64,8 @@ runTest {test mathmisc-2.1 {
   lappend rcs [catch {expr {abs(3.14)}} m]
   set rcs
 } -cleanup {
-  ::th8testlib::bigint enable
-  unset -nocomplain rcs m
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint rcs m
 } -result {0 0 0}}
 
 ###############################################################################
@@ -216,6 +217,7 @@ runTest {test mathmisc-max-min-nobigint-1.1 {
 } -constraints {
     th8 bigint
 } -setup {
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   set rcs {}
@@ -223,8 +225,8 @@ runTest {test mathmisc-max-min-nobigint-1.1 {
   lappend rcs [expr {min(1.5, 2.5)}]
   set rcs
 } -cleanup {
-  ::th8testlib::bigint enable
-  unset -nocomplain rcs
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint rcs
 } -result {2.5 1.5}}
 
 ###############################################################################

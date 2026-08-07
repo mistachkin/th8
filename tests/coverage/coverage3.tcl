@@ -363,13 +363,15 @@ runTest {test coverage3-8.1 {
   # would silently promote to arbitrary precision and the
   # overflow error would never fire -- making the test
   # unobservable in the build's default configuration.
-  # Cleanup re-enables bigint regardless of body outcome.
+  # Cleanup restores the prior bigint state regardless of body outcome.
   #
+  set savedBigint [::th8testlib::bigint query]
   ::th8testlib::bigint disable
 } -body {
   catch {expr {0x7FFFFFFFFFFFFFFF * 2}}
 } -cleanup {
-  catch {::th8testlib::bigint enable}
+  if {$savedBigint} then { ::th8testlib::bigint enable } else { ::th8testlib::bigint disable }
+  unset -nocomplain savedBigint
 } -result {1}}
 
 ###############################################################################
