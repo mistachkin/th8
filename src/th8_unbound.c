@@ -395,10 +395,11 @@ th8UnboundResolve(
     /* Trust-anchor selection.  See the function-level comment
      * above for the search-order rationale. */
     {
+	int bHaveTa = 0;
 	char *zEnv = Th8_GetEnv(interp, "TH8_DNS_ROOT_KEY");
 	if (zEnv && *zEnv) {
 	    /* Operator override: static-only, embedder owns lifecycle. */
-	    (void)(ub_ctx_add_ta_file(ubctx, zEnv) == 0);
+	    bHaveTa = (ub_ctx_add_ta_file(ubctx, zEnv) == 0);
 	    Th8_Free(interp, zEnv);
 	} else {
 	    char zSrc[4096];
@@ -408,12 +409,28 @@ th8UnboundResolve(
 	     * `zSrc` so a first-run bootstrap has a source to copy
 	     * from; later runs ignore it (the managed copy already
 	     * exists). */
-	    if (!th8UnboundSetupManagedAnchor(
-	            ubctx, pOps, bHaveSrc ? zSrc : NULL) &&
-	        bHaveSrc) {
+	    bHaveTa = th8UnboundSetupManagedAnchor(
+	        ubctx, pOps, bHaveSrc ? zSrc : NULL);
+	    if (!bHaveTa && bHaveSrc) {
 		/* Managed-mode setup failed but we have a static
 		 * source -- fall back to static-only mode. */
-		(void)(ub_ctx_add_ta_file(ubctx, zSrc) == 0);
+		bHaveTa = (ub_ctx_add_ta_file(ubctx, zSrc) == 0);
+	    }
+	}
+
+	/* Mode (d): no trust anchor could be configured on this host (no
+	 * TH8_DNS_ROOT_KEY, no managed copy, no readable system root.key).
+	 * Disable the validator module so libunbound performs INSECURE
+	 * resolution (bogus always reads 0) instead of initializing the
+	 * validator against its compiled-in default trust-anchor path -- which
+	 * fails when that path (e.g. /etc/unbound/root.key) does not exist,
+	 * aborts the resolve, AND spews the failure to stderr despite
+	 * ub_ctx_debugout(NULL) because it is a module-init (not query) error.
+	 * The harden pass set module-config to "validator iterator"; override
+	 * it to "iterator" here so the validator never initializes. */
+	if (!bHaveTa) {
+	    if (ub_ctx_set_option(ubctx, "module-config:", "iterator") != 0) {
+		TH8_TRACE_ERR(NULL, "module-config:");
 	    }
 	}
     }
