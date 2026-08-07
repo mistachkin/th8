@@ -1246,6 +1246,112 @@ namespace eval ::th8test {
   }
 
   #
+  # getEnvironmentVariable --
+  #
+  #   Return the value of environment variable $name, or "" when it is
+  #   unset.  Abstracts the engine difference: TH8 does not auto-link the
+  #   ::env array the way Tcl and Eagle do, so under TH8 the value is read
+  #   through the testlib's dedicated env command (::th8testlib::env_kv,
+  #   available once detectLoadLib has run); under Tcl/Eagle the ::env
+  #   array is used.  When neither is available (e.g. a bare TH8 shell
+  #   without the testlib loaded) the empty string is returned.
+  #
+  proc getEnvironmentVariable { name } {
+    if {[isTh8]} then {
+      if {[llength [info commands ::th8testlib::env_kv]] > 0 && \
+          [::th8testlib::env_kv exists $name]} then {
+        set value [::th8testlib::env_kv get $name]
+      } else {
+        set value ""
+      }
+    } else {
+      if {[info exists ::env($name)]} then {
+        set value $::env($name)
+      } else {
+        set value ""
+      }
+    }
+
+    return $value
+  }
+
+  #
+  # selectionPatterns --
+  #
+  #   Return the whitespace-separated glob-pattern list held by the named
+  #   environment variable, or the empty list when it is unset or blank.
+  #   The four variables TH8_TEST_MATCH / TH8_TEST_SKIP / TH8_TEST_FILE /
+  #   TH8_TEST_NOTFILE are the env-driven equivalents of tcltest's
+  #   `configure -match / -skip / -file / -notFile` selection options:
+  #   -match/-skip filter by TEST NAME (isTestSelected, via runTest) and
+  #   -file/-notFile filter by TEST FILE NAME (isFileSelected, via
+  #   runAllTests).
+  #
+  proc selectionPatterns { name } {
+    set value [string trim [getEnvironmentVariable $name]]
+
+    if {[string length $value] > 0} then {
+      return $value
+    }
+
+    return [list]
+  }
+
+  #
+  # isSelected --
+  #
+  #   Apply an include/exclude glob-pattern pair (read from the two named
+  #   env vars) to a candidate string -- a test name or a test file name.
+  #   Returns 1 (selected) when the candidate matches at least one include
+  #   pattern, OR the include list is empty (meaning "all"), AND matches
+  #   no exclude pattern; 0 otherwise.  The shared core of isTestSelected
+  #   and isFileSelected.
+  #
+  proc isSelected { candidate includeVar excludeVar } {
+    set include [selectionPatterns $includeVar]
+
+    if {[llength $include] > 0} then {
+      set matched 0
+
+      foreach pattern $include {
+        if {[string match $pattern $candidate]} then {
+          set matched 1; break
+        }
+      }
+
+      if {!$matched} then { return 0 }
+    }
+
+    foreach pattern [selectionPatterns $excludeVar] {
+      if {[string match $pattern $candidate]} then { return 0 }
+    }
+
+    return 1
+  }
+
+  #
+  # isTestSelected --
+  #
+  #   Return 1 if a test named $name should run under the env-driven
+  #   tcltest-style -match / -skip filters (TH8_TEST_MATCH /
+  #   TH8_TEST_SKIP), 0 if it is filtered out.  Called by runTest.
+  #
+  proc isTestSelected { name } {
+    return [isSelected $name TH8_TEST_MATCH TH8_TEST_SKIP]
+  }
+
+  #
+  # isFileSelected --
+  #
+  #   Return 1 if a test file named $fileName should run under the
+  #   env-driven tcltest-style -file / -notFile filters (TH8_TEST_FILE /
+  #   TH8_TEST_NOTFILE), 0 if it is filtered out.  Called by runAllTests.
+  #
+  proc isFileSelected { fileName } {
+    return [isSelected $fileName TH8_TEST_FILE TH8_TEST_NOTFILE]
+  }
+
+  #
   # runTest --
   #
   #   Wrapper that evaluates a test definition script in the
@@ -1261,6 +1367,18 @@ namespace eval ::th8test {
 
     if {![info exists file] || [string length $file] == 0} then {
       set file [info script]
+    }
+
+    rename test __savedTest
+    proc test { name args } { return $name }
+
+    set name [namespace eval [namespace current] $script]
+
+    rename test ""
+    rename __savedTest test
+
+    if {![isTestSelected $name]} then {
+      return ""
     }
 
     return [uplevel 1 $script]
@@ -1311,6 +1429,10 @@ namespace eval ::th8test {
     set totalSkipped 0
 
     foreach fileName $fileNames {
+      if {![isFileSelected $fileName]} then {
+        continue
+      }
+
       set path [file join tests $fileName]
 
       set total 0

@@ -99,8 +99,8 @@ under `externals/tommath/build/` by `make tommath_vendor`).
   `tools/format_code.tcl`, which `package require Tcl 8.6`).
 - `clang-format-19` (the `audit-format` gate enforces only this
   canonical major version; other versions warn-and-skip).  `make
-  apt-deps` installs it on Debian/Ubuntu; see the Portability Guide
-  (`docs/public/portability.md`) for the macOS install steps.
+  pkg-deps-core` installs it on Debian/Ubuntu; see the Portability
+  Guide (`docs/public/portability.md`) for the macOS install steps.
 - `pkg-config`, OpenSSL + libcurl + libunbound development headers.
 - For Cosmopolitan builds: nothing extra; run `bash
   tools/bootstrap_cosmo.sh` once and `make -f Makefile.cosmopolitan`
@@ -140,6 +140,45 @@ The suite is roughly 4,200 cases as of 1.0.0 and runs in
 single-digit-minutes on a modern laptop.  Failures are reported in
 the form `++++ <name> FAILED`; zero failures is the only acceptable
 result before merge.
+
+### Running a subset
+
+Four environment variables select a subset of the suite without
+editing `tests/all.tcl`.  They are the env-driven equivalents of
+tcltest's `configure -match / -skip / -file / -notFile` options and
+each holds a **space-separated list of `[string match]` glob
+patterns**.  Files filter by their `all.tcl` name (e.g. `expr.tcl`);
+tests filter by their `<group>-<seq>` name (e.g. `append-1.3`).
+
+| Variable            | Selects                                    |
+|---------------------|--------------------------------------------|
+| `TH8_TEST_FILE`     | run only test files matching a pattern     |
+| `TH8_TEST_NOTFILE`  | skip test files matching a pattern         |
+| `TH8_TEST_MATCH`    | run only tests whose name matches          |
+| `TH8_TEST_SKIP`     | skip tests whose name matches              |
+
+A file (or test) runs when it matches an include pattern -- or the
+corresponding include list is empty, meaning "all" -- and matches no
+exclude pattern.  De-selected files and tests are simply not run and
+not counted, so the summary reflects only the subset.
+
+```
+# just the expr and string files:
+TH8_TEST_FILE="expr*.tcl string*.tcl" ./bin/th8sh tests/all.tcl
+
+# everything except the (slow) coverage files:
+TH8_TEST_NOTFILE="coverage_*.tcl" ./bin/th8sh tests/all.tcl
+
+# only the append-1.* tests within append.tcl:
+TH8_TEST_FILE="append.tcl" TH8_TEST_MATCH="append-1.*" \
+    ./bin/th8sh tests/all.tcl
+```
+
+This is the mechanism a critical-subset smoke run (e.g. under
+Valgrind) uses to stay fast.  Under Tcl/Eagle the values come from the
+`::env` array; under TH8, which does not auto-link `::env`, they are
+read through the testlib's `env_kv` command, so a subset run must load
+the testlib (the standard harness does this automatically).
 
 ### Adding tests
 

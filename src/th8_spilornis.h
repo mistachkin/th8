@@ -171,17 +171,6 @@ typedef int *se_LPBOOL;
 #define EAGLE_BRACES_UNMATCHED (4)
 #define EAGLE_DONT_QUOTE_HASH  (8)
 
-/*
- * Error message format for EagleFindElement.
- * USE_NARROW_CHAR_T selects %s/%.*s (narrow) vs %ls/%.*ls (wide).
- */
-
-#if defined(USE_NARROW_CHAR_T)
-#  define ERRONEOUS_STRING_FORMAT "\"%.*s\" %s"
-#else
-#  define ERRONEOUS_STRING_FORMAT "\"%.*ls\" %ls"
-#endif
-
 #ifndef _WIN32
 typedef void *se_HANDLE;
 #endif
@@ -217,6 +206,24 @@ typedef void *se_HANDLE;
 #define USE_TRACE                  0
 #define USE_SYSSTRINGLEN           0
 #define USE_HEAPAPI                0
+
+/*
+ * Error message format for EagleFindElement.  This MUST be selected
+ * AFTER USE_NARROW_CHAR_T is defined (above): TH8's se_WCHAR is a
+ * narrow, single-byte char, so the narrow %s/%.*s conversions are
+ * required.  If this #if is evaluated while USE_NARROW_CHAR_T is not
+ * yet defined, the wide %ls/%.*ls variant is wrongly chosen; passing a
+ * single-byte string to %ls then makes vsnprintf fail (returns -1) and
+ * the list-parse error message comes out EMPTY -- a defect that
+ * surfaces only in builds where the mis-ordered definition wins (it
+ * bit the debug build; the release build happened to bind narrow).
+ */
+
+#if defined(USE_NARROW_CHAR_T)
+#  define ERRONEOUS_STRING_FORMAT "\"%.*s\" %s"
+#else
+#  define ERRONEOUS_STRING_FORMAT "\"%.*ls\" %ls"
+#endif
 
 /*
  * UTFXBOOL -- used for Boolean return values in ConvertUTF

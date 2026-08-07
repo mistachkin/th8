@@ -1,0 +1,100 @@
+# TH8 system-dependency manifest -- the single source of truth for the
+# `make pkg-deps-core|pkg-deps-static|pkg-deps-test` targets (and their
+# deprecated apt-deps* aliases).  Read by tools/pkgdeps.sh.
+#
+# Format: TAB-separated, exactly three fields:
+#
+#     <feature>  <manager>  <space-separated package list>
+#
+#   feature : core | static | test
+#               core   = everything needed for a standard dynamic build
+#               static = the extra -dev libs a fully-static link needs
+#               test   = the dynamic-analysis toolchain (valgrind, sanitizers)
+#   manager : apt (Debian/Ubuntu) | brew (macOS/Homebrew)
+#
+# A `<feature>  note-<manager>  <text>` row carries a caveat printed before
+# install (e.g. packages that map to something other than a manager package).
+# Lines beginning with `#` are comments.  Keep the package lists on ONE line.
+#
+# clang-format-19 tracks CLANG_FORMAT_VERSION in the Makefile; update both if
+# the pinned version changes.
+#
+# --------------------------------------------------------------------------
+# Why TH8 needs each package (apt name / brew name -- purpose):
+#
+# core -- required to build TH8 (`make all`):
+#   build-essential / (Xcode CLT)   gcc + make + libc/pthread/dl headers: the
+#                                   compiler toolchain.  On macOS this is the
+#                                   Xcode Command Line Tools, not a brew formula.
+#   pkg-config / pkg-config         resolves OpenSSL and unbound compile/link
+#                                   flags at build time (libcurl via curl-config).
+#   tcl-dev / tcl-tk@8              tclsh 8.6: runs ALL build tooling -- genstubs,
+#                                   the `vendoring` generators, mkreq, check_*,
+#                                   and the Tcl/Eagle test harness -- and supplies
+#                                   the Tcl stubs the [th8] Tcl bridge and the
+#                                   test library link against.
+#   clang-format-19 / (pip venv)   the canonical formatter the `audit-format`
+#                                   gate enforces (pinned major version; see
+#                                   CLANG_FORMAT_VERSION).  No brew formula pins
+#                                   19, so macOS uses a pinned pip venv instead.
+#   mandoc / mandoc                the man-page linter `make manlint` (part of
+#                                   `make all`); without it manlint skips rather
+#                                   than fails, but CI installs it to lint.
+#   libssl-dev / openssl@3         OpenSSL: signed-script / certificate crypto
+#                                   (TH8_ENABLE_CRYPTOGRAPHY, the signed-only
+#                                   policy, RSA/hashing).
+#   libcurl4-openssl-dev / (SDK)   libcurl: HTTPS transport for `clock https`,
+#                                   remote signed [load], and [source <url>]
+#                                   (TH8_ENABLE_LIBCURL).  macOS ships libcurl in
+#                                   the SDK -- no brew pkg (the build links -lcurl).
+#   libunbound-dev / unbound       libunbound: the DNSSEC-validating resolver
+#                                   (TH8_ENABLE_UNBOUND).  Omit it and build
+#                                   `make ENABLE_UNBOUND=0` to drop DNS support.
+#
+# static -- LINUX ONLY: the extra -dev libs a FULLY-STATIC link needs, to satisfy
+# curl's and unbound's `--static` chains (dynamic builds do NOT need these).
+# macOS installs nothing here -- Apple ships no static libSystem, and libcurl /
+# zlib come from the SDK.  brew names below are omitted for that reason:
+#   zlib1g-dev                     -lz        (curl: transfer compression)
+#   libnghttp2-dev / nghttp2       -lnghttp2  (curl: HTTP/2)
+#   libbrotli-dev / brotli         -lbrotlidec(curl: brotli content-encoding)
+#   libzstd-dev / zstd             -lzstd     (curl: zstd content-encoding)
+#   libevent-dev / libevent        -levent    (unbound: async event loop)
+#   nettle-dev / nettle            -lhogweed -lnettle  (unbound: DNSSEC crypto)
+#   libgmp-dev / gmp               -lgmp      (unbound/nettle: bignum arithmetic)
+#
+# test -- the dynamic-analysis toolchain (NOT needed for a normal build):
+#   valgrind / (n/a)               `make valgrind` memcheck, plus the Valgrind
+#                                   headers that mimalloc's MI_TRACK_VALGRIND
+#                                   annotations compile against.  Linux only --
+#                                   valgrind is unavailable on macOS/Apple Silicon.
+#   clang / (n/a)                  Linux: `make msan` (MemorySanitizer is
+#                                   clang-only; gcc cannot do it) and libFuzzer
+#                                   (FUZZ_CC defaults to clang).  macOS installs
+#                                   nothing -- the system Apple clang (Xcode CLT,
+#                                   from 'core') already provides clang and the
+#                                   asan/ubsan sanitizers; MSan is unavailable.
+#                                   `make asan` / `ubsan` / `sanitize` need NO
+#                                   extra package on either OS (gcc/Apple clang
+#                                   ship the sanitizer runtimes).
+#   llvm / (n/a)                   Linux: llvm-cov + llvm-profdata for the
+#                                   `make mcdc` MC/DC coverage report (needs
+#                                   clang >= 18 for -fmcdc-coverage; the default
+#                                   clang on the CI's ubuntu-latest is 18).
+#                                   macOS uses xcrun's llvm-* -- nothing to add.
+#
+# fuzz -- the fuzzing toolchain (Linux CI only; NOT for a normal build):
+#   afl++ / (n/a)                  afl-clang-fast for the AFL++ campaign
+#                                   (`make afl`).  libFuzzer's smoke pass uses
+#                                   clang (from `test`/system), not afl++.
+# --------------------------------------------------------------------------
+#
+core	apt	build-essential pkg-config tcl-dev clang-format-19 mandoc libssl-dev libcurl4-openssl-dev libunbound-dev
+core	brew	pkg-config tcl-tk@8 openssl@3 unbound mandoc
+core	note-brew	build-essential -> Xcode Command Line Tools (run: xcode-select --install); clang-format-19 -> pinned pip venv, provisioned automatically (see docs/public/portability.md); libcurl and zlib are provided by the macOS SDK (no brew package)
+static	apt	zlib1g-dev libnghttp2-dev libbrotli-dev libzstd-dev libevent-dev nettle-dev libgmp-dev
+static	note-brew	nothing to install: TH8 does not statically link on macOS (Apple ships no static libSystem); the fully-static libs are a Linux-only concern
+test	apt	valgrind clang llvm
+test	note-brew	nothing to install: the sanitizers (asan/ubsan) use the system Apple clang from the Xcode CLT (installed by 'core'); valgrind, MemorySanitizer, and the llvm-cov/-profdata MC/DC tooling are unavailable on macOS
+fuzz	apt	afl++
+fuzz	note-brew	nothing to install: libFuzzer uses the system Apple clang; AFL++ (afl-clang-fast) is not provided here

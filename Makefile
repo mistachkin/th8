@@ -30,7 +30,7 @@
 #
 
 .PHONY: all static shared stubs shell static-shell testlib bridge \
-        genstubs audit audit-reqs audit-format regex_vendor bestline_vendor tommath_vendor mimalloc_vendor vendoring apt-deps apt-deps-static clean install debug memdebug FORCE \
+        genstubs audit audit-reqs audit-format regex_vendor bestline_vendor tommath_vendor mimalloc_vendor vendoring pkg-deps-core pkg-deps-static pkg-deps-test apt-deps apt-deps-static apt-deps-test clean install debug memdebug FORCE \
         th8test tcltest eagletest \
         amalgamation amalgamation-test \
         asan ubsan msan sanitize asan-test asan-test-macos \
@@ -2035,41 +2035,43 @@ mimalloc_vendor:
 vendoring: regex_vendor tommath_vendor mimalloc_vendor bestline_vendor spilornis_vendor
 
 #
-# apt-deps / apt-deps-static: install the Debian/Ubuntu system packages a fresh
-# machine needs to build TH8 (`make all`).  The vendored externals (regex,
-# tommath, mimalloc, bestline) build from externals/*/vendor/ and need NO
-# packages -- see `vendoring`.  Runs via sudo by default; override with SUDO= to
-# run as root directly (e.g. `make apt-deps SUDO=` inside a container).  Drop
-# libunbound-dev and build `make ENABLE_UNBOUND=0` to skip the DNS resolver.
+# pkg-deps-core / pkg-deps-static / pkg-deps-test: install the system packages a
+# fresh machine needs.  The package lists are the single source of truth in
+# tools/data/packages.tsv; tools/pkgdeps.sh selects this host's package manager
+# (apt on Debian/Ubuntu, brew on macOS) and installs a named feature:
 #
-#   build-essential       gcc + make + libc headers (-lm / -ldl / -lpthread)
-#   pkg-config            locates openssl / unbound (curl via curl-config)
-#   tcl-dev               tclsh8.6 (vendoring + genstubs) + Tcl stubs (bridge/testlib)
-#   clang-format-N        the canonical clang-format for `make audit-format`
-#                         (N = CLANG_FORMAT_VERSION); also pretty-prints the
-#                         generated stubs in `genstubs`
-#   libssl-dev            OpenSSL   (TH8_ENABLE_CRYPTOGRAPHY)
-#   libcurl4-openssl-dev  libcurl   (TH8_ENABLE_LIBCURL)
-#   libunbound-dev        unbound   (TH8_ENABLE_UNBOUND)
+#   pkg-deps-core    standard dynamic build (`make all`): compiler, pkg-config,
+#                    tclsh (vendoring/genstubs), clang-format-N (audit-format),
+#                    and OpenSSL / libcurl / unbound
+#   pkg-deps-static  + the -dev libs a FULLY-STATIC link needs
+#   pkg-deps-test    + the dynamic-analysis toolchain (valgrind on Linux; the
+#                    sanitizers themselves need no extra package under gcc)
 #
-# apt-deps-static additionally installs the -dev packages a FULLY-STATIC link
-# needs, satisfying curl's and unbound's `--static` dependency chains
-# (-lz -lnghttp2 -lbrotlidec -lzstd and -levent -lhogweed -lnettle -lgmp).
+# The vendored externals (regex, tommath, mimalloc, bestline) build from
+# externals/*/vendor/ and need NO packages -- see `vendoring`.  apt runs via
+# sudo by default; override with SUDO= to run as root directly (e.g. inside a
+# container); brew never uses sudo.  On macOS a few entries map differently --
+# build-essential -> Xcode CLT, clang-format-19 -> a pinned pip venv, and
+# valgrind is unavailable on Apple Silicon -- which pkgdeps.sh prints as notes.
+# apt-deps / apt-deps-static / apt-deps-test remain as deprecated aliases.
 #
 SUDO ?= sudo
-APT_DEPS = build-essential pkg-config tcl-dev clang-format-$(CLANG_FORMAT_VERSION) \
-           libssl-dev libcurl4-openssl-dev libunbound-dev
-APT_DEPS_STATIC = zlib1g-dev libnghttp2-dev libbrotli-dev libzstd-dev \
-                  libevent-dev nettle-dev libgmp-dev
 
-apt-deps:
-	@command -v apt-get >/dev/null 2>&1 || { echo "apt-deps: apt-get not found -- this target is for Debian/Ubuntu.  Install the equivalents of: $(APT_DEPS)"; exit 1; }
-	$(SUDO) apt-get update
-	$(SUDO) apt-get install -y $(APT_DEPS)
+pkg-deps-core:
+	@SUDO="$(SUDO)" sh tools/pkgdeps.sh core
 
-# apt-deps-static: the shared (dynamic) deps PLUS the static-link extras.
-apt-deps-static: apt-deps
-	$(SUDO) apt-get install -y $(APT_DEPS_STATIC)
+# pkg-deps-static: the core build deps PLUS the fully-static-link extras.
+pkg-deps-static: pkg-deps-core
+	@SUDO="$(SUDO)" sh tools/pkgdeps.sh static
+
+# pkg-deps-test: the core build deps PLUS the dynamic-analysis toolchain.
+pkg-deps-test: pkg-deps-core
+	@SUDO="$(SUDO)" sh tools/pkgdeps.sh test
+
+# Deprecated aliases for the previous apt-only target names.
+apt-deps: pkg-deps-core
+apt-deps-static: pkg-deps-static
+apt-deps-test: pkg-deps-test
 
 #
 # Spencer regex engine objects.
@@ -2515,7 +2517,16 @@ clean:
 fresh-non-static: clean all-non-static
 	@echo BUILT ALL-NON-STATIC FRESH AND CLEAN...
 
-fresh: clean all
+# `clean` and `all` are run as sequential SUB-makes (not prerequisites) so a
+# fresh rebuild is reliable even when `all` was already built earlier in the
+# same invocation (e.g. `make all th8test`): GNU make runs a phony target's
+# recipe only once per run, so a prerequisite `all` would be skipped after
+# `clean` and leave nothing built.  Two separate sub-makes keep clean-then-build
+# ordered under `-j`.  Command-line vars (ENABLE_TEST_KEY=1, ...) propagate via
+# MAKEFLAGS.
+fresh:
+	$(MAKE) clean
+	$(MAKE) all
 	@echo BUILT ALL FRESH AND CLEAN...
 
 # ----------------------------------------------------------------

@@ -1406,7 +1406,16 @@ clean:
 	-if exist "$(TOMMATH_BUILD)" rmdir /s /q "$(TOMMATH_BUILD)" 2>nul
 	-if exist "$(MIMALLOC_DIR)" rmdir /s /q "$(MIMALLOC_DIR)" 2>nul
 
-fresh: clean genstubs all
+# clean/genstubs/all run as sequential SUB-makes (not prerequisites) so a fresh
+# rebuild is reliable even when `all` was already built earlier in the same
+# invocation (e.g. `nmake all th8test`): a pseudotarget's recipe runs once per
+# session, so a prerequisite `all` would be skipped after `clean` and leave
+# nothing built.  Mirrors the GNU Makefile `fresh`.  Command-line macros
+# (ENABLE_TEST_KEY=1, ...) are inherited by the recursive NMAKE.
+fresh:
+	$(MAKE) /f Makefile.msc clean
+	$(MAKE) /f Makefile.msc genstubs
+	$(MAKE) /f Makefile.msc all
 	@echo BUILT FRESH AND CLEAN...
 
 # ----------------------------------------------------------------

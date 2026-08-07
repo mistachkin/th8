@@ -20,7 +20,8 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    # `trunk` is the primary branch (Fossil's default, mirrored to Git).
+    branches: [trunk]
   pull_request:
   schedule:
     # Nightly AFL++ campaign kicks off at 07:00 UTC.
@@ -39,7 +40,7 @@ on:
         type: string
 
 # Cancel old in-flight PR runs when a new commit lands; never cancel
-# scheduled or push-to-main runs.
+# scheduled or push-to-trunk runs.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -66,31 +67,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install deps (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential pkg-config \
-            tcl8.6 tcl8.6-dev \
-            clang-format \
-            mandoc \
-            libssl-dev libunbound-dev libcurl4-openssl-dev
-          # The Makefile calls bare `tclsh`; Ubuntu ships only `tclsh8.6`
-          # under that exact name when the metapackage is missing.  Wire
-          # up a /usr/local/bin/tclsh shim that resolves to 8.6.
-          if ! command -v tclsh >/dev/null; then
-            sudo ln -sf "$(command -v tclsh8.6)" /usr/local/bin/tclsh
-          fi
+      # Install system deps the SAME way an end-user does: `make pkg-deps-core`
+      # reads tools/data/packages.tsv (the single source of truth) and drives
+      # apt on Linux / Homebrew on macOS.  It also links `tclsh` -> tclsh8.6 on
+      # Linux and provisions clang-format-19 (the macOS pip venv) so `make`
+      # works immediately after.
+      - name: Install deps (pkg-deps-core)
+        run: make pkg-deps-core
 
-      - name: Install deps (macOS)
+      # macOS tcl-tk@8 is keg-only -- put its 8.6 tclsh on PATH.  This is a
+      # shell-env step a package install cannot do for the parent process, so it
+      # stays here rather than in pkgdeps.sh.
+      - name: Put Tcl 8.6 on PATH (macOS)
         if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install tcl-tk@8 clang-format mandoc openssl@3 unbound
-          # tcl-tk@8 is keg-only: expose its 8.6 tclsh on PATH so the
-          # `audit-format` gate doesn't fall back to the system Tcl 8.5.
-          echo "$(brew --prefix tcl-tk@8)/bin" >> "$GITHUB_PATH"
+        run: echo "$(brew --prefix tcl-tk@8)/bin" >> "$GITHUB_PATH"
 
       - name: Verify Tcl >= 8.6
         run: |
@@ -112,12 +102,13 @@ jobs:
           grep -q 'Failed:[[:space:]]*0' bin/th8-test.log
           grep -q 'OVERALL STATUS: SUCCESS' bin/th8-test.log
 
-      - name: Upload test log on failure
-        if: failure()
+      - name: Upload test log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-log-${{ matrix.os }}
           path: bin/th8-test.log
+          retention-days: 30
           if-no-files-found: ignore
 
   # --------------------------------------------------------------------
@@ -136,19 +127,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential pkg-config \
-            tcl8.6 tcl8.6-dev \
-            clang-format \
-            mandoc \
-            valgrind \
-            libssl-dev libunbound-dev libcurl4-openssl-dev
-          if ! command -v tclsh >/dev/null; then
-            sudo ln -sf "$(command -v tclsh8.6)" /usr/local/bin/tclsh
-          fi
+      # End-user install path: core build deps + the analysis toolchain
+      # (pkg-deps-test brings in valgrind).  pkg-deps-core links tclsh.
+      - name: Install deps (pkg-deps-core + pkg-deps-test)
+        run: make pkg-deps-core pkg-deps-test
 
       - name: Build + run suite under valgrind
         # The Makefile's `valgrind` recipe internally recurses with
@@ -183,27 +165,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install deps
+      # End-user install path: core build deps + the analysis toolchain
+      # (pkg-deps-test brings in clang + llvm; pkg-deps-core links tclsh).
+      - name: Install deps (pkg-deps-core + pkg-deps-test)
+        run: make pkg-deps-core pkg-deps-test
+
+      - name: clang/llvm aliases + xcrun shim
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential pkg-config \
-            tcl8.6 tcl8.6-dev \
-            clang-18 llvm-18 \
-            clang-format \
-            mandoc \
-            libssl-dev libunbound-dev libcurl4-openssl-dev
-          # Unversioned aliases the Makefile expects.
+          # The `clang`/`llvm` packages install version 18 on ubuntu-latest and
+          # usually provide the unversioned names; link any tool still only
+          # present as <tool>-18 (MC/DC needs clang >= 18 for -fmcdc-coverage).
           for tool in clang clang++ llvm-cov llvm-profdata; do
-            if ! command -v "$tool" >/dev/null && command -v "${tool}-18" >/dev/null; then
-              sudo ln -sf "$(command -v ${tool}-18)" "/usr/local/bin/$tool"
+            if ! command -v "$tool" >/dev/null 2>&1 \
+                && command -v "${tool}-18" >/dev/null 2>&1; then
+              sudo ln -sf "$(command -v "${tool}-18")" "/usr/local/bin/$tool"
             fi
           done
-          if ! command -v tclsh >/dev/null; then
-            sudo ln -sf "$(command -v tclsh8.6)" /usr/local/bin/tclsh
-          fi
-          # `make mcdc` invokes `xcrun llvm-{profdata,cov}`; provide an
-          # xcrun shim that forwards to the underlying tool.
+          # `make mcdc` invokes `xcrun llvm-{profdata,cov}`; shim xcrun to
+          # forward to the underlying tool.
           sudo tee /usr/local/bin/xcrun >/dev/null <<'SHIM'
           #!/usr/bin/env bash
           exec "$@"
@@ -253,23 +232,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install deps
+      # libFuzzer uses clang (from pkg-deps-test); pkg-deps-core links tclsh.
+      - name: Install deps (pkg-deps-core + pkg-deps-test)
+        run: make pkg-deps-core pkg-deps-test
+
+      - name: clang/llvm aliases
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential pkg-config \
-            tcl8.6 tcl8.6-dev \
-            clang-18 llvm-18 \
-            clang-format \
-            libssl-dev libunbound-dev libcurl4-openssl-dev
           for tool in clang clang++ llvm-cov llvm-profdata; do
-            if ! command -v "$tool" >/dev/null && command -v "${tool}-18" >/dev/null; then
-              sudo ln -sf "$(command -v ${tool}-18)" "/usr/local/bin/$tool"
+            if ! command -v "$tool" >/dev/null 2>&1 \
+                && command -v "${tool}-18" >/dev/null 2>&1; then
+              sudo ln -sf "$(command -v "${tool}-18")" "/usr/local/bin/$tool"
             fi
           done
-          if ! command -v tclsh >/dev/null; then
-            sudo ln -sf "$(command -v tclsh8.6)" /usr/local/bin/tclsh
-          fi
 
       - name: Build all libFuzzer harnesses
         run: make -j"$(getconf _NPROCESSORS_ONLN)" FUZZ_MODE=libfuzzer fuzz

@@ -3787,6 +3787,166 @@ bottom.
     patch --- it is removing the copy.  The last hole in this dig was not a
     missing call; it was a missing abstraction.
 
+### 6.29  Case Study: Testing a System in Its Own Terms
+
+A late addition to the harness was env-driven subset selection: four
+environment variables (`TH8_TEST_MATCH`, `TH8_TEST_SKIP`, `TH8_TEST_FILE`,
+`TH8_TEST_NOTFILE`) --- the env-driven equivalents of tcltest's `configure
+-match/-skip/-file/-notFile` --- so a critical subset could be run under
+Valgrind without editing the master file list.  File-level selection was
+trivial: `runAllTests` already iterates file names as strings.  Test-level
+selection needed one datum, a test's name, and the obvious way to get it was
+wrong.  The ways it was wrong are the lesson.
+
+1.  **Parsing the system's data from outside.**  Each test is written
+    `runTest {test NAME {desc} -body {...} -result {...}}`, so the name is
+    the second word and `[lindex $script 1]` appears to read it.  It did ---
+    for 4,405 tests.  Then three files errored out of the suite entirely,
+    with an empty message.  The culprits were the backslash-escape torture
+    tests (`coverage_backslash_escapes.tcl` and kin), whose bodies contain
+    deliberately malformed constructs such as `"\u12Z"`.  Those bodies are
+    valid Tcl *scripts* but not valid Tcl *lists*, so `[lindex]` --- which
+    must parse its argument as a list --- threw before ever reaching index
+    one.  The harness had reimplemented, badly, a parse the system already
+    performs correctly: the `[test]` command binds `NAME` as its first
+    parameter regardless of whether the body is a well-formed list.  The fix
+    was to stop parsing from outside and let the system parse --- shadow
+    `[test]` with a stub that records its first argument, evaluate the
+    script to trigger it (the braced body is an unevaluated argument, so
+    nothing runs), then restore.  *To observe a system correctly, use the
+    system's own primitives; an outside-in re-parse is a second
+    implementation that inherits none of the original's edge cases.*
+
+2.  **Names have a namespace; do not assume the alias.**  The first stub
+    shadowed `::test`, the global name.  But the harness lives in
+    `::th8test` and merely *imports* its commands into `::` for the test
+    files' convenience.  Reaching for `::test` from inside `::th8test` bakes
+    in an assumption --- that the global import has run --- that a package
+    has no business making about its own callers.  The correct target is the
+    package's own command, resolved relative to the current namespace:
+    `rename test __saved` (resolving `test` in `::th8test`), with the
+    capture evaluated in `[namespace current]` so the script's `[test]`
+    resolves to the stub.  A command's real name is the one in the namespace
+    that owns it, not the alias a caller happens to see.
+
+3.  **Know your alias semantics before you rename through them.**  Momentary
+    alarm followed: after the rename dance, probes reported `test` and
+    `runTest` as "no such command," which read as a corrupted command table.
+    It was nothing of the kind.  Every probe was a fresh, isolated process,
+    and the true cause was one layer down --- editing the (signed) harness
+    file without re-signing it had left its signature stale, so the
+    signed-only loader silently refused to load the harness *at all*, and
+    "no such command" was, once again, the output of a program that never
+    ran (§6.28's lesson in a new disguise).  Re-signed and actually loaded,
+    the mechanism proved clean: rename of an imported command round-trips
+    with full fidelity, the import binding survives a rename of its origin
+    (it binds to the command *object*, not the name), and the capture does
+    not double-execute the real test.  The frightening reading was an
+    artifact of an experiment whose subject had never been instantiated.
+
+The generalisable lessons:
+
+1.  **Test a system in its own terms.**  When you need a datum the system
+    already computes --- a parsed name, a resolved type, a normalized
+    path --- get it from the system, not from a private re-derivation.  The
+    re-derivation is an unmaintained second implementation that will diverge
+    on exactly the inputs the tests were written to stress.
+
+2.  **Resolve names where they are defined, not where they are imported.**
+    Code inside a namespace should name its own commands relative to that
+    namespace; leaning on a global alias couples the callee to an import its
+    callers might never have performed.  Aliases are a convenience for the
+    caller, not an interface for the callee.
+
+3.  **Understand your alias and import semantics empirically.**  Renaming,
+    shadowing, and restoring commands through an import layer is safe only
+    once you know how that layer binds --- to a name or to an object, and
+    whether the binding survives a rename.  Verify it on the real system;
+    intuition inherited from a sibling language is a hypothesis, not a
+    guarantee.
+
+4.  **When the table looks corrupt, check whether the program loaded.**  A
+    cascade of "no such command" from a fresh process is far more likely to
+    be a harness that failed to initialize --- a rejected signature, an
+    aborted source, a missing package --- than genuine corruption.  Confirm
+    the load succeeded before diagnosing the damage.
+
+### 6.30  Case Study: A Bug the Optimizer Hid (Bug 76)
+
+The env-driven subset work of §6.29 surfaced a second, unrelated defect while
+it was being tested: three conformance files errored out of the suite with an
+*empty* message.  The proximate cause was the outside-in `[lindex]` parse of
+§6.29 --- but the reason its error was *empty* rather than "unmatched quote"
+was a separate bug that turned out to be one of the strangest in the project.
+
+Reduced, `llength {x "Z"]}` (a quoted element followed by a non-space) returned
+an error whose **message was the empty string** instead of `list element in
+quotes followed by "]" instead of space`.  Every symptom argued *against* it
+being a real bug:
+
+* The list parser is a mature, vendored component; source review, a Coverity
+  run, and the project's own fuzzers had all found nothing.
+* It would not stay reproduced.  A clean **release** build printed the correct
+  message; a clean **debug** build printed nothing, deterministically; and
+  adding a single `fprintf` near the failure sometimes flipped the outcome.
+
+Those are the classic signatures of undefined behavior or a stale build, and
+the investigation nearly closed with the wrong verdict twice --- first "stale
+object" (refuted: the dependency guard was green), then "va_list forwarding
+through the platform-callback chain" (refuted: a direct `vsnprintf` call, one
+hop, was *also* empty in debug).  What finally settled it was refusing to
+reason and instead **instrumenting the exact data**: in the debug build, a
+`va_copy` inspection showed the arguments were perfect (precision `1`, a
+pointer to the offending `']'`), `vsnprintf` had returned `-1`, and the format
+string was `... followed by "%.*ls" %ls` --- the **wide** `%ls` conversions.
+
+TH8's `se_WCHAR` is a single-byte `unsigned char`; handing that narrow string
+to `%ls` makes `vsnprintf` fail and emit nothing.  The format was chosen by a
+preprocessor conditional, `#if defined(USE_NARROW_CHAR_T)`, positioned in the
+override header **thirty-seven lines before `USE_NARROW_CHAR_T` was
+`#define`d**.  So the selection could bind to the wide branch; whether the
+final translation unit bound narrow or wide then depended on include-order and
+macro-redefinition interplay that differed between build configurations.
+Release happened to bind narrow and hid the bug; debug bound wide and exposed
+it.  The one-line fix moves the selection after the definition.
+
+The lessons generalise past this one macro:
+
+1.  **A "cosmetic" symptom is still a symptom.**  An empty error message reads
+    as a trivial blemish, and the first instinct was to route *around* it ---
+    §6.29 replaced the name capture with a `[test]` stub, sidestepping the
+    throwing `[lindex]` entirely and making the blank message stop mattering.
+    That blank string was in fact the visible tip of a compile-time
+    undefined-behavior defect that mis-set *every* argument-bearing list-parse
+    diagnostic in an entire build configuration.  It took an outside prompt
+    ("an empty error message is a big no-no --- is it real?") to convert a
+    nuisance into an investigation.  A dropped field, an off-by-one in output,
+    a message that should not be empty: treat the anomaly as a lead, not a
+    blemish to paper over.  The distance between "cosmetic" and "corruption"
+    is often a single afternoon of digging.
+
+2.  **A compile-time-selected bug has a tooling blind spot.**  Coverity and
+    fuzzing see one build's preprocessor output.  A macro *used before it is
+    defined* is a latent defect even when the build "happens to work," and no
+    amount of analysis of the *working* build will reveal it.
+
+3.  **A debug-only heisenbug is not automatically a build artifact.**
+    Optimization sensitivity and undefined behavior share the "vanishes on
+    rebuild, flips with a print" signature.  Reproduce it in the
+    configuration where it is *stable* --- here the unoptimised debug build ---
+    and instrument *there*.
+
+4.  **Instrument the data; do not infer it.**  Reading the source "proved" the
+    two call paths were identical.  Only printing the actual `vsnprintf` return
+    value, the live `va_list` arguments, and the resolved format string made
+    the wide/narrow mismatch --- invisible in the C source --- undeniable.
+
+5.  **Every dismissal is a hypothesis with a test.**  "Stale object" was
+    falsified by a green dependency guard; "va_list chain" by a one-hop direct
+    call.  Writing down what each theory *predicts* and then checking it is
+    what keeps a heisenbug investigation from converging on a comfortable
+    non-answer.
+
 | Metric | Value |
 |--------|-------|
 | C source lines | ~71,000 code lines (amalgamation, excluding comments and blanks) |

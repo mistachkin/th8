@@ -2,24 +2,37 @@
 
 Compiler, OS, and library prerequisites for building TH8.
 
-On a fresh **Debian/Ubuntu** machine the POSIX `Makefile` installs every
-system package needed for a standard build in one step:
+On a fresh machine the POSIX `Makefile` installs every system package needed for
+a build in one step.  The targets auto-detect the host — **apt** on
+Debian/Ubuntu, **Homebrew** on macOS:
 
-    make apt-deps            # shared/dynamic build
-    make apt-deps-static     # the above, plus the extras a fully-static link needs
+    make pkg-deps-core       # standard shared/dynamic build
+    make pkg-deps-static     # the above, plus the extras a fully-static link needs
+    make pkg-deps-test       # the above, plus the dynamic-analysis toolchain
+                             #   (valgrind on Linux; the sanitizers need no extra
+                             #   package under gcc)
 
-Both run `apt-get` via `sudo` (pass `SUDO=` to run as root directly, e.g.
-inside a container).  The vendored libraries below marked "Compiled into
-TH8 (no external library)" need no packages — the `make vendoring` target
-regenerates them from `externals/*/vendor/`.
+The package lists are a single data file, `tools/data/packages.tsv`, driven by
+`tools/pkgdeps.sh` (a strictly-POSIX, shellcheck-clean helper).  apt runs via
+`sudo` (pass `SUDO=` to run as root directly, e.g. inside a container); brew
+never uses sudo.  On macOS a few entries map differently — `build-essential` →
+the Xcode Command Line Tools (`xcode-select --install`), `clang-format-19` → the
+pinned pip venv below, and **valgrind is unavailable on Apple Silicon** — and
+`pkgdeps.sh` prints those as notes.  The vendored libraries below marked
+"Compiled into TH8 (no external library)" need no packages — the `make
+vendoring` target regenerates them from `externals/*/vendor/`.
+
+(The previous `apt-deps` / `apt-deps-static` / `apt-deps-test` names remain as
+aliases.)
 
 The build's `clang-format` style audit (`make audit-format`, part of `make
 audit`) is pinned to one canonical clang-format major version
 (`CLANG_FORMAT_VERSION` in the Makefile, currently **19**), because
-clang-format's output is not stable across major versions.  `make apt-deps`
-installs `clang-format-19`; the audit **warns and skips** under any other
-version (or none), so a build is never blocked by the clang-format a host
-happens to ship — only the canonical version enforces.
+clang-format's output is not stable across major versions.  `make pkg-deps-core`
+installs `clang-format-19` on Debian/Ubuntu (on macOS use the pinned pip venv
+below); the audit **warns and skips** under any other version (or none), so a
+build is never blocked by the clang-format a host happens to ship — only the
+canonical version enforces.
 
 The gate resolves the binary by the exact name **`clang-format-19`** (via
 `command -v clang-format-19`, falling back to an unversioned `clang-format`),
@@ -29,8 +42,11 @@ must match.
 
 ### Installing `clang-format-19` on macOS (or any host without an apt package)
 
-macOS has no `apt`, so install the pinned version into an isolated virtualenv
-and expose it under the name the gate looks for:
+**`make pkg-deps-core` does this automatically on macOS** — it provisions the
+pinned version into an isolated pip virtualenv and symlinks it as
+`clang-format-19` (idempotent; it skips the work if a version-19 binary is
+already on `PATH`).  The manual equivalent, for reference or for a host without
+`make`:
 
     python3 -m venv ~/.clang-format-19-venv
     ~/.clang-format-19-venv/bin/pip install 'clang-format==19.1.7'

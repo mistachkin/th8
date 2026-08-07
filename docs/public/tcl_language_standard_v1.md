@@ -376,6 +376,8 @@ R-45345-25968
 :   The `llength`, `lindex`, `lrange`, and other list commands parse their input as a list by splitting on whitespace, respecting brace and quote grouping.
 R-32728-09100
 :   List operations SHALL correctly handle elements containing multi-byte UTF-8 sequences without corrupting the byte sequences or misidentifying list delimiters within continuation bytes.
+R-03175-09390
+:   When given a string that is not a well-formed list, such as a quoted or braced element immediately followed by a non-whitespace character, a list command SHALL raise a script error whose diagnostic message identifies the malformed element and is never empty.
 
 
 ### 8  Variable System

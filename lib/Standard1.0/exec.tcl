@@ -63,7 +63,7 @@ namespace eval ::th8test {
     #
     set exe [info nameofexecutable]
 
-    if {$exe eq ""} then {
+    if {[string length $exe] == 0} then {
       error "test_only_exec: no process executable path"
     }
 
@@ -113,7 +113,7 @@ namespace eval ::th8test {
     # try to restore it by re-loading the C testlib.
     #
     if {[llength [info commands __test_only_exec]] == 0 && \
-        [info exists ::testlib_name] && $::testlib_name ne ""} then {
+        [info exists ::testlib_name] && [string length $::testlib_name] > 0} then {
       catch {load $::testlib_name}
     }
 

@@ -436,4 +436,59 @@ runTest {test liststring-2.12 {
 
 ###############################################################################
 
+runTest {test liststring-3.1 {
+  R-03175-09390: a quoted element followed by a non-whitespace character makes
+                 a malformed list; llength reports an error with a NON-EMPTY
+                 message (regression for Bug 76: the message came out empty)
+} -body {
+  list [catch {llength {x "Z"]}} msg] [expr {[string length $msg] > 0}]
+} -cleanup {
+  unset -nocomplain msg
+} -result {1 1}}
+
+###############################################################################
+
+runTest {test liststring-3.2 {
+  R-03175-09390: lindex on the same malformed list reports a non-empty error
+} -body {
+  list [catch {lindex {x "Z"]} 0} msg] [expr {[string length $msg] > 0}]
+} -cleanup {
+  unset -nocomplain msg
+} -result {1 1}}
+
+###############################################################################
+
+runTest {test liststring-3.3 {
+  R-03175-09390: lrange on the same malformed list reports a non-empty error
+} -body {
+  list [catch {lrange {x "Z"]} 0 0} msg] [expr {[string length $msg] > 0}]
+} -cleanup {
+  unset -nocomplain msg
+} -result {1 1}}
+
+###############################################################################
+
+runTest {test liststring-3.4 {
+  R-03175-09390: a braced element followed by a non-whitespace character is
+                 likewise malformed and reports a non-empty error
+} -body {
+  list [catch {llength {x {Z}y}} msg] [expr {[string length $msg] > 0}]
+} -cleanup {
+  unset -nocomplain msg
+} -result {1 1}}
+
+###############################################################################
+
+runTest {test liststring-3.5 {
+  R-03175-09390: the malformed-list error identifies the offending element,
+                 not just a bare failure
+} -body {
+  catch {llength {x "Z"]}} msg
+  string match {*element in quotes followed by*} $msg
+} -cleanup {
+  unset -nocomplain msg
+} -result {1}}
+
+###############################################################################
+
 source tests/epilogue.tcl
