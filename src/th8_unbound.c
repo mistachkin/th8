@@ -398,7 +398,10 @@ th8UnboundResolve(
 	int bHaveTa = 0;
 	char *zEnv = Th8_GetEnv(interp, "TH8_DNS_ROOT_KEY");
 	if (zEnv && *zEnv) {
-	    /* Operator override: static-only, embedder owns lifecycle. */
+	    /* Operator override: static-only, embedder owns lifecycle.
+	     * ub_ctx_add_ta_file fails for a missing/unreadable file, so a bad
+	     * TH8_DNS_ROOT_KEY leaves bHaveTa=0 and drops through to mode (d)
+	     * below -- no separate readability screen is needed. */
 	    bHaveTa = (ub_ctx_add_ta_file(ubctx, zEnv) == 0);
 	    Th8_Free(interp, zEnv);
 	} else {
@@ -429,8 +432,24 @@ th8UnboundResolve(
 	 * The harden pass set module-config to "validator iterator"; override
 	 * it to "iterator" here so the validator never initializes. */
 	if (!bHaveTa) {
+	    static volatile int bWarnedInsecure = 0;
+
 	    if (ub_ctx_set_option(ubctx, "module-config:", "iterator") != 0) {
 		TH8_TRACE_ERR(NULL, "module-config:");
+	    }
+	    /* Surface the security downgrade ONCE per process through the
+	     * platform trace hook (xEmitTrace) -- not raw stderr, which an
+	     * embedded library must not touch.  Th8_EmitTrace is a no-op when
+	     * the embedder installed no trace callback, so this stays silent
+	     * unless the host opted in.  The CAS 0->1 lets only the first
+	     * resolver that hits mode (d) emit the line. */
+	    if (Th8_IntCmpXchg(NULL, &bWarnedInsecure, 1, 0) == 0) {
+		Th8_EmitTrace(
+		    interp,
+		    "th8_unbound: no DNSSEC trust anchor available; DNS "
+		    "resolution is INSECURE (bogus always 0). Set "
+		    "TH8_DNS_ROOT_KEY, or install the DNS root key (e.g. "
+		    "unbound-anchor), to enable validation.\n");
 	    }
 	}
     }
