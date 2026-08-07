@@ -55,10 +55,6 @@ typedef int ntp_socket_t;
 #    define ntp_poll(pfd, n, ms) poll((pfd), (n), (ms))
 #  endif
 
-#  if defined(TH8_ENABLE_UNBOUND)
-#    include <unbound.h>
-#  endif
-
 
 /*
  *----------------------------------------------------------------------
@@ -356,80 +352,56 @@ th8NtpQueryOne(
     /*
      * DNS resolution with DNSSEC validation.
      *
-     * When libunbound is available (TH8_ENABLE_UNBOUND),
-     * perform local cryptographic DNSSEC validation using
-     * the IANA root trust anchor.  ub_resolve() returns
-     * result->secure=1 if the domain's DNS records were
-     * validated through the full DNSSEC chain of trust.
+     * When libunbound is available (TH8_ENABLE_UNBOUND), gate the server
+     * name through the shared, hardened resolver via Th8_DnsResolve (which
+     * performs local cryptographic DNSSEC validation using the IANA root
+     * trust anchor).  If validation marks the answer BOGUS, the resolution
+     * is REJECTED -- a hard failure, not a warning: a bogus result
+     * indicates active tampering or misconfiguration.  An unsigned domain
+     * (not bogus) proceeds normally -- DNSSEC is opt-in per domain.
      *
-     * If DNSSEC validation fails (result->bogus), the
-     * resolution is REJECTED -- this is a hard failure,
-     * not a warning.  A bogus DNSSEC result indicates
-     * active tampering or misconfiguration.
-     *
-     * If the domain is unsigned (neither secure nor bogus),
-     * resolution proceeds normally -- DNSSEC is opt-in per
-     * domain.
-     *
-     * When libunbound is not available, fall back to plain
-     * getaddrinfo().  The NTP origin timestamp anti-spoof
-     * mechanism provides a secondary defense.
+     * When libunbound is not available, fall back to the glibc res_nquery
+     * AD-bit check ("trust the resolver"), or, failing that, to plain
+     * getaddrinfo() below.  The NTP origin-timestamp anti-spoof mechanism
+     * provides a secondary defense in every case.
      */
 
 #  if defined(TH8_ENABLE_UNBOUND)
     {
-	struct ub_ctx *ubctx;
-	struct ub_result *ubresult = NULL;
-	int ubrc;
+	Th8_DnsResult *pDns = NULL;
 
-	ubctx = ub_ctx_create();
-	if (ubctx) {
-	    /*
-	     * Load the root trust anchor.  Try common locations.
-	     * If none found, DNSSEC validation is disabled but
-	     * resolution still works.
-	     */
-	    if (ub_ctx_add_ta_file(ubctx, "/etc/unbound/root.key") != 0 &&
-	        ub_ctx_add_ta_file(ubctx, "/usr/share/dns/root.key") != 0 &&
-	        ub_ctx_add_ta_file(ubctx, "/var/lib/unbound/root.key") != 0 &&
-	        ub_ctx_add_ta_file(
-	            ubctx, "/opt/homebrew/etc/unbound/root.key") != 0) {
-		/*
-		 * No trust anchor found.  DNSSEC validation
-		 * will not be performed, but resolution works.
-		 */
-		TH8_TRACE_ERR(
-		    interp, "NTP: no DNSSEC root trust anchor found");
+	/*
+	 * DNSSEC gate via the shared, hardened resolver (Th8_DnsResolve ->
+	 * th8UnboundResolve): reject a BOGUS (actively tampered) answer as a
+	 * hard failure.  The shared path owns context hardening, stderr
+	 * silencing (ub_ctx_debugout), the full trust-anchor lifecycle
+	 * (TH8_DNS_ROOT_KEY, the RFC 5011 managed copy, and the system-path
+	 * search), the no-anchor INSECURE fallback (validator disabled), and
+	 * the one-time insecure-DNS trace -- so this path no longer talks to
+	 * libunbound directly.  It is used purely as a validation gate here;
+	 * the socket address is resolved separately by getaddrinfo below.
+	 *
+	 * A resolve FAILURE (as opposed to a bogus answer) is NOT fatal: fall
+	 * through and let getaddrinfo report any genuine name error, matching
+	 * the prior behavior where a failed ub_resolve did not itself reject.
+	 * An unsigned domain (not bogus) also proceeds -- DNSSEC is opt-in
+	 * per domain.
+	 */
+	if (Th8_DnsResolve(
+	        interp, zServer, Th8_Strlen(interp, zServer), TH8_DNS_TYPE_A,
+	        &pDns) == TH8_OK &&
+	    pDns != NULL) {
+	    int bBogus = pDns->bogus;
+
+	    Th8_DnsResolveFree(interp, pDns);
+	    if (bBogus) {
+		Th8_SetResultStatic(
+		    interp,
+		    "clock ntp: DNSSEC validation failed "
+		    "(bogus DNS response)",
+		    TH8_NOLEN);
+		return TH8_ERROR;
 	    }
-
-	    ubrc = ub_resolve(
-	        ubctx, zServer, 1 /* A record */, 1 /* IN class */,
-	        &ubresult);
-
-	    if (ubrc == 0 && ubresult) {
-		if (ubresult->bogus) {
-		    /*
-		     * DNSSEC validation FAILED.  This indicates
-		     * active DNS tampering or misconfiguration.
-		     * Reject the resolution entirely.
-		     */
-		    Th8_SetResultStatic(
-		        interp,
-		        "clock ntp: DNSSEC validation failed "
-		        "(bogus DNS response)",
-		        TH8_NOLEN);
-		    ub_resolve_free(ubresult);
-		    ub_ctx_delete(ubctx);
-		    return TH8_ERROR;
-		}
-		if (ubresult->secure) {
-		    TH8_TRACE_ERR(interp, "NTP: DNSSEC validated (secure)");
-		}
-		/* If neither secure nor bogus: unsigned domain,
-		 * proceed normally. */
-	    }
-	    if (ubresult) ub_resolve_free(ubresult);
-	    ub_ctx_delete(ubctx);
 	}
     }
 #  elif !defined(_WIN32) && !defined(WIN32) && defined(__GLIBC__)

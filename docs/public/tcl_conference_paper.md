@@ -3698,7 +3698,94 @@ The generalisable lessons:
 
 ---
 
-## 7.  Implementation Status
+### 6.28  Case Study: When You Find a Hole, Keep Digging
+
+A user on a fresh Linux box reported libunbound errors printing to the
+terminal:
+
+    error opening file /etc/unbound/root.key: No such file or directory
+    ...
+    module init for module validator failed
+
+The cause looked immediate.  TH8's shared DNSSEC resolver
+(`th8UnboundResolve`) enabled libunbound's validator module but, when no
+trust anchor could be found, left it enabled with nothing to validate
+against; the module's init then failed against a missing key file.  The
+resolver even *documented* a "no-anchor -> validation disabled" mode that
+had never been implemented.  Implementing it --- disable the validator when
+no anchor loads, so resolution degrades cleanly to insecure --- was a real,
+correct fix.  It built clean.  It matched the symptom exactly.
+
+It was also the wrong fix, and the next three turns were spent learning
+that.
+
+1.  **The plausible fix that changed nothing.**  The user rebuilt and
+    reported: *still seeing it.*  The temptation was to insist the fix was
+    correct (it was) and blame a stale build.  But a fix that provably
+    addresses a mechanism, yet does not move the symptom, has not been
+    connected to the symptom --- only to a mechanism that *resembles* it.
+
+2.  **A green check that never ran.**  Local attempts to reproduce had all
+    printed "0 spew lines," which had read as confirmation.  They were
+    worthless: the test build installs a signed-only script policy, and it
+    was silently rejecting the unsigned scratch scripts with "couldn't
+    retrieve" --- every probe had exited without executing a line, and
+    "0 spew" was counting the output of a program that never ran.  A pass
+    that was never observed to be capable of failing is not evidence.
+
+3.  **The machine that could not reproduce the bug.**  Even once the
+    scripts were signed and running, the symptom would not appear ---
+    because the dev box (macOS) *had* `/etc/unbound/root.key`, libunbound's
+    compiled-in fallback.  "Correct by construction" had been standing in
+    for a result that the environment was structurally incapable of
+    producing.  The box that cannot reproduce a failure cannot confirm its
+    fix.
+
+4.  **The actual hole, one layer down.**  The user's own suite output
+    pinned it: the spew appeared amid the `clock` tests.  There were *two*
+    independent libunbound integrations in the tree.  The first fix had
+    been applied to the general resolver; the terminal spew came from the
+    *other* one --- a hand-rolled `ub_ctx` inside the NTP/`clock` code that
+    built its own context, chained hard-coded trust-anchor paths, and ---
+    unlike the shared resolver --- never called `ub_ctx_debugout()` to
+    silence libunbound's stderr.  Pointing its hard-coded paths at
+    nonexistent files finally reproduced the exact error on the dev box;
+    the fix silenced it; a surgical revert restored it.  Load-bearing, at
+    last, and proven so.
+
+5.  **The hole was structural, not textual.**  The durable repair was not a
+    second patch bolted onto a duplicate.  One external dependency had two
+    integrations, only one of them hardened; that *is* the defect.  The
+    real fix deleted the duplicate --- routing the `clock` path through the
+    same shared, hardened resolver --- so the class of bug (a second copy
+    drifting out of sync with the first) cannot recur.
+
+The generalisable lessons invert a familiar saying.  *When you are in a
+hole, stop digging* is good advice about sunk cost.  It is terrible advice
+about diagnosis, where the first firm floor you hit is usually a false
+bottom.
+
+1.  **A plausible fix that does not move the symptom is a hypothesis, not a
+    conclusion.**  The mode-(d) fix was correct and even shipped --- but it
+    was not the reported bug.  Matching the mechanism is not the same as
+    matching the failure; only the symptom moving proves the connection.
+
+2.  **Verify the verification.**  A green result is only evidence if the
+    check could have gone red.  A harness that silently no-ops --- a
+    rejected script, a skipped constraint, a swallowed exit code --- turns
+    every subsequent "pass" into noise dressed as signal.  Before trusting
+    a clean run, confirm the run ran.
+
+3.  **The environment is part of the experiment.**  A development machine
+    that differs from the failing one in the exact dimension under test
+    (here, the presence of a fallback key file) cannot reproduce the bug
+    and therefore cannot confirm the fix.  Reproduce first; "correct by
+    construction" is a plan for a test, not a substitute for one.
+
+4.  **Duplication is where the second bug hides.**  When two copies of a
+    thing exist and only one was hardened, the fix is rarely a third
+    patch --- it is removing the copy.  The last hole in this dig was not a
+    missing call; it was a missing abstraction.
 
 | Metric | Value |
 |--------|-------|
