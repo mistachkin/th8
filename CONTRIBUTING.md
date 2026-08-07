@@ -97,8 +97,11 @@ under `externals/tommath/build/` by `make tommath_vendor`).
 - GNU make.
 - `tclsh` >= 8.6 (the `audit-format` gate inside `make audit` runs
   `tools/format_code.tcl`, which `package require Tcl 8.6`).
-- `clang-format`, `pkg-config`, OpenSSL + libcurl + libunbound
-  development headers.
+- `clang-format-19` (the `audit-format` gate enforces only this
+  canonical major version; other versions warn-and-skip).  `make
+  apt-deps` installs it on Debian/Ubuntu; see the Portability Guide
+  (`docs/public/portability.md`) for the macOS install steps.
+- `pkg-config`, OpenSSL + libcurl + libunbound development headers.
 - For Cosmopolitan builds: nothing extra; run `bash
   tools/bootstrap_cosmo.sh` once and `make -f Makefile.cosmopolitan`
   picks it up.

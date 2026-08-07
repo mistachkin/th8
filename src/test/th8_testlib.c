@@ -22950,7 +22950,8 @@ th8test_env_stress_cmd(
 
 		pPlat->xOutput(
 		    interp, pPlat->pCtx, zPre, sizeof(zPre) - 1, NULL);
-		pPlat->xOutput(interp, pPlat->pCtx, aWorker[i].zErr,
+		pPlat->xOutput(
+		    interp, pPlat->pCtx, aWorker[i].zErr,
 		    Th8_Strlen(interp, aWorker[i].zErr), NULL);
 		pPlat->xOutput(interp, pPlat->pCtx, "\n", 1, NULL);
 	    }
@@ -24088,8 +24089,8 @@ Th8test_Init(Th8_Interp *interp)
     Th8_CreateCommand(
         interp, "::th8testlib::env_stress", th8test_env_stress_cmd, 0, 0, 0);
     Th8_CreateCommand(
-        interp, "::th8testlib::thread_identity", th8test_thread_identity_cmd, 0,
-        0, 0);
+        interp, "::th8testlib::thread_identity", th8test_thread_identity_cmd,
+        0, 0, 0);
     Th8_CreateCommand(
         interp, "::th8testlib::event_delete_race",
         th8test_event_delete_race_cmd, 0, 0, 0);

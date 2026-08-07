@@ -21,6 +21,33 @@ installs `clang-format-19`; the audit **warns and skips** under any other
 version (or none), so a build is never blocked by the clang-format a host
 happens to ship — only the canonical version enforces.
 
+The gate resolves the binary by the exact name **`clang-format-19`** (via
+`command -v clang-format-19`, falling back to an unversioned `clang-format`),
+and enforces only when that binary's major version is 19.  Formatting is stable
+within a major version, so any `19.x` patch release is fine; only the major (19)
+must match.
+
+### Installing `clang-format-19` on macOS (or any host without an apt package)
+
+macOS has no `apt`, so install the pinned version into an isolated virtualenv
+and expose it under the name the gate looks for:
+
+    python3 -m venv ~/.clang-format-19-venv
+    ~/.clang-format-19-venv/bin/pip install 'clang-format==19.1.7'
+    ln -sf ~/.clang-format-19-venv/bin/clang-format \
+        "$(brew --prefix)/bin/clang-format-19"   # or any dir already on $PATH
+
+Verify with `clang-format-19 --version` (expect `19.x`); `make audit-format`
+should then **enforce** (`format_code: summary: ok=... changed=0`) instead of
+printing a `SKIP` line.  To remove it later: `rm "$(brew --prefix)/bin/clang-format-19"`
+and `rm -rf ~/.clang-format-19-venv`.
+
+The Homebrew LLVM 19 toolchain is a heavier (~1.5 GB) official alternative:
+
+    brew install llvm@19
+    ln -sf "$(brew --prefix llvm@19)/bin/clang-format" \
+        "$(brew --prefix)/bin/clang-format-19"
+
 ---
 
 ## 1. C Language Standard

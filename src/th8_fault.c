@@ -714,8 +714,12 @@ pt_xPanic(Th8_Interp *i, void *c, const char *zMsg, size_t nMsg)
 PT_3(xStackBackTrace, int, void **, int, int)
 
 /* 64-bit atomics -- pure passthrough; an atomic CAS must not fail. */
-PT_3(xIntCmpXchg64, th8_uint64_t, volatile th8_uint64_t *, th8_uint64_t,
-     th8_uint64_t)
+PT_3(
+    xIntCmpXchg64,
+    th8_uint64_t,
+    volatile th8_uint64_t *,
+    th8_uint64_t,
+    th8_uint64_t)
 
 /* Math/entropy -- xMathFunc and xRandomBytes are fault-injecting
  * (wrappers defined below).  Their passthrough behaviour is the

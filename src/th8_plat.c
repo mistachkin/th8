@@ -2709,7 +2709,8 @@ Th8_Int64CmpXchg(
     if (p && p->xIntCmpXchg64) {
 	return p->xIntCmpXchg64(
 	    interp,
-	    th8ResolveCtx(interp, (Th8_PlatformFunc)p->xIntCmpXchg64, p->pCtx),
+	    th8ResolveCtx(
+	        interp, (Th8_PlatformFunc)p->xIntCmpXchg64, p->pCtx),
 	    pTarget, iExchange, iComparand);
     }
     if (th8GlobalPlatform.xIntCmpXchg64) {
