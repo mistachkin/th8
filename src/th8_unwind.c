@@ -172,7 +172,7 @@ th8UnwindStackBackTrace(
  */
 
 static Th8_Platform th8UnwindPlatformData = {
-    5, /* nVersion */
+    1, /* nVersion */
     0, 0, 0, 0, /* xInitialize, xFinalize, xPreDeleteInterp, xDeleteInterp */
 
     /* Memory */
@@ -227,8 +227,11 @@ static Th8_Platform th8UnwindPlatformData = {
     /* DNS */
     0, 0, /* xDnsResolve, xDnsResolveFree */
 
-    /* Diagnostics (nVersion 5) -- the compiler unwind runtime. */
+    /* Diagnostics -- the compiler unwind runtime. */
     th8UnwindStackBackTrace, /* xStackBackTrace */
+
+    /* 64-bit atomics */
+    0, /* xIntCmpXchg64 */
 
     /* Host context */
     0 /* pCtx */

@@ -369,6 +369,15 @@ struct Th8_Interp {
 				   Keyed on callback function address;
 				   pData is the custom context pointer.
 				   Created lazily by SetPlatformContext. */
+    th8_uint64_t threadId; /* Id of the owning (creating) thread.
+				   Captured in Th8_CreateInterp via
+				   xGetThreadId; read/written ONLY through
+				   the 64-bit interlocked CAS
+				   (Th8_Int64CmpXchg).  Enforces the single-
+				   threaded-per-interpreter affinity contract
+				   (see TH8_ASSERT_OWNER,
+				   Th8_GetInterpThreadId).  0 if the platform
+				   reports no thread id (affinity unchecked). */
 
     /*
      * Script debugging.

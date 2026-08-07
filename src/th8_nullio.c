@@ -435,7 +435,7 @@ th8NullGetCwd(
  */
 
 static Th8_Platform th8NullIoPlatformData = {
-    5,   /* nVersion */
+    1,   /* nVersion */
     0,   /* xInitialize */
     0,   /* xFinalize */
 
@@ -564,8 +564,11 @@ static Th8_Platform th8NullIoPlatformData = {
     /* DNS (none) */
     0, 0,  /* xDnsResolve, xDnsResolveFree */
 
-    /* Diagnostics (nVersion 5) -- the th8_unwind (compiler-runtime) layer supplies xStackBackTrace. */
+    /* Diagnostics -- the th8_unwind (compiler-runtime) layer supplies xStackBackTrace. */
     0, /* xStackBackTrace */
+
+    /* 64-bit atomics */
+    0, /* xIntCmpXchg64 */
 
     /* Host context */
     0 /* pCtx */

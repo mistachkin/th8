@@ -257,6 +257,8 @@ th8RegisterStaticPlugins(Th8_Interp *interp)
 int
 Th8_RegisterLanguage(Th8_Interp *interp) /* Interpreter. */
 {
+    TH8_ASSERT_OWNER(interp);
+
     /*
      * All commands are now registered through the plugin system.
      * The aCmd[] table has been fully replaced by th8RegisterStaticPlugins.

@@ -3162,6 +3162,44 @@ th8Win32IntCmpXchg(
 /*
  *----------------------------------------------------------------------
  *
+ * th8Win32IntCmpXchg64 --
+ *
+ *	64-bit atomic compare-and-swap.  Implements the Th8_Platform
+ *	xIntCmpXchg64 callback.
+ *
+ * Why / How:
+ *	The 64-bit sibling of th8Win32IntCmpXchg.  Wraps the Win32
+ *	InterlockedCompareExchange64 intrinsic, which is wide enough to
+ *	hold a thread id (the 32-bit xIntCmpXchg is not).  Used to read
+ *	and publish the interpreter's owning-thread id.  Returns the
+ *	original value of *pTarget before the operation.
+ *
+ * Results:
+ *	The previous value of *pTarget.
+ *
+ * Side effects:
+ *	May atomically modify *pTarget.  Implies a full memory barrier.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static th8_uint64_t
+th8Win32IntCmpXchg64(
+    Th8_Interp *interp,
+    void *pCtx,
+    volatile th8_uint64_t *pTarget,
+    th8_uint64_t iExchange,
+    th8_uint64_t iComparand)
+{
+    (void)interp;
+    (void)pCtx;
+    return (th8_uint64_t)InterlockedCompareExchange64(
+        (volatile LONG64 *)pTarget, (LONG64)iExchange, (LONG64)iComparand);
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8Win32MemBarrier --
  *
  *	Issue a full memory barrier (fence).  Implements the
@@ -5606,7 +5644,7 @@ th8Win32DnsResolveFree(Th8_Interp *interp, void *pCtx, Th8_DnsResult *pResult)
 
 
 static Th8_Platform th8Win32PlatformData = {
-    5,   /* nVersion */
+    1,   /* nVersion */
 
     /* Lifecycle */
     th8Win32Initialize,  /* xInitialize */
@@ -5724,6 +5762,9 @@ static Th8_Platform th8Win32PlatformData = {
        Win32 is merged before th8_unwind, so this native entry wins over the
        compiler-runtime no-op fallback. */
     th8Win32StackBackTrace, /* xStackBackTrace */
+
+    /* 64-bit atomics */
+    th8Win32IntCmpXchg64, /* xIntCmpXchg64 */
 
     /* Host context */
     0 /* pCtx */

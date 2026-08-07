@@ -324,4 +324,22 @@ runTest {test apicontract-9.1 {
 
 ###############################################################################
 
+runTest {test apicontract-10.1 {
+  R-31635-30129 R-31999-07274 R-47926-46982 R-10851-48859:
+  Th8_GetThreadId returns the CALLING thread's id and Th8_GetInterpThreadId
+  returns the OWNING thread's id; both are callable from any thread.  The
+  owning-thread id is captured once in Th8_CreateInterp and read via the
+  interlocked compare-with-zero, so a foreign thread observes the SAME owner
+  id as the owning thread, and neither query trips the debug affinity
+  assertion.  thread_identity spawns a worker thread that calls both queries
+  on the main thread's interpreter and verifies the worker sees its own
+  distinct id while both threads agree on the owner id.
+} -constraints {
+    loadLib th8
+} -body {
+  ::th8testlib::thread_identity
+} -result {ok}}
+
+###############################################################################
+
 source tests/epilogue.tcl

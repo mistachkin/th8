@@ -3610,6 +3610,94 @@ The lessons are general:
 
 ---
 
+### 6.27  Case Study: An Innocent Test and the Depth of a Root Cause
+
+The most expensive investigations often begin with the least
+threatening test.  `apicontract-9.1` --- named `env_stress` ---
+exists only to confirm that the environment-variable backend
+serialises concurrent access with a mutex: it spawns eight worker
+threads that hammer the same `::env` key and checks that all 1600
+set/unset cycles complete.  It had passed on macOS for months.  On
+a fresh Linux host it failed with a diagnostic that had nothing
+obviously to do with environment variables: *"C stack overflow
+(TH8 stack limit reached)."*
+
+The first temptation was to file it as flaky and move on --- the
+failure was platform-specific and looked timing-related.  Taking it
+seriously instead led through four layers, each deeper than the
+last.
+
+1.  **The symptom.**  TH8's C-stack guard computes
+    `nUsed = |pStackBase - &localMarker|` and compares it against a
+    recorded stack size.  On the failing runs it computed *gigabytes*
+    of apparent usage.  The reason was not a runaway recursion: the
+    stack *base* had been captured on the main thread at
+    `Th8_CreateInterp` time, but the offending `Th8_Eval` ran on a
+    worker thread.  glibc `mmap`s each pthread stack far from the main
+    stack, so subtracting a worker-stack address from a main-stack base
+    yields a nonsensical multi-gigabyte span.  macOS's stack layout
+    happens to place them close enough that the bogus arithmetic stayed
+    under the limit --- the bug had been latent, hidden by platform
+    luck, the whole time.
+
+2.  **The root cause.**  The test was creating an interpreter on one
+    thread and using it on another.  TH8's specification (§37a) already
+    stated that the API surface is single-threaded per interpreter ---
+    but the contract lived only in prose.  Nothing *enforced* it, so a
+    test could violate it and the violation could hide behind a
+    platform's memory map until the day it did not.
+
+3.  **The correctness fix.**  The immediate repair was to rework the
+    test so each worker builds and destroys its *own* interpreter on
+    its own thread --- the pattern the contract requires --- followed by
+    an audit of every `pthread_create` site to confirm no other code
+    made the same mistake.  But a passing test is not the same as an
+    enforced invariant.  The durable fix was to convert the prose
+    contract into an executable one: capture the owning thread's id in
+    `Th8_CreateInterp` and assert, in debug builds, that the most
+    important owning-thread-only entry points --- the evaluation choke
+    point, teardown, language registration, and the variable / result /
+    command surface --- are only ever called on that thread
+    (`TH8_ASSERT_OWNER`).
+
+4.  **The API refactor.**  Enforcement needed a public way to read the
+    owning-thread id (`Th8_GetInterpThreadId`), and reading it safely
+    from a foreign thread needed an *atomic* 64-bit load.  The platform
+    abstraction offered only a 32-bit compare-exchange
+    (`xIntCmpXchg`) --- too narrow to hold a thread id.  Closing the gap
+    meant adding a 64-bit sibling primitive (`xIntCmpXchg64`, exposed as
+    `Th8_Int64CmpXchg`) across every platform table in lockstep, and ---
+    being still pre-RTM --- collapsing the platform ABI version back to
+    1 rather than carrying a bump.  A one-line concurrency test had, by
+    this point, produced a documented bug fix, a new class of debug
+    assertion, two new public APIs, and a minor ABI change.
+
+The generalisable lessons:
+
+1.  **An innocent test is a probe into unstated invariants.**  The
+    value of `env_stress` was never the environment backend; it was
+    that concurrency exercises assumptions the single-threaded tests
+    never touch.  A failure with a symptom unrelated to the test's
+    stated purpose is a signal that the test has wandered into
+    unspecified territory --- exactly where the interesting bugs live.
+
+2.  **A contract that lives only in prose will be violated, and the
+    violation surfaces on the least forgiving platform.**  This is the
+    same codification reflex as Sections 6.16 and 6.26: any invariant a
+    human maintains by discipline is a candidate for an executable
+    gate.  Here the gate is a debug assertion rather than a build-time
+    checker, but the move is identical --- and, as always, it earns its
+    keep the moment the discipline first visibly fails.
+
+3.  **Root causes have depth, and stopping early is the real cost.**
+    The retry-and-forget path would have left a latent memory-map
+    landmine, an unenforced contract, and a missing platform primitive
+    all in place.  The distance from *"one flaky test"* to *"a new
+    platform-abstraction primitive"* is a feature of taking the first
+    step, not an accident of this particular bug.
+
+---
+
 ## 7.  Implementation Status
 
 | Metric | Value |

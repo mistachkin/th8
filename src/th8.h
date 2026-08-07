@@ -1816,7 +1816,7 @@ struct Th8_Platform {
 
     /*
      *------------------------------------------------------------------
-     * Diagnostics (added in nVersion 5)
+     * Diagnostics
      *------------------------------------------------------------------
      */
 
@@ -1840,6 +1840,31 @@ struct Th8_Platform {
         void **apFrames,
         int nMaxFrames,
         int nSkip);
+
+    /*
+     *------------------------------------------------------------------
+     * 64-bit atomics
+     *------------------------------------------------------------------
+     */
+
+    /*
+     * xIntCmpXchg64 --
+     *	64-bit atomic compare-and-exchange.  Atomically compares
+     *	*pTarget with iComparand; if equal, stores iExchange in
+     *	*pTarget.  Returns the original value of *pTarget.  This is
+     *	the 64-bit sibling of xIntCmpXchg; unlike that 32-bit flag
+     *	primitive, it is wide enough to hold a thread id, and is
+     *	used to read and publish Th8_Interp.threadId -- the owning
+     *	thread that enforces the single-threaded-per-interpreter
+     *	affinity contract.  If NULL, a non-atomic operation is
+     *	performed (single-threaded assumption).
+     */
+    th8_uint64_t (*xIntCmpXchg64)(
+        Th8_Interp *interp,
+        void *pCtx,
+        volatile th8_uint64_t *pTarget,
+        th8_uint64_t iExchange,
+        th8_uint64_t iComparand);
 
     /*
      *------------------------------------------------------------------
@@ -2436,6 +2461,24 @@ TH8_API int Th8_IntCmpXchg(
     volatile int *pTarget,
     int iExchange,
     int iComparand);
+
+/*
+ * Th8_Int64CmpXchg --
+ *	64-bit atomic compare-and-exchange via the platform's
+ *	xIntCmpXchg64 callback.  Compares *pTarget with iComparand; if
+ *	equal, stores iExchange in *pTarget.  Returns the original
+ *	value of *pTarget.  Falls back to a non-atomic operation if the
+ *	callback is NULL (single-threaded assumption).  This is the
+ *	64-bit sibling of Th8_IntCmpXchg; it exists to read and publish
+ *	the owning-thread id (see Th8_GetInterpThreadId) atomically.
+ *
+ *	THREAD SAFETY: callable from any thread.
+ */
+TH8_API th8_uint64_t Th8_Int64CmpXchg(
+    Th8_Interp *interp,
+    volatile th8_uint64_t *pTarget,
+    th8_uint64_t iExchange,
+    th8_uint64_t iComparand);
 
 /* ====================================================================
  * Section: Interpreter Lifecycle
@@ -5132,11 +5175,34 @@ TH8_API int Th8_GetParentPid(Th8_Interp *interp);
 
 /*
  * Th8_GetThreadId --
- *	Return the current thread ID via the platform's xGetThreadId
- *	callback.  Returns 0 if the callback is NULL or the host does
- *	not support it.
+ *	Return the CURRENT (calling) thread ID via the platform's
+ *	xGetThreadId callback.  Returns 0 if the callback is NULL or the
+ *	host does not support it.
+ *
+ *	THREAD SAFETY: callable from any thread.  It reports the caller's
+ *	own thread, reads only immutable interpreter state (the platform
+ *	pointer), and does NOT require the interpreter's owning thread.
+ *	This is one of the few APIs exempt from the single-threaded-per-
+ *	interpreter affinity contract (see also Th8_GetInterpThreadId).
  */
 TH8_API th8_uint64_t Th8_GetThreadId(Th8_Interp *interp);
+
+/*
+ * Th8_GetInterpThreadId --
+ *	Return the ID of the thread that OWNS the interpreter (the thread
+ *	that created it via Th8_CreateInterp).  Read atomically via the
+ *	64-bit interlocked compare-exchange.  Returns 0 if the owning
+ *	thread was never captured (the platform has no xGetThreadId).
+ *
+ *	Compare with Th8_GetThreadId, which returns the CALLER's thread:
+ *	when the two differ, the caller is on a foreign thread and the
+ *	affinity contract forbids most other API calls on this interp.
+ *
+ *	THREAD SAFETY: callable from any thread.  It performs only an
+ *	atomic read and is exempt from the affinity contract; this is
+ *	precisely how a foreign thread can safely discover the owner.
+ */
+TH8_API th8_uint64_t Th8_GetInterpThreadId(Th8_Interp *interp);
 
 /*
  * Th8_GetEnv --

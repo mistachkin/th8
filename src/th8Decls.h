@@ -46,6 +46,11 @@ typedef struct Th8StubsTable {
         volatile int *pTarget,
         int iExchange,
         int iComparand);
+    th8_uint64_t (*th8_Int64CmpXchg)(
+        Th8_Interp *interp,
+        volatile th8_uint64_t *pTarget,
+        th8_uint64_t iExchange,
+        th8_uint64_t iComparand);
     Th8_Interp *(*th8_CreateInterp)(Th8_Platform *pPlatform);
     int (*th8_RestoreInterp)(Th8_Interp *interp, int flags);
     void (*th8_DeleteInterp)(Th8_Interp *interp);
@@ -934,6 +939,7 @@ typedef struct Th8StubsTable {
     int (*th8_GetPid)(Th8_Interp *interp);
     int (*th8_GetParentPid)(Th8_Interp *interp);
     th8_uint64_t (*th8_GetThreadId)(Th8_Interp *interp);
+    th8_uint64_t (*th8_GetInterpThreadId)(Th8_Interp *interp);
     char *(*th8_GetEnv)(Th8_Interp *interp, const char *zName);
     int (*th8_KeyValue)(
         Th8_Interp *interp,
@@ -1276,6 +1282,7 @@ extern const Th8StubsTable *th8StubsPtr;
 #  define Th8_Finalize            (th8StubsPtr->th8_Finalize)
 #  define Th8_GetInternalStubs    (th8StubsPtr->th8_GetInternalStubs)
 #  define Th8_IntCmpXchg          (th8StubsPtr->th8_IntCmpXchg)
+#  define Th8_Int64CmpXchg        (th8StubsPtr->th8_Int64CmpXchg)
 #  define Th8_CreateInterp        (th8StubsPtr->th8_CreateInterp)
 #  define Th8_RestoreInterp       (th8StubsPtr->th8_RestoreInterp)
 #  define Th8_DeleteInterp        (th8StubsPtr->th8_DeleteInterp)
@@ -1628,6 +1635,7 @@ extern const Th8StubsTable *th8StubsPtr;
 #  define Th8_GetPid               (th8StubsPtr->th8_GetPid)
 #  define Th8_GetParentPid         (th8StubsPtr->th8_GetParentPid)
 #  define Th8_GetThreadId          (th8StubsPtr->th8_GetThreadId)
+#  define Th8_GetInterpThreadId    (th8StubsPtr->th8_GetInterpThreadId)
 #  define Th8_GetEnv               (th8StubsPtr->th8_GetEnv)
 #  define Th8_KeyValue             (th8StubsPtr->th8_KeyValue)
 #  define Th8_SetPlatformContext   (th8StubsPtr->th8_SetPlatformContext)

@@ -343,7 +343,7 @@ th8MimallocMemorySize(Th8_Interp *interp, void *pCtx, void *p)
  */
 
 static Th8_Platform th8MimallocPlatformData = {
-    5,    /* nVersion */
+    1,    /* nVersion */
     th8MimallocInit,  /* xInitialize */
     th8MimallocFinal,  /* xFinalize */
 
@@ -472,8 +472,11 @@ static Th8_Platform th8MimallocPlatformData = {
     /* DNS */
     0, 0,  /* xDnsResolve, xDnsResolveFree */
 
-    /* Diagnostics (nVersion 5) -- the th8_unwind (compiler-runtime) layer supplies xStackBackTrace. */
+    /* Diagnostics -- the th8_unwind (compiler-runtime) layer supplies xStackBackTrace. */
     0, /* xStackBackTrace */
+
+    /* 64-bit atomics */
+    0, /* xIntCmpXchg64 */
 
     /* Host context */
     0 /* pCtx */

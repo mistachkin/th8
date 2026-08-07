@@ -575,6 +575,8 @@ Th8_GetVar(
 
     if (!interp) return TH8_ERROR;
 
+    TH8_ASSERT_OWNER(interp);
+
     pVar = th8FindValue(interp, zVar, nVar, 0);
     if (!pVar) {
 	Th8_ErrorMessage(interp, "no such variable: \"", zVar, nVar);
@@ -845,6 +847,8 @@ Th8_SetVar(
     size_t nTag = 0; /* taint bit of the incoming value, if any */
 
     if (!interp) return TH8_ERROR;
+
+    TH8_ASSERT_OWNER(interp);
 
     pVar = th8FindValue(interp, zVar, nVar, 1);
     if (!pVar) {
@@ -1406,6 +1410,9 @@ Th8_UnsetVar(
     Th8_Frame *pFrame;
 
     if (!interp) return TH8_ERROR;
+
+    TH8_ASSERT_OWNER(interp);
+
     th8AnalyzeVarName(
         zVar, nVar, &zOuter, &nOuter, &zInner, &nInner, &bGlobal);
 

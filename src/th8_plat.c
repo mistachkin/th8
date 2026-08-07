@@ -2047,17 +2047,23 @@ Th8_GetParentPid(Th8_Interp *interp) /* Interpreter. */
  *
  * Th8_GetThreadId --
  *
- *	Get the current thread ID via the platform.  Returns 0 if the
- *	callback is NULL (unsupported or unavailable).
+ *	Get the CURRENT (calling) thread ID via the platform.  Returns 0
+ *	if the callback is NULL (unsupported or unavailable).
  *
  * Why / How:
- *	Used for diagnostic tracing and thread-safety assertions.
+ *	Used for diagnostic tracing and thread-affinity assertions.
  *	Delegates to the platform's xGetThreadId callback.  Returns
  *	0 when the callback is missing, which is safe for single-
  *	threaded environments.
  *
+ *	THREAD SAFETY: callable from any thread.  It reports the
+ *	caller's own thread and reads only immutable interpreter state
+ *	(the platform pointer), so it is exempt from the single-
+ *	threaded-per-interpreter affinity contract -- this is how a
+ *	foreign thread can compare itself against Th8_GetInterpThreadId.
+ *
  * Results:
- *	Thread ID, or 0.
+ *	The calling thread's ID, or 0.
  *
  * Side effects:
  *	None.
@@ -2656,6 +2662,63 @@ Th8_IntCmpXchg(
     /* Fallback: non-atomic, single-threaded */
     {
 	int old = *pTarget;
+	if (old == iComparand) *pTarget = iExchange;
+	return old;
+    }
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * Th8_Int64CmpXchg --
+ *
+ *	64-bit atomic integer compare-and-exchange via the platform's
+ *	xIntCmpXchg64 callback.  Compares *pTarget with iComparand; if
+ *	equal, stores iExchange in *pTarget.  Returns the original value
+ *	of *pTarget.  Falls back to a non-atomic operation if the
+ *	callback is NULL (single-threaded assumption).
+ *
+ * Why / How:
+ *	The 64-bit sibling of Th8_IntCmpXchg.  It exists because the
+ *	32-bit primitive is too narrow to hold a thread id: the owning-
+ *	thread id (Th8_Interp.threadId) is read and published through
+ *	this call so the affinity contract can be enforced without a
+ *	lock.  The two-tier dispatch tries the per-interpreter platform
+ *	first, then the global platform, then a non-atomic fallback that
+ *	is correct only under single-threaded assumptions.
+ *
+ * Results:
+ *	The original value of *pTarget.
+ *
+ * Side effects:
+ *	May atomically update *pTarget.
+ *
+ *----------------------------------------------------------------------
+ */
+
+th8_uint64_t
+Th8_Int64CmpXchg(
+    Th8_Interp *interp,
+    volatile th8_uint64_t *pTarget,
+    th8_uint64_t iExchange,
+    th8_uint64_t iComparand)
+{
+    const Th8_Platform *p = interp ? Th8_GetPlatform(interp) : NULL;
+
+    if (p && p->xIntCmpXchg64) {
+	return p->xIntCmpXchg64(
+	    interp,
+	    th8ResolveCtx(interp, (Th8_PlatformFunc)p->xIntCmpXchg64, p->pCtx),
+	    pTarget, iExchange, iComparand);
+    }
+    if (th8GlobalPlatform.xIntCmpXchg64) {
+	return th8GlobalPlatform.xIntCmpXchg64(
+	    interp, th8GlobalPlatform.pCtx, pTarget, iExchange, iComparand);
+    }
+    /* Fallback: non-atomic, single-threaded */
+    {
+	th8_uint64_t old = *pTarget;
 	if (old == iComparand) *pTarget = iExchange;
 	return old;
     }

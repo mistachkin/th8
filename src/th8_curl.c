@@ -675,7 +675,7 @@ th8CurlGetData(
  */
 
 static Th8_Platform th8CurlPlatformData = {
-    5, /* nVersion */
+    1, /* nVersion */
     0, 0, 0, 0, /* xInitialize, xFinalize, xPreDeleteInterp, xDeleteInterp */
 
     /* Memory */
@@ -730,8 +730,11 @@ static Th8_Platform th8CurlPlatformData = {
     /* DNS */
     0, 0, /* xDnsResolve, xDnsResolveFree */
 
-    /* Diagnostics (nVersion 5) -- the th8_unwind (compiler-runtime) layer supplies xStackBackTrace. */
+    /* Diagnostics -- the th8_unwind (compiler-runtime) layer supplies xStackBackTrace. */
     0, /* xStackBackTrace */
+
+    /* 64-bit atomics */
+    0, /* xIntCmpXchg64 */
 
     /* Host context */
     0 /* pCtx */

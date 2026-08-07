@@ -244,7 +244,7 @@ th8AndroidRandomBytes(
  */
 
 static Th8_Platform th8AndroidPlatformData = {
-    5,    /* nVersion */
+    1,    /* nVersion */
     0,    /* xInitialize */
     0,    /* xFinalize */
 
@@ -367,8 +367,11 @@ static Th8_Platform th8AndroidPlatformData = {
     /* DNS (libunbound provided by POSIX merge when enabled) */
     0, 0,   /* xDnsResolve, xDnsResolveFree */
 
-    /* Diagnostics (nVersion 5) -- the th8_unwind (compiler-runtime) layer supplies xStackBackTrace. */
+    /* Diagnostics -- the th8_unwind (compiler-runtime) layer supplies xStackBackTrace. */
     0, /* xStackBackTrace */
+
+    /* 64-bit atomics */
+    0, /* xIntCmpXchg64 */
 
     /* Host context */
     0 /* pCtx */

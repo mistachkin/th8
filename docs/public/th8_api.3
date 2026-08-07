@@ -1105,10 +1105,22 @@ Return the parent process ID via the platform's
 callback.  Returns 0 if the callback is not available.
 .TP
 .BI "th8_uint64_t Th8_GetThreadId(Th8_Interp *" interp ");"
-Return the current thread ID as a 64-bit unsigned integer via the
+Return the CALLING thread's ID as a 64-bit unsigned integer via the
 platform's
 .B xGetThreadId
-callback.  Returns 0 if the callback is not available.
+callback.  Returns 0 if the callback is not available.  Callable from
+any thread: it is exempt from the single-threaded-per-interpreter
+affinity contract.
+.TP
+.BI "th8_uint64_t Th8_GetInterpThreadId(Th8_Interp *" interp ");"
+Return the ID of the thread that OWNS the interpreter (the thread that
+created it with
+.BR Th8_CreateInterp ),
+read atomically via the 64-bit interlocked compare-exchange.  Returns 0
+if the owning thread was never captured.  Callable from any thread; a
+foreign thread may use it to discover the owner and compare against its
+own
+.BR Th8_GetThreadId .
 .TP
 .BI "int Th8_GetRootPath(Th8_Interp *" interp ", const char *" zPath ", size_t " nPath ", char *" zOut ", size_t " nOut ");"
 Resolve the filesystem root or mount point for
@@ -1921,8 +1933,11 @@ Return the current process ID.
 .BI "int Th8_GetParentPid(Th8_Interp *" interp ");"
 Return the parent process ID.
 .TP
-.BI "int Th8_GetThreadId(Th8_Interp *" interp ");"
-Return the current thread ID.
+.BI "th8_uint64_t Th8_GetThreadId(Th8_Interp *" interp ");"
+Return the calling thread's ID.  Callable from any thread.
+.TP
+.BI "th8_uint64_t Th8_GetInterpThreadId(Th8_Interp *" interp ");"
+Return the interpreter's owning-thread ID.  Callable from any thread.
 .TP
 .BI "const char *Th8_GetBasePath(Th8_Interp *" interp ");"
 Return the base directory path.
@@ -1970,13 +1985,24 @@ Enable or disable arbitrary precision integer support.
 .BI "int Th8_IsBigintEnabled(Th8_Interp *" interp ");"
 Return non-zero if bigint support is enabled.
 .TP
-.BI "int Th8_IntCmpXchg(volatile int *" p ", int " oldVal ", int " newVal ");"
-Atomic compare-and-exchange.  Returns non-zero if
-.I *p
-was
-.I oldVal
-and was set to
-.IR newVal .
+.BI "int Th8_IntCmpXchg(Th8_Interp *" interp ", volatile int *" pTarget ", int " iExchange ", int " iComparand ");"
+Atomic 32-bit compare-and-exchange.  If
+.I *pTarget
+equals
+.IR iComparand ,
+store
+.I iExchange
+into it.  Returns the original value of
+.IR *pTarget .
+Callable from any thread.
+.TP
+.BI "th8_uint64_t Th8_Int64CmpXchg(Th8_Interp *" interp ", volatile th8_uint64_t *" pTarget ", th8_uint64_t " iExchange ", th8_uint64_t " iComparand ");"
+64-bit sibling of
+.BR Th8_IntCmpXchg ,
+wide enough to hold a thread id; used to read and publish the owning-thread
+id.  Returns the original value of
+.IR *pTarget .
+Callable from any thread.
 .TP
 .BI "void Th8_GetCacheStats(Th8_Interp *" interp ", th8_uint64_t *" pnHit ", th8_uint64_t *" pnMiss ", th8_uint64_t *" pnEvict ");"
 Return the IR cache hit/miss/evict counters (requires TH8_BENCHMARKING).

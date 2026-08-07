@@ -232,7 +232,7 @@ th8IosRandomBytes(Th8_Interp *interp, void *pCtx, void *pBuf, size_t nByte)
  */
 
 static Th8_Platform th8IosPlatformData = {
-    5,    /* nVersion */
+    1,    /* nVersion */
     0,    /* xInitialize  (macOS provides) */
     0,    /* xFinalize    (macOS provides) */
 
@@ -353,8 +353,11 @@ static Th8_Platform th8IosPlatformData = {
     /* DNS (libunbound not available on iOS) */
     0, 0,   /* xDnsResolve, xDnsResolveFree */
 
-    /* Diagnostics (nVersion 5) -- the th8_unwind (compiler-runtime) layer supplies xStackBackTrace. */
+    /* Diagnostics -- the th8_unwind (compiler-runtime) layer supplies xStackBackTrace. */
     0, /* xStackBackTrace */
+
+    /* 64-bit atomics */
+    0, /* xIntCmpXchg64 */
 
     /* Host context */
     0 /* pCtx */

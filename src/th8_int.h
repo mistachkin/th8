@@ -215,6 +215,38 @@ TH8_INTERNAL void th8GlobalMutexEnter(Th8_Interp *interp);
 TH8_INTERNAL void th8GlobalMutexLeave(Th8_Interp *interp);
 
 /* ====================================================================
+ * Thread-affinity contract (th8_core.c)
+ *
+ * Every Th8_* API except the documented thread-safe exceptions
+ * (Th8_CancelEval, the event-queue family, Th8_GetThreadId,
+ * Th8_GetInterpThreadId, Th8_ThreadInit/Done) MUST be called on the
+ * interpreter's owning thread -- the thread that created it.  The
+ * owning-thread id is captured in Th8_CreateInterp and read/written
+ * only through the 64-bit interlocked CAS.
+ * ==================================================================== */
+
+/* Return non-zero if the caller may operate on interp under the
+ * affinity contract (owns it, or affinity cannot be enforced because
+ * the platform reports no thread ids).  Used only by TH8_ASSERT_OWNER;
+ * see Th8_GetInterpThreadId -- internal */
+TH8_INTERNAL int th8CheckThreadOwner(Th8_Interp *interp);
+
+/*
+ * TH8_ASSERT_OWNER(interp) --
+ *	Debug-only assertion that the calling thread owns interp.  In
+ *	debug builds it aborts (assert) if a foreign thread calls an
+ *	owning-thread-only API; in release / coverage builds it compiles
+ *	to nothing.  A NULL interp or a host without thread-id support
+ *	passes silently (see th8CheckThreadOwner).
+ */
+#if defined(TH8_DEBUG) && !defined(TH8_OMIT_AUXILIARY_SAFETY_CHECKS)
+#  include <assert.h>
+#  define TH8_ASSERT_OWNER(interp) assert(th8CheckThreadOwner(interp))
+#else
+#  define TH8_ASSERT_OWNER(interp) ((void)0)
+#endif
+
+/* ====================================================================
  * Event queue + per-pState manual-reset event handle (th8_core.c)
  *
  * The event queue is per-Th8_AsyncState (see th8_int_core.h): each

@@ -1123,7 +1123,7 @@ Th8_GetLibcPlatform(void)
     static int bInit = 0;
 
     if (!bInit) {
-	sLibc.nVersion = 5;
+	sLibc.nVersion = 1;
 
 	/* Memory allocation */
 	sLibc.xMalloc = th8LibcMalloc;
@@ -1153,9 +1153,11 @@ Th8_GetLibcPlatform(void)
 	/* Math */
 	sLibc.xMathFunc = th8LibcMathFunc;
 
-	/* nVersion 5 adds xStackBackTrace, but that is a compiler-runtime
-	 * facility (not ANSI C), so it lives in th8_unwind.c and is supplied
-	 * by merging th8GetUnwindPlatform(); libc leaves the slot NULL. */
+	/* xStackBackTrace is a compiler-runtime facility (not ANSI C), so it
+	 * lives in th8_unwind.c and is supplied by merging
+	 * th8GetUnwindPlatform(); libc leaves the slot NULL.  Likewise the
+	 * threading slots (xIntCmpXchg, xIntCmpXchg64, ...) are supplied by
+	 * the OS layer and left NULL here (zero-initialized). */
 
 	bInit = 1;
     }

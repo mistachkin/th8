@@ -21975,16 +21975,61 @@ static int
 th8test_thread_create(
     th8test_thread_t *pTid,
     th8test_thread_proc fn,
-    void *arg)
+    void *arg,
+    size_t nStack) /* Requested stack size in bytes; 0 = platform default. */
 {
 #  if defined(_WIN32) || defined(WIN32)
-    HANDLE h = (HANDLE)_beginthreadex(NULL, 0, fn, arg, 0, NULL);
+    HANDLE h = (HANDLE)
+        _beginthreadex(NULL, (unsigned)nStack, fn, arg, 0, NULL);
     if (!h) return -1;
     *pTid = h;
     return 0;
 #  else
+    if (nStack > 0) {
+	pthread_attr_t attr;
+	int rc;
+
+	if (pthread_attr_init(&attr) != 0) {
+	    return -1;
+	}
+	/* Best-effort: if nStack is below PTHREAD_STACK_MIN the setter fails
+	 * and the attr keeps its (larger) default, which is fine. */
+	(void)pthread_attr_setstacksize(&attr, nStack);
+	rc = pthread_create(pTid, &attr, fn, arg);
+	(void)pthread_attr_destroy(&attr);
+	return rc;
+    }
     return pthread_create(pTid, NULL, fn, arg);
 #  endif
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_owning_stack_size --
+ *
+ *	Return the C stack size (bytes) TH8 recorded for INTERP's owning
+ *	thread -- i.e. the size the platform's xGetStackBounds reports for
+ *	the current (calling) thread, which by the single-threaded-per-
+ *	interp contract is the owning thread.  Used to size worker threads
+ *	that will run TH8 evals so they get a stack as large as the parent.
+ *	Returns 0 when the platform provides no xGetStackBounds (caller then
+ *	falls back to the platform-default stack).
+ *
+ *----------------------------------------------------------------------
+ */
+static size_t
+th8test_owning_stack_size(Th8_Interp *interp)
+{
+    const Th8_Platform *pPlat = Th8_GetPlatform(interp);
+    void *pBase = NULL;
+    size_t nSize = 0;
+
+    if (pPlat != NULL && pPlat->xGetStackBounds != NULL &&
+        pPlat->xGetStackBounds(NULL, pPlat->pCtx, &pBase, &nSize) == TH8_OK) {
+	return nSize;
+    }
+    return 0;
 }
 
 
@@ -22003,10 +22048,14 @@ th8test_thread_create(
  */
 
 static int
-th8test_thread_create_detached(th8test_thread_proc fn, void *arg)
+th8test_thread_create_detached(
+    th8test_thread_proc fn,
+    void *arg,
+    size_t nStack)
 {
 #  if defined(_WIN32) || defined(WIN32)
-    HANDLE h = (HANDLE)_beginthreadex(NULL, 0, fn, arg, 0, NULL);
+    HANDLE h = (HANDLE)
+        _beginthreadex(NULL, (unsigned)nStack, fn, arg, 0, NULL);
     if (!h) return -1;
     CloseHandle(h);
     return 0;
@@ -22016,6 +22065,9 @@ th8test_thread_create_detached(th8test_thread_proc fn, void *arg)
     int rc;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (nStack > 0) {
+	(void)pthread_attr_setstacksize(&attr, nStack);
+    }
     rc = pthread_create(&tid, &attr, fn, arg);
     pthread_attr_destroy(&attr);
     return rc;
@@ -22297,7 +22349,8 @@ th8test_queue_event_cmd(
     /* Spawn worker; detach so we don't have to join.  The
      * th8test_thread_create_detached helper wraps pthread on
      * POSIX and _beginthreadex+CloseHandle on Win32.        */
-    rc = th8test_thread_create_detached(th8test_queue_event_worker, q);
+    rc = th8test_thread_create_detached(
+        th8test_queue_event_worker, q, th8test_owning_stack_size(interp));
     if (rc != 0) {
 	Th8_FinalizeAsyncState(q->pState);
 	Th8_Free(interp, q->zScript);
@@ -22613,7 +22666,8 @@ th8test_event_stress_cmd(
     /* ---- Phase 3: spawn workers ---- */
     for (i = 0; i < (int)nThreads; i++) {
 	if (th8test_thread_create(
-	        &aTid[i], th8test_worker_thread, &aWorker[i]) != 0) {
+	        &aTid[i], th8test_worker_thread, &aWorker[i],
+	        th8test_owning_stack_size(interp)) != 0) {
 	    break;
 	}
 	nSpawned++;
@@ -22664,17 +22718,20 @@ th8test_event_stress_cmd(
 
 
 /*
- * Per-worker state for th8test_env_stress_cmd: each worker owns a
- * distinct child interpreter (so per-interp state and the debug heap
- * tracker never race), and all workers hammer the SAME `::env` key so
- * their setenv/unsetenv calls contend maximally on the shared file-scope
- * env mutex (R-00313).  `failed`/`zErr` capture the FIRST non-OK eval's
- * error text so th8test_env_stress_cmd can emit a durable diagnostic --
- * the per-eval error is otherwise discarded (only a success count is kept),
- * leaving a failure's aggregate "got/expected" result with no cause.
+ * Per-worker state for th8test_env_stress_cmd.  Each worker CREATES, uses,
+ * and destroys its own child interpreter entirely on its own thread: the
+ * single-threaded-per-interp contract (API spec 37a) requires Th8_Eval to run
+ * on the interp's owning thread, so the worker clones pParentPlat and builds
+ * the interp itself rather than adopting one created on the main thread.  All
+ * workers hammer the SAME `::env` key so their setenv/unsetenv calls contend
+ * maximally on the shared file-scope env mutex (R-00313).  `failed`/`zErr`
+ * capture the FIRST non-OK eval's error text so th8test_env_stress_cmd can
+ * emit a durable diagnostic -- the per-eval error is otherwise discarded (only
+ * a success count is kept), leaving a failure's "got/expected" with no cause.
  */
 typedef struct th8test_env_worker {
-    Th8_Interp *interp; /* this worker's own child interpreter */
+    const Th8_Platform
+        *pParentPlat; /* cloned to build this worker's interp */
     int nIters;
     int ok; /* successful set+unset cycles */
     int failed; /* nonzero once the first non-OK eval is captured */
@@ -22692,26 +22749,57 @@ static const char
  *
  * th8test_env_worker_fn --
  *
- *	Worker body for th8test_env_stress_cmd: evaluate the set/unset
- *	env script nIters times on this worker's own interpreter, counting
- *	the cycles that complete.  The FIRST eval that returns non-OK has
- *	its error captured into w->zErr for the command's durable diagnostic.
+ *	Worker body for th8test_env_stress_cmd, running ENTIRELY on its own
+ *	thread: Th8_ThreadInit, then clone the parent platform and create the
+ *	interp HERE (its owning thread), evaluate the set/unset env script
+ *	nIters times counting the cycles that complete, then destroy the interp
+ *	and Th8_ThreadDone.  The FIRST eval (or a clone/create failure) that
+ *	goes non-OK has its error captured into w->zErr for the command's
+ *	durable diagnostic.
  *
  *----------------------------------------------------------------------
  */
 TH8TEST_WORKER_DECL(th8test_env_worker_fn)
 {
     th8test_env_worker *w = (th8test_env_worker *)arg;
+    Th8_Platform *pPlat;
+    Th8_Interp *interp;
     int i;
+
+    /* Register this thread with TH8's allocator (per-thread state) before any
+     * TH8 work, exactly as the other thread workers do. */
+    Th8_ThreadInit();
+
+    /* Single-threaded-per-interp: build the interp on THIS thread so its
+     * recorded C-stack base is this thread's stack and Th8_Eval runs on the
+     * owning thread.  On success Th8_CreateInterp takes ownership of the
+     * cloned platform (freed by Th8_DeleteInterp); free it ourselves only if
+     * creation fails. */
+    pPlat = Th8_ClonePlatform(w->pParentPlat);
+    if (pPlat == NULL) {
+	w->failed = 1;
+	snprintf(w->zErr, sizeof(w->zErr), "clone platform failed");
+	Th8_ThreadDone();
+	TH8TEST_WORKER_RETURN;
+    }
+    interp = Th8_CreateInterp(pPlat);
+    if (interp == NULL) {
+	Th8_FreePlatform(pPlat);
+	w->failed = 1;
+	snprintf(w->zErr, sizeof(w->zErr), "create interp failed");
+	Th8_ThreadDone();
+	TH8TEST_WORKER_RETURN;
+    }
+    Th8_RegisterLanguage(interp);
 
     for (i = 0; i < w->nIters; i++) {
 	if (Th8_Eval(
-	        w->interp, 0, TH8TEST_ENV_STRESS_SCRIPT, TH8_NOLEN, "es",
-	        2) == TH8_OK) {
+	        interp, 0, TH8TEST_ENV_STRESS_SCRIPT, TH8_NOLEN, "es", 2) ==
+	    TH8_OK) {
 	    w->ok++;
 	} else if (!w->failed) {
 	    size_t nErr = 0;
-	    const char *zErr = Th8_GetResult(w->interp, &nErr);
+	    const char *zErr = Th8_GetResult(interp, &nErr);
 
 	    if (nErr >= sizeof(w->zErr)) {
 		nErr = sizeof(w->zErr) - 1;
@@ -22723,6 +22811,9 @@ TH8TEST_WORKER_DECL(th8test_env_worker_fn)
 	    w->failed = 1;
 	}
     }
+
+    Th8_DeleteInterp(interp);
+    Th8_ThreadDone();
     TH8TEST_WORKER_RETURN;
 }
 
@@ -22773,7 +22864,8 @@ th8test_env_stress_cmd(
     th8test_env_worker *aWorker = NULL;
     th8test_thread_t *aTid = NULL;
     const Th8_Platform *pParentPlat;
-    int i, nCreated = 0, nSpawned = 0, total = 0, expected;
+    size_t nStack;
+    int i, nSpawned = 0, total = 0, expected;
     char zBuf[64];
     size_t nBuf;
 
@@ -22805,39 +22897,25 @@ th8test_env_stress_cmd(
 	return TH8_ERROR;
     }
 
-    /* Phase 1: pre-create one child interpreter per worker (this thread). */
+    /* Phase 1: init per-worker state.  Interps are NOT created here -- the
+     * single-threaded-per-interp contract requires each interp to be created
+     * AND used on the same thread, so every worker builds (and destroys) its
+     * own interp inside its own thread body (th8test_env_worker_fn). */
     pParentPlat = Th8_GetPlatform(interp);
+    nStack = th8test_owning_stack_size(interp);
     for (i = 0; i < (int)nThreads; i++) {
-	Th8_Platform *pcp = Th8_ClonePlatform(pParentPlat);
-
-	aWorker[i].interp = NULL;
+	aWorker[i].pParentPlat = pParentPlat;
 	aWorker[i].nIters = (int)nIters;
 	aWorker[i].ok = 0;
 	aWorker[i].failed = 0;
 	aWorker[i].zErr[0] = '\0';
-	if (pcp == NULL) break;
-	aWorker[i].interp = Th8_CreateInterp(pcp);
-	if (aWorker[i].interp == NULL) {
-	    Th8_FreePlatform(pcp);
-	    break;
-	}
-	Th8_RegisterLanguage(aWorker[i].interp);
-	nCreated++;
-    }
-    if (nCreated != (int)nThreads) {
-	for (i = 0; i < nCreated; i++)
-	    Th8_DeleteInterp(aWorker[i].interp);
-	Th8_Free(interp, aWorker);
-	Th8_Free(interp, aTid);
-	Th8_SetResultStatic(
-	    interp, "env_stress: child interp create failed", TH8_NOLEN);
-	return TH8_ERROR;
     }
 
-    /* Phase 2: spawn workers. */
+    /* Phase 2: spawn workers, each with a stack as large as the parent
+     * interp's owning thread so the interps they build have real headroom. */
     for (i = 0; i < (int)nThreads; i++) {
 	if (th8test_thread_create(
-	        &aTid[i], th8test_env_worker_fn, &aWorker[i]) != 0) {
+	        &aTid[i], th8test_env_worker_fn, &aWorker[i], nStack) != 0) {
 	    break;
 	}
 	nSpawned++;
@@ -22847,10 +22925,10 @@ th8test_env_stress_cmd(
 	th8test_thread_join(aTid[i]);
     }
 
-    /* Phase 4: tally, then tear down the child interpreters. */
+    /* Phase 4: tally.  Each worker already destroyed its own interp on its
+     * own thread. */
     for (i = 0; i < (int)nThreads; i++) {
 	total += aWorker[i].ok;
-	Th8_DeleteInterp(aWorker[i].interp);
     }
 
     /* Durable diagnostic: the worker discards per-eval errors (it only bumps a
@@ -22860,8 +22938,22 @@ th8test_env_stress_cmd(
      * the env backend or ::env misbehaves under concurrency). */
     for (i = 0; i < (int)nThreads; i++) {
 	if (aWorker[i].failed) {
-	    fprintf(stdout, "---- env_stress failed: %s\n", aWorker[i].zErr);
-	    fflush(stdout);
+	    /* Emit through the interpreter's own output channel rather than
+	     * raw <stdio.h>: testlib objects are scanned for direct CRT
+	     * dependencies, and the platform xOutput routes the same text to
+	     * stdout from the (permitted) libc layer.  Emit in pieces so no
+	     * host formatting (snprintf) is needed either. */
+	    const Th8_Platform *pPlat = Th8_GetPlatform(interp);
+
+	    if (pPlat && pPlat->xOutput) {
+		static const char zPre[] = "---- env_stress failed: ";
+
+		pPlat->xOutput(
+		    interp, pPlat->pCtx, zPre, sizeof(zPre) - 1, NULL);
+		pPlat->xOutput(interp, pPlat->pCtx, aWorker[i].zErr,
+		    Th8_Strlen(interp, aWorker[i].zErr), NULL);
+		pPlat->xOutput(interp, pPlat->pCtx, "\n", 1, NULL);
+	    }
 	    break;
 	}
     }
@@ -22878,6 +22970,131 @@ th8test_env_stress_cmd(
         zBuf, sizeof(zBuf), "FAIL got %d expected %d (spawned %d/%d)", total,
         expected, nSpawned, (int)nThreads);
     return Th8_SetResult(interp, zBuf, nBuf);
+}
+
+
+/*
+ * Shared state for th8test_thread_identity_cmd.  The command's interp is
+ * created and owned by the main (test-harness) thread; the worker runs on a
+ * DIFFERENT thread and records what the two thread-identity queries return
+ * when called from that foreign thread.  Both queries are documented
+ * thread-safe exceptions to the affinity contract, so neither may trip
+ * TH8_ASSERT_OWNER when invoked here.
+ */
+typedef struct th8test_tid_worker {
+    Th8_Interp *interp; /* main-thread-owned interp, shared read-only */
+    th8_uint64_t selfSeen; /* Th8_GetThreadId(interp) on the worker thread */
+    th8_uint64_t ownerSeen; /* Th8_GetInterpThreadId(interp) on the worker */
+} th8test_tid_worker;
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_tid_worker_fn --
+ *
+ *	Worker body for th8test_thread_identity_cmd.  Runs on a foreign
+ *	thread and calls both thread-identity queries on the main thread's
+ *	interpreter.  Th8_GetThreadId must report THIS worker's id, while
+ *	Th8_GetInterpThreadId must report the (main) owning thread -- and
+ *	because both are affinity-contract exceptions, neither aborts under
+ *	TH8_ASSERT_OWNER even though this is not the owning thread.
+ *
+ *----------------------------------------------------------------------
+ */
+TH8TEST_WORKER_DECL(th8test_tid_worker_fn)
+{
+    th8test_tid_worker *w = (th8test_tid_worker *)arg;
+
+    Th8_ThreadInit();
+    w->selfSeen = Th8_GetThreadId(w->interp);
+    w->ownerSeen = Th8_GetInterpThreadId(w->interp);
+    Th8_ThreadDone();
+    TH8TEST_WORKER_RETURN;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_thread_identity_cmd --
+ *
+ *	::th8testlib::thread_identity
+ *
+ *	Verify the two thread-identity queries across threads.  On the
+ *	owning (main) thread Th8_GetInterpThreadId must equal
+ *	Th8_GetThreadId (the owner IS the caller).  On a spawned foreign
+ *	thread Th8_GetThreadId must return that thread's own distinct id
+ *	while Th8_GetInterpThreadId still returns the owning thread -- all
+ *	without tripping the affinity assertion, proving both APIs are
+ *	callable from any thread.  Returns "ok" or a diagnostic string.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_thread_identity_cmd(
+    Th8_Interp *interp, /* Interpreter. */
+    void *pContext, /* Unused. */
+    int argc, /* Argument count. */
+    const char **argv, /* Argument values. */
+    size_t *argl) /* Argument lengths. */
+{
+    th8test_tid_worker w;
+    th8test_thread_t tid;
+    th8_uint64_t mainSelf;
+    th8_uint64_t ownerMain;
+
+    (void)pContext;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	Th8_SetResultStatic(
+	    interp, "wrong # args: should be \"thread_identity\"", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    mainSelf = Th8_GetThreadId(interp);
+    ownerMain = Th8_GetInterpThreadId(interp);
+
+    if (mainSelf == 0 || ownerMain == 0) {
+	/* Platform reports no thread ids: affinity is not enforced, so this
+	 * cross-thread contract is untestable here.  Report a skip token
+	 * rather than a false failure. */
+	Th8_SetResultStatic(interp, "skip:no-thread-id", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (ownerMain != mainSelf) {
+	Th8_SetResultStatic(
+	    interp, "FAIL owner!=self on owning thread", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    w.interp = interp;
+    w.selfSeen = 0;
+    w.ownerSeen = 0;
+    if (th8test_thread_create(
+            &tid, th8test_tid_worker_fn, &w,
+            th8test_owning_stack_size(interp)) != 0) {
+	Th8_SetResultStatic(interp, "FAIL spawn", TH8_NOLEN);
+	return TH8_OK;
+    }
+    th8test_thread_join(tid);
+
+    if (w.selfSeen == 0) {
+	Th8_SetResultStatic(interp, "FAIL worker self id is 0", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (w.selfSeen == mainSelf) {
+	Th8_SetResultStatic(
+	    interp, "FAIL worker id equals main id", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (w.ownerSeen != ownerMain) {
+	Th8_SetResultStatic(
+	    interp, "FAIL worker saw wrong owner id", TH8_NOLEN);
+	return TH8_OK;
+    }
+    Th8_SetResultStatic(interp, "ok", 2);
+    return TH8_OK;
 }
 
 
@@ -23017,7 +23234,8 @@ th8test_event_delete_race_cmd(
     /* ---- Phase 4: spawn workers ---- */
     for (i = 0; i < total; i++) {
 	if (th8test_thread_create(
-	        &aTid[i], th8test_worker_thread, &aWorker[i]) != 0) {
+	        &aTid[i], th8test_worker_thread, &aWorker[i],
+	        th8test_owning_stack_size(interp)) != 0) {
 	    break;
 	}
 	nSpawned++;
@@ -23869,6 +24087,9 @@ Th8test_Init(Th8_Interp *interp)
         0);
     Th8_CreateCommand(
         interp, "::th8testlib::env_stress", th8test_env_stress_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::thread_identity", th8test_thread_identity_cmd, 0,
+        0, 0);
     Th8_CreateCommand(
         interp, "::th8testlib::event_delete_race",
         th8test_event_delete_race_cmd, 0, 0, 0);

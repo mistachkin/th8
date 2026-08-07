@@ -709,9 +709,13 @@ pt_xPanic(Th8_Interp *i, void *c, const char *zMsg, size_t nMsg)
     if (REAL(c)->xPanic) REAL(c)->xPanic(i, RCTX(c), zMsg, nMsg);
 }
 
-/* Diagnostics -- stack backtrace capture (nVersion 5).  Pure passthrough;
+/* Diagnostics -- stack backtrace capture.  Pure passthrough;
  * not fault-injected (a failed capture simply yields fewer frames). */
 PT_3(xStackBackTrace, int, void **, int, int)
+
+/* 64-bit atomics -- pure passthrough; an atomic CAS must not fail. */
+PT_3(xIntCmpXchg64, th8_uint64_t, volatile th8_uint64_t *, th8_uint64_t,
+     th8_uint64_t)
 
 /* Math/entropy -- xMathFunc and xRandomBytes are fault-injecting
  * (wrappers defined below).  Their passthrough behaviour is the
@@ -1306,6 +1310,9 @@ th8FaultWireCallbacks(
     pF->xPanic = pR->xPanic ? pt_xPanic : 0;
     pF->xStackBackTrace = pR->xStackBackTrace ? pt_xStackBackTrace : 0;
 
+    /* 64-bit atomics */
+    pF->xIntCmpXchg64 = pR->xIntCmpXchg64 ? pt_xIntCmpXchg64 : 0;
+
     /* Math / entropy -- both xMathFunc and xRandomBytes are
      * fault-injecting (bFailMathFunc / bFailRandomBytes flags). */
     pF->xMathFunc = pR->xMathFunc ? fi_xMathFunc : 0;
@@ -1412,6 +1419,7 @@ static const struct th8FaultSlotEntry th8FaultCallbackSlots[] =
      TH8_FAULT_SLOT(xEmitTrace),
      TH8_FAULT_SLOT(xPanic),
      TH8_FAULT_SLOT(xStackBackTrace),
+     TH8_FAULT_SLOT(xIntCmpXchg64),
      TH8_FAULT_SLOT(xMathFunc),
      TH8_FAULT_SLOT(xRandomBytes),
      TH8_FAULT_SLOT(xNeedMemory)};

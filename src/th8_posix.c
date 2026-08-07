@@ -3805,6 +3805,46 @@ th8PosixIntCmpXchg(
 /*
  *----------------------------------------------------------------------
  *
+ * th8PosixIntCmpXchg64 --
+ *
+ *	64-bit atomic compare-and-swap.  Implements the Th8_Platform
+ *	xIntCmpXchg64 callback.
+ *
+ * Why / How:
+ *	The 64-bit sibling of th8PosixIntCmpXchg.  Used to read and
+ *	publish the interpreter's owning-thread id (a 64-bit value that
+ *	does not fit the 32-bit xIntCmpXchg).  Uses the GCC/Clang
+ *	built-in __sync_val_compare_and_swap, which is 64-bit-capable on
+ *	all POSIX targets TH8 supports and implies a full memory
+ *	barrier.  Returns the previous value of *pTarget so the caller
+ *	can detect whether it won the race.
+ *
+ * Results:
+ *	The value of *pTarget before the swap attempt.
+ *
+ * Side effects:
+ *	Atomically replaces *pTarget with iExchange if *pTarget equals
+ *	iComparand.  Implies a full memory barrier.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static th8_uint64_t
+th8PosixIntCmpXchg64(
+    Th8_Interp *interp,
+    void *pCtx,
+    volatile th8_uint64_t *pTarget,
+    th8_uint64_t iExchange,
+    th8_uint64_t iComparand)
+{
+    (void)interp;
+    (void)pCtx;
+    return __sync_val_compare_and_swap(pTarget, iComparand, iExchange);
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8PosixMemBarrier --
  *
  *	Implements the Th8_Platform.xMemBarrier callback.  Issue a
@@ -5722,7 +5762,7 @@ th8PosixGetExePath(
  */
 
 static Th8_Platform th8PosixPlatformData = {
-    5, /* nVersion */
+    1, /* nVersion */
     th8PosixInitialize, /* xInitialize */
     th8PosixFinalize, /* xFinalize */
 
@@ -5871,13 +5911,16 @@ static Th8_Platform th8PosixPlatformData = {
     0,    /* xDnsResolveFree */
 #  endif
 
-    /* Diagnostics (nVersion 5) -- xStackBackTrace is deliberately left
+    /* Diagnostics -- xStackBackTrace is deliberately left
        NULL here.  It is supplied by the compiler-runtime th8_unwind layer
        (_Unwind_Backtrace), merged after the OS layers.  _Unwind_Backtrace is
        a compiler-runtime facility (not POSIX), so it lives in th8_unwind.c;
        the only POSIX-adjacent alternative (backtrace() in <execinfo.h>) is
        glibc-only and not musl-safe, so POSIX adds no native override. */
     0, /* xStackBackTrace */
+
+    /* 64-bit atomics */
+    th8PosixIntCmpXchg64, /* xIntCmpXchg64 */
 
     /* Host context */
     0 /* pCtx */

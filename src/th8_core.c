@@ -5194,6 +5194,8 @@ Th8_SetResult(
 {
     if (!interp) return TH8_ERROR;
 
+    TH8_ASSERT_OWNER(interp);
+
     /*
      * If the outgoing result was marked sensitive (decrypted
      * secure-variable data), securely zero it before freeing
@@ -10080,6 +10082,9 @@ Th8_CreateCommand(
     size_t nName;
 
     if (!interp) return TH8_ERROR;
+
+    TH8_ASSERT_OWNER(interp);
+
     nName = Th8_Strlen(interp, zName);
 
     /*
@@ -10238,6 +10243,8 @@ Th8_DeleteCommand(Th8_Interp *interp, th8_uint64_t token)
 {
     Th8_HashEntry *pTokEntry;
     Th8_Command *pCmd;
+
+    TH8_ASSERT_OWNER(interp);
 
     if (!interp->paCmdToken) {
 	Th8_SetResult(
@@ -21715,8 +21722,11 @@ Th8_MergePlatform(
     MERGE_SLOT(xDnsResolve);
     MERGE_SLOT(xDnsResolveFree);
 
-    /* Diagnostics (nVersion 5) */
+    /* Diagnostics */
     MERGE_SLOT(xStackBackTrace);
+
+    /* 64-bit atomics */
+    MERGE_SLOT(xIntCmpXchg64);
     return TH8_OK;
 }
 
@@ -22085,7 +22095,7 @@ Th8_CreateInterp(Th8_Platform
     if (pPlatform->xMemset) {
 	pPlatform->xMemset(NULL, pPlatform->pCtx, p, 0, nByte);
     }
-    p->nVersion = 4; /* Bumped: added xEvent* manual-reset event callbacks. */
+    p->nVersion = 1; /* Pre-RTM: single ABI version. */
     {
 #ifdef TH8_DECLS_H
 	extern const Th8StubsTable th8StubsTableData;
@@ -22232,6 +22242,19 @@ retry:
     }
 
     /*
+     * STEP 6b: Capture the owning-thread id.  The creating thread owns
+     * this interpreter for its entire lifetime; every subsequent API
+     * call (except the documented thread-safe exceptions) MUST be made
+     * on this thread.  Publish it atomically via the 64-bit interlocked
+     * CAS so foreign threads that legally read it (Th8_GetInterpThreadId,
+     * TH8_ASSERT_OWNER) always observe a consistent value.  threadId
+     * stays 0 on hosts whose platform provides no xGetThreadId, which
+     * disables affinity checking (single-threaded assumption).
+     */
+
+    Th8_Int64CmpXchg(p, &p->threadId, Th8_GetThreadId(p), 0);
+
+    /*
      * STEP 7: Internal-representation cache.
      */
 
@@ -22248,6 +22271,84 @@ retry:
     p->paCmdToken = 0; /* Created lazily on first CreateCommand. */
 
     return p;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * Th8_GetInterpThreadId --
+ *
+ *	Return the id of the thread that owns the interpreter (the
+ *	thread that called Th8_CreateInterp).  Read atomically via the
+ *	64-bit interlocked compare-exchange.
+ *
+ * Why / How:
+ *	The owning-thread id enforces the single-threaded-per-
+ *	interpreter affinity contract.  A foreign thread MAY call this
+ *	safely (it is one of the documented thread-safe exceptions) to
+ *	discover the owner and compare it against Th8_GetThreadId (its
+ *	own thread).  The read uses Th8_Int64CmpXchg(...,0,0), a non-
+ *	mutating compare-with-0 that returns the current value.
+ *
+ * Results:
+ *	The owning-thread id, or 0 if it was never captured (the
+ *	platform provides no xGetThreadId).
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
+
+th8_uint64_t
+Th8_GetInterpThreadId(Th8_Interp *interp) /* Interpreter. */
+{
+    if (!interp) return 0;
+    return Th8_Int64CmpXchg(interp, &interp->threadId, 0, 0);
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8CheckThreadOwner --
+ *
+ *	Return non-zero if the calling thread is permitted to operate
+ *	on the interpreter under the single-threaded-per-interpreter
+ *	affinity contract.  Used only by the TH8_ASSERT_OWNER debug
+ *	assertion.
+ *
+ * Why / How:
+ *	Compares the owning-thread id (captured in Th8_CreateInterp)
+ *	against the caller's current thread id, both read atomically.
+ *	Returns 1 (permitted) when either id is 0 -- i.e. the platform
+ *	cannot report thread ids -- so affinity is simply not enforced
+ *	on such hosts rather than falsely tripping.  A NULL interp is
+ *	also treated as permitted (callers handle NULL elsewhere).
+ *
+ * Results:
+ *	1 if the caller owns interp or affinity cannot be enforced;
+ *	0 if the caller is provably on a foreign thread.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
+
+int
+th8CheckThreadOwner(Th8_Interp *interp) /* Interpreter. */
+{
+    th8_uint64_t owner;
+    th8_uint64_t self;
+
+    if (!interp) return 1;
+    owner = Th8_GetInterpThreadId(interp);
+    if (owner == 0) return 1; /* Affinity not trackable on this host. */
+    self = Th8_GetThreadId(interp);
+    if (self == 0) return 1; /* Current thread id unavailable. */
+    return owner == self;
 }
 
 
@@ -22420,6 +22521,8 @@ Th8_DeleteInterp(Th8_Interp *interp) /* Interpreter to destroy. */
     void *pFreeInterpCtx;
 
     if (!interp) return;
+
+    TH8_ASSERT_OWNER(interp);
 
     /*
      * Save the free callback and context at the top of cleanup.
@@ -22883,6 +22986,8 @@ th8EvalCommon(
     Th8_Frame *pSavedFrame = interp->pFrame;
     int nSavedDepth = interp->nEvalDepth;
     size_t nInput;
+
+    TH8_ASSERT_OWNER(interp);
 
     /*
      * Resolve TH8_NOLEN, but otherwise carry the taint bit through to

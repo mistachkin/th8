@@ -717,12 +717,29 @@ R-16309-49714
 ### 37a  Thread-Safe Public APIs
 
 The TH8 public API surface is **single-threaded per
-interpreter** with exactly two documented exceptions:
-`Th8_CancelEval` (already covered in §37) and the
-event-queue family (`Th8_CreateAsyncState`,
-`Th8_FinalizeAsyncState`, `Th8_QueueEvent`).  Every other
-`Th8_*` API MUST be invoked on the interpreter's owning
-thread.
+interpreter**.  Every `Th8_*` API MUST be invoked on the
+interpreter's owning thread -- the thread that created it
+with `Th8_CreateInterp` -- with the following documented
+exceptions, each callable from any thread:
+
+* `Th8_CancelEval` (covered in §37);
+* the event-queue family (`Th8_CreateAsyncState`,
+  `Th8_FinalizeAsyncState`, `Th8_QueueEvent`, §37a.1);
+* the thread-identity queries `Th8_GetThreadId` and
+  `Th8_GetInterpThreadId` (§37a.3);
+* the per-thread runtime hooks `Th8_ThreadInit` /
+  `Th8_ThreadDone`.
+
+In **debug** builds (`TH8_DEBUG`) the contract is enforced
+at the most important owning-thread-only entry points --
+the evaluation choke point, interpreter teardown, language
+registration, and the variable / result / command surface
+-- by the internal `TH8_ASSERT_OWNER` assertion, which
+aborts if a foreign thread calls one of them.  In release
+and coverage builds the assertion compiles to nothing.  The
+owning thread is captured once, atomically, in
+`Th8_CreateInterp`; on hosts whose platform provides no
+`xGetThreadId` the id is 0 and affinity is not enforced.
 
 #### 37a.1  `Th8_QueueEvent` thread-safety contract
 
@@ -806,6 +823,53 @@ Scripts have NO API for *adding* events to the queue —
 that is a deliberate security boundary preventing
 untrusted script from injecting work into the embedder's
 event loop.
+
+#### 37a.3  Thread-identity queries
+
+```c
+TH8_API th8_uint64_t Th8_GetThreadId(Th8_Interp *interp);
+TH8_API th8_uint64_t Th8_GetInterpThreadId(Th8_Interp *interp);
+TH8_API th8_uint64_t Th8_Int64CmpXchg(Th8_Interp *interp,
+    volatile th8_uint64_t *pTarget, th8_uint64_t iExchange,
+    th8_uint64_t iComparand);
+```
+
+R-31635-30129
+:   `Th8_GetThreadId` SHALL return the identifier of the
+:   CALLING thread, obtained through the platform's
+:   `xGetThreadId` callback, or 0 if the platform provides no
+:   such callback.  It SHALL be callable from any thread: it
+:   reports the caller's own thread and reads only immutable
+:   interpreter state, so it is exempt from the single-
+:   threaded-per-interpreter affinity contract.
+
+R-31999-07274
+:   `Th8_GetInterpThreadId` SHALL return the identifier of the
+:   thread that OWNS the interpreter -- the thread that called
+:   `Th8_CreateInterp` -- read atomically through the 64-bit
+:   interlocked compare-exchange, or 0 if the owning thread was
+:   never captured.  It SHALL be callable from any thread and is
+:   exempt from the affinity contract, so a foreign thread MAY
+:   call it to discover the owner and compare that against its
+:   own `Th8_GetThreadId`.
+
+R-47926-46982
+:   The owning-thread identifier SHALL be captured exactly once,
+:   during `Th8_CreateInterp`, and published atomically via the
+:   platform's `xIntCmpXchg64` 64-bit compare-exchange callback
+:   (exposed publicly as `Th8_Int64CmpXchg`).  Every read of the
+:   identifier -- by `Th8_GetInterpThreadId` and by the debug
+:   affinity assertion -- SHALL use the same interlocked
+:   compare-with-zero read so that foreign threads always
+:   observe a consistent value.
+
+R-10851-48859
+:   In debug builds, calling an owning-thread-only API from a
+:   thread other than the interpreter's owner SHALL abort via
+:   the affinity assertion; in release and coverage builds the
+:   assertion SHALL have no effect.  On a host whose platform
+:   provides no `xGetThreadId`, the owning-thread identifier is
+:   0 and affinity SHALL NOT be enforced.
 
 
 ### 38  Fault Injection Testing
@@ -1539,6 +1603,9 @@ authoritative contract for a catalog entry.
 * **`Th8_GetFrameObjv`** -- Retrieve the argument vector for frame level iLevel.  On success,
   Prototype: `TH8_API int Th8_GetFrameObjv( Th8_Interp *interp, int iLevel, int *pArgc, const char ***pArgv, size_t **pArgl);`
 
+* **`Th8_GetInterpThreadId`** -- Return the id of the thread that owns the interpreter (its creating thread); thread-safe (§37a.3).
+  Prototype: `TH8_API th8_uint64_t Th8_GetInterpThreadId(Th8_Interp *interp);`
+
 * **`Th8_GetIosPlatform`** -- Return a Th8_Platform with iOS-specific overrides.  iOS shares
   Prototype: `TH8_API const Th8_Platform *Th8_GetIosPlatform(void);`
 
@@ -1608,7 +1675,7 @@ authoritative contract for a catalog entry.
 * **`Th8_GetStubs`** -- Return a pointer to the interpreter's stubs table (opaque).
   Prototype: `TH8_API const void *Th8_GetStubs(Th8_Interp *interp);`
 
-* **`Th8_GetThreadId`** -- Return the current thread ID via the platform's xGetThreadId
+* **`Th8_GetThreadId`** -- Return the CALLING thread's ID via the platform's xGetThreadId; thread-safe (§37a.3).
   Prototype: `TH8_API th8_uint64_t Th8_GetThreadId(Th8_Interp *interp);`
 
 * **`Th8_GetTimeMs`** -- Get the current time in milliseconds via the platform's xTimeMs
@@ -1643,6 +1710,9 @@ authoritative contract for a catalog entry.
 
 * **`Th8_IntCmpXchg`** -- Atomic integer compare-and-exchange via the global platform's
   Prototype: `TH8_API int Th8_IntCmpXchg( Th8_Interp *interp, volatile int *pTarget, int iExchange, int iComparand);`
+
+* **`Th8_Int64CmpXchg`** -- 64-bit atomic compare-and-exchange via the platform's xIntCmpXchg64; thread-safe.
+  Prototype: `TH8_API th8_uint64_t Th8_Int64CmpXchg( Th8_Interp *interp, volatile th8_uint64_t *pTarget, th8_uint64_t iExchange, th8_uint64_t iComparand);`
 
 * **`Th8_IsBeingUnwound`** -- Check whether an unwind-style cancellation is in progress.
   Prototype: `TH8_API int Th8_IsBeingUnwound(Th8_Interp *interp);`
