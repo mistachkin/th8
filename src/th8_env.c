@@ -280,8 +280,8 @@ th8EnvKeyValue(
     const char *zValue,
     size_t nValue)
 {
-    char zNameBuf[256];
-    char zValBuf[256];
+    char zNameBuf[TH8_ENV_STACK];
+    char zValBuf[TH8_ENV_STACK];
     char *zNameNul = NULL;
     char *zValNul = NULL;
     int rc = TH8_ERROR;
@@ -562,7 +562,7 @@ th8EnvKeyValue(
 	            interp, zKeys, nKeys, &azElem, &anElem, &nCount,
 	            TH8_LIST_NONE) == TH8_OK) {
 		for (j = 0; j < nCount; j++) {
-		    char kBuf[256];
+		    char kBuf[TH8_ENV_STACK];
 		    char *kNul = th8EnvNulTerminate(
 		        interp, azElem[j], anElem[j], kBuf, sizeof(kBuf));
 		    if (kNul) {
@@ -640,7 +640,7 @@ th8EnvKeyValue(
 	            interp, zKeys, nKeys, &azElem, &anElem, &nCount,
 	            TH8_LIST_NONE) == TH8_OK) {
 		for (j = 0; j < nCount; j++) {
-		    char kBuf[256];
+		    char kBuf[TH8_ENV_STACK];
 		    char *kNul = th8EnvNulTerminate(
 		        interp, azElem[j], anElem[j], kBuf, sizeof(kBuf));
 		    if (kNul) {
@@ -997,7 +997,7 @@ th8EnvKeyValue(
     const char *zValue,
     size_t nValue)
 {
-    WCHAR wNameBuf[256];
+    WCHAR wNameBuf[TH8_ENV_STACK];
     WCHAR *wName = NULL;
     int rc = TH8_ERROR;
 
@@ -1023,7 +1023,7 @@ th8EnvKeyValue(
     }
 
     case TH8_KV_GET: {
-	WCHAR wValBuf[4096];
+	WCHAR wValBuf[TH8_PATH_MAX];
 	DWORD n;
 
 	wName = th8EnvUtf8ToUtf16(
@@ -1066,7 +1066,7 @@ th8EnvKeyValue(
     }
 
     case TH8_KV_SET: {
-	WCHAR wValSetBuf[256];
+	WCHAR wValSetBuf[TH8_ENV_STACK];
 	WCHAR *wVal = NULL;
 
 	wName = th8EnvUtf8ToUtf16(
@@ -1314,7 +1314,7 @@ th8EnvKeyValue(
 	 */
 
 	if (zCollect) {
-	    WCHAR wValSetBuf2[256];
+	    WCHAR wValSetBuf2[TH8_ENV_STACK];
 	    WCHAR *wVal2 = NULL;
 	    char **azElem = NULL;
 	    size_t *anElem = NULL;
@@ -1331,7 +1331,7 @@ th8EnvKeyValue(
 	            interp, zCollect, nCollect, &azElem, &anElem, &nCount,
 	            TH8_LIST_NONE) == TH8_OK) {
 		for (j = 0; j < nCount; j++) {
-		    WCHAR wKBuf[256];
+		    WCHAR wKBuf[TH8_ENV_STACK];
 		    WCHAR *wK = th8EnvUtf8ToUtf16(
 		        interp, azElem[j], anElem[j], wKBuf,
 		        sizeof(wKBuf) / sizeof(WCHAR));

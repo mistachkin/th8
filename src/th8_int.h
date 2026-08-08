@@ -161,6 +161,88 @@ typedef struct Th8_AsyncState Th8_AsyncState;
 #endif
 
 /* ====================================================================
+ * Platform buffer sizes
+ * ==================================================================== */
+
+/*
+ * TH8_PATH_MAX --
+ *
+ *	Maximum length, in bytes (POSIX) or wide characters (Win32), of a
+ *	filesystem path the platform layer holds in a fixed stack buffer.
+ *	Sized to one page so the common case never allocates; a path that
+ *	would exceed it is rejected, not truncated.  This is TH8's own
+ *	bound, deliberately independent of the system PATH_MAX (which is
+ *	unavailable or effectively unbounded on some hosts).
+ */
+#define TH8_PATH_MAX 4096
+
+/*
+ * TH8_IO_BUFSIZE --
+ *
+ *	Size, in bytes (or wide characters), of the fixed stack buffer the
+ *	platform layer uses for one line-oriented I/O chunk -- the [gets]
+ *	read loop and the console read/write conversion buffers.  Distinct
+ *	from TH8_PATH_MAX: it bounds an I/O transfer unit, not a path.  The
+ *	Win32 console read path allocates TH8_IO_BUFSIZE * 3 bytes for the
+ *	worst-case UTF-8 expansion of a BMP-only line.
+ */
+#define TH8_IO_BUFSIZE 4096
+
+/*
+ * TH8_PATH_STACK --
+ *
+ *	Size of the on-stack scratch buffer the platform layer uses to
+ *	NUL-terminate a caller-supplied path before use.  A path longer
+ *	than this falls back to a heap allocation, so it is a fast-path
+ *	size, not a hard limit.  Smaller than TH8_PATH_MAX because the
+ *	input name is usually short, while the fully resolved/absolute
+ *	form (TH8_PATH_MAX) is what needs the full page.
+ */
+#define TH8_PATH_STACK 1024
+
+/*
+ * TH8_ENV_STACK --
+ *
+ *	Size of the on-stack scratch buffer used to NUL-terminate an
+ *	environment variable name, value, or list key before a native
+ *	getenv/setenv call; a longer string falls back to a heap
+ *	allocation.  A fast-path size, not a hard limit.
+ */
+#define TH8_ENV_STACK 256
+
+/*
+ * TH8_LOAD_LIB_MAX / TH8_LOAD_SYM_MAX --
+ *
+ *	Maximum lengths of the library-path and symbol-name parts of a
+ *	[load] "library:symbol" specifier that the platform loader copies
+ *	into fixed stack buffers (dlopen/dlsym on POSIX,
+ *	LoadLibrary/GetProcAddress on Win32).
+ */
+#define TH8_LOAD_LIB_MAX 1024
+#define TH8_LOAD_SYM_MAX 256
+
+/*
+ * TH8_COPY_BUFSIZE --
+ *
+ *	Transfer-chunk size for the platform file-copy loop (one
+ *	read()/write() block).  A throughput/stack tradeoff, not a limit
+ *	on the total file size.
+ */
+#define TH8_COPY_BUFSIZE 8192
+
+/*
+ * TH8_PATH_SEG_MAX / TH8_CWD_SEG_MAX --
+ *
+ *	Maximum number of "/"-separated components a manual path resolver
+ *	splits a path into before rejecting it as too deep.
+ *	TH8_PATH_SEG_MAX (512) bounds the general normalize-path resolver;
+ *	TH8_CWD_SEG_MAX (256) bounds the CWD-relative absolute resolver.
+ *	The two limits differ for historical reasons (see th8_posix.c).
+ */
+#define TH8_PATH_SEG_MAX 512
+#define TH8_CWD_SEG_MAX  256
+
+/* ====================================================================
  * Internal platform wrappers (th8_plat.c)
  * ==================================================================== */
 

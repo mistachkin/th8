@@ -301,6 +301,7 @@ th8PosixStrrchr(const char *s, int c)
 }
 
 /* Forward declarations (defined after base path section). */
+static int th8PosixDeriveBaseFromModule(const char *);
 static const char *th8PosixGetBasePath(void);
 int th8PosixIsPathUnderBase(const char *zPath);
 
@@ -381,7 +382,7 @@ th8PosixGetData(
     char **pzOut,
     size_t *pnOut)
 {
-    char zPathBuf[1024];
+    char zPathBuf[TH8_PATH_STACK];
     char *zPath;
     int fd;
     struct stat st;
@@ -540,7 +541,7 @@ th8PosixDataExists(
     size_t nName,
     int *pAttrs) /* OUT: file type attrs (may be NULL). */
 {
-    char zPathBuf[1024];
+    char zPathBuf[TH8_PATH_STACK];
     char *zPath;
     struct stat lst;
     int rc;
@@ -672,8 +673,8 @@ th8PosixLoad(
     const char *zColon;
     size_t nLib;
     size_t nSym;
-    char zLibBuf[1024];
-    char zSymBuf[256];
+    char zLibBuf[TH8_LOAD_LIB_MAX];
+    char zSymBuf[TH8_LOAD_SYM_MAX];
     char *zLib;
     char *zSym;
     void *hLib;
@@ -1163,7 +1164,7 @@ th8PosixCallUnloadProc(
     const char *zProc;
     size_t nProc;
     size_t nSym;
-    char zSymBuf[256];
+    char zSymBuf[TH8_LOAD_SYM_MAX];
     char *zSym;
     Th8_UnloadProc xUnloadFn;
     size_t i;
@@ -1273,7 +1274,7 @@ th8PosixUnload(
     const char *zColon = 0;
     size_t nPrefix;
     size_t nSym;
-    char zSymBuf[256];
+    char zSymBuf[TH8_LOAD_SYM_MAX];
     char *zSym;
     Th8_UnloadProc xUnloadFn;
     size_t i;
@@ -1792,7 +1793,7 @@ th8PosixGetManagedAnchorPath(char *zBuf, size_t nBuf)
 static int
 th8PosixEnsureParentDir(const char *zPath)
 {
-    char zScratch[4096];
+    char zScratch[TH8_PATH_MAX];
     size_t n = th8PosixStrlen(zPath);
     size_t i;
 
@@ -1855,7 +1856,7 @@ th8PosixCopyFileContents(const char *zSrc, const char *zDst)
 {
     int fdSrc = -1;
     int fdDst = -1;
-    char zBuf[8192];
+    char zBuf[TH8_COPY_BUFSIZE];
     ssize_t nRead;
     int bOk = 0;
 
@@ -2498,8 +2499,8 @@ th8PosixGetRealPath(
     char *zBuf,
     size_t nBuf)
 {
-    char zCopy[4096];
-    char zResolved[4096];
+    char zCopy[TH8_PATH_MAX];
+    char zResolved[TH8_PATH_MAX];
 
     (void)interp;
     (void)pCtx;
@@ -2534,7 +2535,7 @@ th8PosixGetRealPath(
      * relative, manually prepend the current working directory.
      */
     if (zCopy[0] != '/') {
-	char zCwd[4096];
+	char zCwd[TH8_PATH_MAX];
 
 	if (getcwd(zCwd, sizeof(zCwd))) {
 	    size_t nCwd = th8PosixStrlen(zCwd);
@@ -2589,7 +2590,7 @@ th8PosixGetRootPath(
     char *zBuf,
     size_t nBuf)
 {
-    char zCopy[4096];
+    char zCopy[TH8_PATH_MAX];
 
     (void)interp;
     (void)pCtx;
@@ -2665,8 +2666,8 @@ th8PosixSameFile(
     const char *zName2,
     size_t nName2)
 {
-    char zCopy1[4096];
-    char zCopy2[4096];
+    char zCopy1[TH8_PATH_MAX];
+    char zCopy2[TH8_PATH_MAX];
     struct stat st1;
     struct stat st2;
 
@@ -2804,7 +2805,7 @@ th8PosixDeleteTemporaryData(
     const char *zPath,
     size_t nPath)
 {
-    char zBuf[4096];
+    char zBuf[TH8_PATH_MAX];
 
     (void)interp;
     (void)pCtx;
@@ -2954,7 +2955,7 @@ th8PosixChannelControl(
 	return TH8_OK;
 
     case TH8_CHANCTL_OPEN: {
-	char zPath[4096];
+	char zPath[TH8_PATH_MAX];
 	int flags;
 	int newFd;
 
@@ -3006,7 +3007,7 @@ th8PosixChannelControl(
  *	redirected input channel.  Byte-by-byte reading is necessary
  *	because POSIX read(2) on a pipe/terminal does not have a
  *	"read until newline" mode -- we must detect the newline
- *	ourselves.  A 4096-byte stack buffer avoids allocation for
+ *	ourselves.  A TH8_IO_BUFSIZE-byte stack buffer avoids allocation for
  *	the read loop; the final result is allocated to its exact
  *	size via Th8_AttemptMalloc so the caller can free it.
  *	EINTR is retried; EOF returns TH8_ERROR to signal end of
@@ -3031,7 +3032,7 @@ th8PosixInput(
     size_t *pnOut,
     void *pChannel) /* POSIX fd (or NULL for stdin). */
 {
-    char zBuf[4096];
+    char zBuf[TH8_IO_BUFSIZE];
     char *zResult;
     size_t nRead = 0;
     int fd;
@@ -4530,7 +4531,7 @@ th8PosixUnlock(void)
  * dladdr-based detection.
  */
 
-static char zBasePath[4096];
+static char zBasePath[TH8_PATH_MAX];
 static int bInitialized = 0;
 
 
@@ -4568,7 +4569,7 @@ static int bInitialized = 0;
 int
 Th8_SetBasePath(const char *zPath, size_t nPath)
 {
-    char resolved[4096];
+    char resolved[TH8_PATH_MAX];
 
     if (!zPath) {
 	TH8_TRACE_ERR(NULL, "NULL path");
@@ -4595,7 +4596,7 @@ Th8_SetBasePath(const char *zPath, size_t nPath)
      */
 
     if (nPath == 1 && zPath[0] == '.') {
-	char cwd[4096];
+	char cwd[TH8_PATH_MAX];
 
 	if (!getcwd(cwd, sizeof(cwd))) {
 	    TH8_TRACE_ERR(NULL, "getcwd failed");
@@ -4612,7 +4613,7 @@ Th8_SetBasePath(const char *zPath, size_t nPath)
 	    memcpy(zBasePath, cwd, nCwd + 1);
 	}
     } else {
-	char rp[4096];
+	char rp[TH8_PATH_MAX];
 
 	if (realpath(resolved, rp)) {
 	    size_t nRp = th8PosixStrlen(rp);
@@ -4679,6 +4680,88 @@ Th8_GetBasePath(void)
 /*
  *----------------------------------------------------------------------
  *
+ * th8PosixDeriveBaseFromModule --
+ *
+ *	Reduce the absolute path of a TH8 module file to the sandbox base
+ *	directory and cache it in the file-scope zBasePath buffer.
+ *
+ * Why / How:
+ *	th8PosixGetBasePath locates a TH8 module two ways -- dladdr(3) on
+ *	dynamic builds and /proc/self/exe on fully-static builds -- but
+ *	both need the SAME reduction to turn a module path into the base:
+ *	canonicalize with realpath(3), strip the trailing filename, and if
+ *	the containing directory is named "bin"/"bin-afl"/"bin-static"/"lib"
+ *	step out to its parent.  Keeping the reduction in one place
+ *	guarantees the sandbox root is computed identically however the
+ *	module path was obtained (e.g. <base>/bin/th8sh and
+ *	<base>/lib/libth8.so both reduce to <base>).
+ *
+ * Results:
+ *	1 and sets zBasePath on success; 0 and leaves zBasePath unchanged on
+ *	failure (unresolvable path or oversized result).
+ *
+ * Side effects:
+ *	On success, writes the file-scope zBasePath buffer.  Callers must
+ *	hold th8PosixMutex (this touches shared zBasePath).
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8PosixDeriveBaseFromModule(const char *zModulePath)
+{
+    char resolved[TH8_PATH_MAX];
+    char *slash;
+
+    if (!zModulePath) {
+	return 0;
+    }
+    if (!realpath(zModulePath, resolved)) {
+	return 0;
+    }
+
+    /*
+     * Strip the filename to get the directory.
+     */
+
+    slash = th8PosixStrrchr(resolved, '/');
+    if (!slash || slash == resolved) {
+	return 0;
+    }
+    *slash = '\0';
+
+    /*
+     * If the directory is named "bin", "bin-afl", "bin-static", or
+     * "lib", the module resides in a subdirectory of the base -- use
+     * the parent directory instead.
+     */
+
+    {
+	char *tail = th8PosixStrrchr(resolved, '/');
+
+	if (tail && (th8PosixStrcmp(tail + 1, "bin") == 0 ||
+	             th8PosixStrcmp(tail + 1, "bin-afl") == 0 ||
+	             th8PosixStrcmp(tail + 1, "bin-static") == 0 ||
+	             th8PosixStrcmp(tail + 1, "lib") == 0)) {
+	    *tail = '\0';
+	}
+    }
+
+    {
+	size_t nResolved = th8PosixStrlen(resolved);
+
+	if (nResolved >= sizeof(zBasePath)) {
+	    return 0;
+	}
+	memcpy(zBasePath, resolved, nResolved + 1);
+    }
+    return zBasePath[0] ? 1 : 0;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8PosixGetBasePath --
  *
  *	Return the base path for the TH8 library.  The base path is
@@ -4692,7 +4775,9 @@ Th8_GetBasePath(void)
  *	All sandbox checks ultimately call this function to obtain
  *	the base path.  Uses dladdr(3) with the address of this
  *	function itself as the probe to find the path of the TH8
- *	shared library.  A union is used for the function-to-object
+ *	shared library, or -- when dladdr fails in a fully-static
+ *	binary -- /proc/self/exe.  A union is used for the
+ *	function-to-object
  *	pointer cast to avoid undefined behavior under strict ISO C
  *	(POSIX guarantees the cast works but the C standard does
  *	not).  The resulting path is resolved via realpath(3), then
@@ -4708,85 +4793,74 @@ Th8_GetBasePath(void)
  *	base path could not be determined.
  *
  * Side effects:
- *	On first call, calls dladdr and realpath.  Acquires and
- *	releases the platform mutex.
+ *	On first call, calls dladdr (or reads /proc/self/exe on a
+ *	static build) and realpath.  Acquires and releases the
+ *	platform mutex.
  *
  *----------------------------------------------------------------------
  */
+
 
 static const char *
 th8PosixGetBasePath(void)
 {
     th8PosixLock();
     if (!bInitialized) {
-	Dl_info info;
-	char resolved[4096];
-
 	bInitialized = 1;
 	zBasePath[0] = '\0';
 
 	/*
-	 * Use dladdr to find the path of the TH8 library itself.
-	 * We pass the address of this function as the probe.
-	 * The union avoids a function-to-object pointer cast that
-	 * is technically undefined in strict ISO C (but guaranteed
-	 * by POSIX).
-	 */
+         * Primary (dynamic builds): use dladdr to find the path of the
+         * TH8 shared library, probing the address of this function.
+         * The union avoids a function-to-object pointer cast that is
+         * technically undefined in strict ISO C (but guaranteed by
+         * POSIX).
+         */
 
 	{
+	    Dl_info info;
 	    union {
 		void *p;
 		const char *(*f)(void);
 	    } uAddr;
+
 	    uAddr.f = th8PosixGetBasePath;
 	    if (dladdr(uAddr.p, &info) && info.dli_fname) {
-		if (realpath(info.dli_fname, resolved)) {
-		    /*
-		     * Strip the filename to get the directory.
-		     */
-
-		    char *slash = th8PosixStrrchr(resolved, '/');
-
-		    if (slash && slash != resolved) {
-			*slash = '\0';
-
-			/*
-			 * If the directory is named "bin" or "lib",
-			 * the library resides in a subdirectory of
-			 * the base -- use the parent instead.
-			 */
-
-			{
-			    char *tail = th8PosixStrrchr(resolved, '/');
-
-			    if (tail &&
-			        (th8PosixStrcmp(tail + 1, "bin") == 0 ||
-			         th8PosixStrcmp(tail + 1, "bin-afl") == 0 ||
-			         th8PosixStrcmp(tail + 1, "bin-static") ==
-			             0 ||
-			         th8PosixStrcmp(tail + 1, "lib") == 0)) {
-				*tail = '\0';
-			    }
-			}
-
-			{
-			    size_t nResolved = th8PosixStrlen(resolved);
-			    if (nResolved < sizeof(zBasePath)) {
-				memcpy(zBasePath, resolved, nResolved + 1);
-			    }
-			}
-		    }
-		}
+		(void)th8PosixDeriveBaseFromModule(info.dli_fname);
 	    }
 	}
 
+#  if defined(__linux__)
 	/*
-	 * No fallback.  If dladdr failed, leave zBasePath empty
-	 * so that subsequent attempts to use it fail gracefully.
-	 */
+         * Fallback (fully-static builds): dladdr cannot resolve a module
+         * in a statically linked executable -- there is no dynamic
+         * linker and no shared-object metadata -- so it leaves zBasePath
+         * empty.  /proc/self/exe is a kernel-maintained symlink to the
+         * running executable that works for static AND dynamic binaries
+         * via a plain readlink(2), with no dynamic linker involved.  The
+         * static shell lives in <base>/bin-static/, which the reduction
+         * strips back to <base>.
+         */
 
 	if (!zBasePath[0]) {
-	    TH8_TRACE_ERR(NULL, "dladdr failed");
+	    char exePath[TH8_PATH_MAX];
+	    ssize_t nExe =
+	        readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+
+	    if (nExe > 0) {
+		exePath[nExe] = '\0';
+		(void)th8PosixDeriveBaseFromModule(exePath);
+	    }
+	}
+#  endif
+
+	/*
+         * No further fallback.  If detection failed, leave zBasePath
+         * empty so subsequent attempts to use it fail gracefully.
+         */
+
+	if (!zBasePath[0]) {
+	    TH8_TRACE_ERR(NULL, "base path detection failed");
 	}
     }
     th8PosixUnlock();
@@ -4920,7 +4994,7 @@ th8PosixIsPathUnderBase(const char *zPath)
 {
     const char *zBase;
     size_t nBase;
-    char resolved[4096];
+    char resolved[TH8_PATH_MAX];
 
     /* Bug 26: zPath is from caller -- caller could pass NULL. */
     if (!zPath || !zPath[0]) return 0;
@@ -4954,12 +5028,12 @@ th8PosixIsPathUnderBase(const char *zPath)
      * information about the filesystem outside the sandbox.
      */
     {
-	char cwd[4096];
-	const char *seg[256];
-	size_t segLen[256];
+	char cwd[TH8_PATH_MAX];
+	const char *seg[TH8_CWD_SEG_MAX];
+	size_t segLen[TH8_CWD_SEG_MAX];
 	int depth = 0;
 	const char *p;
-	char norm[4096];
+	char norm[TH8_PATH_MAX];
 	size_t nNorm;
 	int i;
 
@@ -4974,7 +5048,7 @@ th8PosixIsPathUnderBase(const char *zPath)
 
 	    while (*p && *p != '/')
 		p++;
-	    if (depth < 256) {
+	    if (depth < TH8_CWD_SEG_MAX) {
 		seg[depth] = s;
 		segLen[depth] = (size_t)(p - s);
 		depth++;
@@ -4996,7 +5070,7 @@ th8PosixIsPathUnderBase(const char *zPath)
 		/* current directory -- skip */
 	    } else if (n == 2 && s[0] == '.' && s[1] == '.') {
 		if (depth > 0) depth--;
-	    } else if (n > 0 && depth < 256) {
+	    } else if (n > 0 && depth < TH8_CWD_SEG_MAX) {
 		seg[depth] = s;
 		segLen[depth] = n;
 		depth++;
@@ -5063,7 +5137,7 @@ th8PosixGetCwd(
 {
     const char *zBase;
     size_t nBase;
-    char zCwd[4096];
+    char zCwd[TH8_PATH_MAX];
     int rel;
 
     (void)pCtx;
@@ -5078,7 +5152,7 @@ th8PosixGetCwd(
      */
 
     {
-	char zRaw[4096];
+	char zRaw[TH8_PATH_MAX];
 
 	if (!getcwd(zRaw, sizeof(zRaw))) {
 	    TH8_TRACE_ERR(NULL, "getcwd failed");
@@ -5172,8 +5246,8 @@ th8PosixSetCwd(
 {
     const char *zBase;
     size_t nBase;
-    char resolved[4096];
-    char zCopy[4096];
+    char resolved[TH8_PATH_MAX];
+    char zCopy[TH8_PATH_MAX];
     int rel;
 
     (void)interp;
@@ -5261,7 +5335,7 @@ th8PosixSetCwd(
  *	splits the combined path into components, applying "." (skip)
  *	and ".." (pop) rules.  The result is always an absolute path
  *	starting with "/" with no "." or ".." segments, suitable for
- *	prefix comparison against the base path.  Up to 512 path
+ *	prefix comparison against the base path.  Up to TH8_PATH_SEG_MAX path
  *	components are supported; deeper paths are rejected.
  *
  * Results:
@@ -5281,7 +5355,7 @@ th8PosixResolveAbsolute(
     size_t nPath) /* Length, or (size_t)-1. */
 {
     char *zCopy;
-    char resolved[4096];
+    char resolved[TH8_PATH_MAX];
 
     if (!zPath) return NULL;
 
@@ -5317,8 +5391,8 @@ th8PosixResolveAbsolute(
 
     {
 	char *zAbs;
-	const char *comp[512];
-	size_t compLen[512];
+	const char *comp[TH8_PATH_SEG_MAX];
+	size_t compLen[TH8_PATH_SEG_MAX];
 	int depth = 0;
 	const char *p;
 	char *zOut;
@@ -5326,8 +5400,8 @@ th8PosixResolveAbsolute(
 	int i;
 
 	if (zCopy[0] != '/') {
-	    char cwdRaw[4096];
-	    char cwd[4096];
+	    char cwdRaw[TH8_PATH_MAX];
+	    char cwd[TH8_PATH_MAX];
 
 	    if (!getcwd(cwdRaw, sizeof(cwdRaw))) {
 		TH8_TRACE_ERR(NULL, "getcwd failed");
@@ -5401,7 +5475,7 @@ th8PosixResolveAbsolute(
 		/* current dir -- no-op */
 	    } else if (len == 2 && start[0] == '.' && start[1] == '.') {
 		if (depth > 0) depth--;
-	    } else if (depth < 512) {
+	    } else if (depth < TH8_PATH_SEG_MAX) {
 		comp[depth] = start;
 		compLen[depth] = len;
 		depth++;
@@ -5622,8 +5696,8 @@ th8PosixGetExePath(
     Th8_Interp *interp, /* Interpreter for Th8_AttemptMalloc. */
     void *pCtx) /* Platform context (unused). */
 {
-    char buf[4096];
-    char resolved[4096];
+    char buf[TH8_PATH_MAX];
+    char resolved[TH8_PATH_MAX];
     char *zResult = 0;
 
     (void)pCtx;

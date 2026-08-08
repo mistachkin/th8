@@ -888,7 +888,7 @@ th8Win32IsPathUnderBase(const char *zPath)
  * Why / How:
  *	Uses native Win32 file I/O (CreateFileA with narrow paths).
  *	The path is first NUL-terminated into a stack buffer (or a
- *	heap buffer for paths longer than 1024 bytes), then validated
+ *	heap buffer for paths longer than TH8_PATH_STACK bytes), then validated
  *	against the base-path sandbox via th8Win32IsPathUnderBase.
  *	The file is opened via CreateFileA, sized via GetFileSize,
  *	then read in a single ReadFile call.  A 256 MB cap prevents
@@ -914,7 +914,7 @@ th8Win32GetData(
     char **pzOut,
     size_t *pnOut)
 {
-    char zPathBuf[1024];
+    char zPathBuf[TH8_PATH_STACK];
     char *zPath;
     HANDLE hFile;
     DWORD nSize;
@@ -1032,7 +1032,7 @@ th8Win32DataExists(
     size_t nName,
     int *pAttrs) /* OUT: file type attrs (may be NULL). */
 {
-    char zPathBuf[1024];
+    char zPathBuf[TH8_PATH_STACK];
     char *zPath;
     DWORD attr;
 
@@ -1148,7 +1148,7 @@ th8Win32VerifyAuthenticode(
      * Convert the UTF-8 path to UTF-16 for WinVerifyTrust.
      */
 
-    WCHAR wPathBuf[1024];
+    WCHAR wPathBuf[TH8_PATH_STACK];
     WCHAR *wPath;
     WCHAR *wAlloc = NULL;
 
@@ -1296,8 +1296,8 @@ th8Win32Load(
     const char *zColon;
     size_t nLib;
     size_t nSym;
-    char zLibBuf[1024];
-    char zSymBuf[256];
+    char zLibBuf[TH8_LOAD_LIB_MAX];
+    char zSymBuf[TH8_LOAD_SYM_MAX];
     char *zLib;
     char *zSym;
     HMODULE hLib;
@@ -1840,7 +1840,7 @@ th8Win32CallUnloadProc(
     const char *zProc;
     size_t nProc;
     size_t nSym;
-    char zSymBuf[256];
+    char zSymBuf[TH8_LOAD_SYM_MAX];
     char *zSym;
     Th8_Win32UnloadProc xUnloadFn;
     size_t i;
@@ -1986,7 +1986,7 @@ th8Win32Unload(
     const char *zColon = 0;
     size_t nPrefix;
     size_t nSym;
-    char zSymBuf[256];
+    char zSymBuf[TH8_LOAD_SYM_MAX];
     char *zSym;
     Th8_Win32UnloadProc xUnloadFn;
     size_t i;
@@ -2139,7 +2139,7 @@ th8Win32WriteHandle(Th8_Interp *interp, HANDLE h, const char *z, size_t n)
 	 * is always sufficient.
 	 */
 
-	UTF16 wBuf[4096];
+	UTF16 wBuf[TH8_IO_BUFSIZE];
 	UTF16 *wAlloc = NULL;
 	UTF16 *wData;
 	const UTF8 *pSrc;
@@ -2262,11 +2262,12 @@ th8Win32Input(
 	 * ReadConsoleW returns a full line including \r\n.
 	 */
 
-	WCHAR wBuf[4096];
+	WCHAR wBuf[TH8_IO_BUFSIZE];
 	DWORD nWchars = 0;
 	const UTF16 *pSrc;
 	UTF8 *pDst;
-	UTF8 zUtf8[4096 * 3]; /* worst case: 3 UTF-8 bytes per BMP char */
+	UTF8 zUtf8
+	    [TH8_IO_BUFSIZE * 3]; /* worst case: 3 UTF-8 bytes per BMP char */
 	ConversionResult cr;
 	size_t nUtf8;
 
@@ -2312,7 +2313,7 @@ th8Win32Input(
 	 * valid UTF-8.
 	 */
 
-	char zBuf[4096];
+	char zBuf[TH8_IO_BUFSIZE];
 	DWORD nTotal = 0;
 
 	while (nTotal < sizeof(zBuf) - 1) {
@@ -2376,7 +2377,7 @@ th8Win32Input(
 static int
 th8Win32Output(
     Th8_Interp *interp, /* Interpreter (unused). */
-    void *pCtx,  /* Platform's pCtx (unused). */
+    void *pCtx, /* Platform's pCtx (unused). */
     const char *z,
     size_t n,
     void *pChannel)
@@ -2421,7 +2422,7 @@ th8Win32Output(
 static int
 th8Win32OutputError(
     Th8_Interp *interp, /* Interpreter (unused). */
-    void *pCtx,  /* Platform's pCtx (unused). */
+    void *pCtx, /* Platform's pCtx (unused). */
     const char *z,
     size_t n,
     void *pChannel)
@@ -2583,7 +2584,7 @@ th8Win32RandomBytes(Th8_Interp *interp, void *pCtx, void *pBuf, size_t nByte)
     hLib = LoadLibraryA("advapi32.dll");
     if (hLib) {
 	pFunc = (RtlGenRandomFunc)
-	    GetProcAddress(hLib, "SystemFunction036");  /* RtlGenRandom */
+	    GetProcAddress(hLib, "SystemFunction036"); /* RtlGenRandom */
 	if (pFunc) {
 	    if (pFunc(pBuf, (ULONG)nByte)) {
 		FreeLibrary(hLib);
@@ -2914,7 +2915,7 @@ th8Win32GetStackBounds(
     pStackHigh = (char *)mbi.BaseAddress + mbi.RegionSize;
     while (VirtualQuery((LPCVOID)pStackHigh, &mbi, sizeof(mbi)) != 0) {
 	if (mbi.AllocationBase != (PVOID)pStackLow) {
-	    break;  /* Different allocation -- done. */
+	    break; /* Different allocation -- done. */
 	}
 	pStackHigh = (char *)mbi.BaseAddress + mbi.RegionSize;
     }
@@ -3719,7 +3720,7 @@ Th8_GetBasePath(void)
 static char *
 th8Win32GetCwd(
     Th8_Interp *interp, /* Interpreter (for Th8_AttemptMalloc). */
-    void *pCtx)   /* Host context (unused). */
+    void *pCtx) /* Host context (unused). */
 {
     const char *zBase;
     size_t nBase;
@@ -3793,7 +3794,7 @@ th8Win32GetCwd(
 
     TH8_TRACE_ERR(NULL, "current path is foreign");
     TH8_TRACE_ERR(NULL, zCwd);
-    return NULL;  /* foreign directory */
+    return NULL; /* foreign directory */
 }
 
 
@@ -3828,9 +3829,9 @@ th8Win32GetCwd(
 static char *
 th8Win32NormalizePath(
     Th8_Interp *interp, /* Interpreter (for Th8_AttemptMalloc). */
-    void *pCtx,   /* Host context (unused). */
-    const char *zPath,  /* Path to normalize. */
-    size_t nPath)  /* Length, or (size_t)-1. */
+    void *pCtx, /* Host context (unused). */
+    const char *zPath, /* Path to normalize. */
+    size_t nPath) /* Length, or (size_t)-1. */
 {
     const char *zBase;
     size_t nBase;
@@ -3950,7 +3951,7 @@ th8Win32NormalizePath(
 static int
 th8Win32SetCwd(
     Th8_Interp *interp, /* Interpreter. */
-    void *pCtx,   /* Host context (unused). */
+    void *pCtx, /* Host context (unused). */
     const char *zPath,
     size_t nPath)
 {
@@ -4015,7 +4016,7 @@ th8Win32SetCwd(
 
     TH8_TRACE_ERR(NULL, "new path is foreign");
     TH8_TRACE_ERR(NULL, zFull);
-    return TH8_ERROR;  /* rejected: foreign directory */
+    return TH8_ERROR; /* rejected: foreign directory */
 }
 
 
@@ -4052,7 +4053,7 @@ th8Win32SetCwd(
 static char *
 th8Win32GetExePath(
     Th8_Interp *interp, /* Interpreter for Th8_AttemptMalloc. */
-    void *pCtx)   /* Platform context (unused). */
+    void *pCtx) /* Platform context (unused). */
 {
     char zModule[MAX_PATH];
     char zResolved[MAX_PATH];
@@ -4252,8 +4253,8 @@ th8Win32GetHostName(Th8_Interp *interp, void *pCtx, char *zBuf, size_t nBuf)
 static char *
 th8Win32GetEnv(Th8_Interp *interp, void *pCtx, const char *zName)
 {
-    WCHAR wName[256];
-    WCHAR wVal[4096];
+    WCHAR wName[TH8_ENV_STACK];
+    WCHAR wVal[TH8_PATH_MAX];
     DWORD n;
     int nWide;
     int nUtf8;
@@ -4274,8 +4275,8 @@ th8Win32GetEnv(Th8_Interp *interp, void *pCtx, const char *zName)
      * Query the environment variable (UTF-16).
      */
     n = GetEnvironmentVariableW(wName, wVal, sizeof(wVal) / sizeof(WCHAR));
-    if (n == 0) return NULL;  /* not set or error */
-    if (n >= sizeof(wVal) / sizeof(WCHAR)) return NULL;  /* too long */
+    if (n == 0) return NULL; /* not set or error */
+    if (n >= sizeof(wVal) / sizeof(WCHAR)) return NULL; /* too long */
 
     /*
      * Convert the UTF-16 value to UTF-8.
@@ -4735,7 +4736,7 @@ th8Win32GetInput(Th8_Interp *interp, void *pCtx, void **pChannel)
     (void)interp;
     (void)pCtx;
     *pChannel = th8Win32InputChannel;
-    return 0;  /* TH8_OK */
+    return 0; /* TH8_OK */
 }
 
 /*
@@ -4767,7 +4768,7 @@ th8Win32SetInput(Th8_Interp *interp, void *pCtx, void *pChannel)
     (void)interp;
     (void)pCtx;
     th8Win32InputChannel = pChannel;
-    return 0;  /* TH8_OK */
+    return 0; /* TH8_OK */
 }
 
 /*
@@ -4797,7 +4798,7 @@ th8Win32GetOutput(Th8_Interp *interp, void *pCtx, void **pChannel)
     (void)interp;
     (void)pCtx;
     *pChannel = th8Win32OutputChannel;
-    return 0;  /* TH8_OK */
+    return 0; /* TH8_OK */
 }
 
 /*
@@ -4829,7 +4830,7 @@ th8Win32SetOutput(Th8_Interp *interp, void *pCtx, void *pChannel)
     (void)interp;
     (void)pCtx;
     th8Win32OutputChannel = pChannel;
-    return 0;  /* TH8_OK */
+    return 0; /* TH8_OK */
 }
 
 /*
@@ -4859,7 +4860,7 @@ th8Win32GetErrorOutput(Th8_Interp *interp, void *pCtx, void **pChannel)
     (void)interp;
     (void)pCtx;
     *pChannel = th8Win32ErrorChannel;
-    return 0;  /* TH8_OK */
+    return 0; /* TH8_OK */
 }
 
 /*
@@ -4891,7 +4892,7 @@ th8Win32SetErrorOutput(Th8_Interp *interp, void *pCtx, void *pChannel)
     (void)interp;
     (void)pCtx;
     th8Win32ErrorChannel = pChannel;
-    return 0;  /* TH8_OK */
+    return 0; /* TH8_OK */
 }
 
 
@@ -4930,7 +4931,7 @@ th8Win32GetRealPath(
     char *zBuf,
     size_t nBuf)
 {
-    char zCopy[4096];
+    char zCopy[TH8_PATH_MAX];
     DWORD n;
 
     (void)interp;
@@ -4985,7 +4986,7 @@ th8Win32GetRootPath(
     char *zBuf,
     size_t nBuf)
 {
-    char zCopy[4096];
+    char zCopy[TH8_PATH_MAX];
 
     (void)interp;
     (void)pCtx;
@@ -5057,8 +5058,8 @@ th8Win32SameFile(
     const char *zName2,
     size_t nName2)
 {
-    char zCopy1[4096];
-    char zCopy2[4096];
+    char zCopy1[TH8_PATH_MAX];
+    char zCopy2[TH8_PATH_MAX];
     HANDLE h1;
     HANDLE h2;
     BY_HANDLE_FILE_INFORMATION info1;
@@ -5644,26 +5645,26 @@ th8Win32DnsResolveFree(Th8_Interp *interp, void *pCtx, Th8_DnsResult *pResult)
 
 
 static Th8_Platform th8Win32PlatformData = {
-    1,   /* nVersion */
+    1, /* nVersion */
 
     /* Lifecycle */
-    th8Win32Initialize,  /* xInitialize */
-    th8Win32Finalize,  /* xFinalize */
+    th8Win32Initialize, /* xInitialize */
+    th8Win32Finalize, /* xFinalize */
     th8Win32PreDeleteInterp, /* xPreDeleteInterp */
     th8Win32DeleteInterp, /* xDeleteInterp */
 
     /* Memory -- Win32 HeapAlloc (private heap) */
     th8Win32Malloc, /* xMalloc */
     th8Win32Realloc, /* xRealloc */
-    th8Win32Free,  /* xFree */
+    th8Win32Free, /* xFree */
     th8Win32MemorySize, /* xMemorySize */
-    0,   /* xNeedMemory */
+    0, /* xNeedMemory */
 
     /* Byte operations (xMemcpy, xMemmove provided by th8_libc.c) */
-    0,   /* xMemcpy */
-    0,   /* xMemmove */
+    0, /* xMemcpy */
+    0, /* xMemmove */
     th8Win32Memset, /* xMemset */
-    0,   /* xMemcmp */
+    0, /* xMemcmp */
 
     /* String / utility (provided by th8_libc.c via merge) */
     0, 0, 0, 0, 0, 0, /* xStrlen .. xVsnprintf */

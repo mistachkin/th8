@@ -957,7 +957,7 @@ th8LibcVsnprintf(
  *
  * Why / How:
  *	Implements the Th8_Platform.xInput callback.  Reads up to
- *	4096 bytes from the given channel (defaulting to stdin) using
+ *	TH8_IO_BUFSIZE bytes from the given channel (defaulting to stdin) using
  *	fgets, then allocates a copy via Th8_AttemptMalloc so the
  *	caller owns the buffer.
  *
@@ -979,7 +979,7 @@ th8LibcInput(
     size_t *pnOut,
     void *pChannel) /* Channel (unused). */
 {
-    char zBuf[4096];
+    char zBuf[TH8_IO_BUFSIZE];
     char *zResult;
     size_t n;
 
