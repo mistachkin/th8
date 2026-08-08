@@ -8,7 +8,7 @@
 #
 #   feature : core | static | test
 #               core   = everything needed for a standard dynamic build
-#               static = the extra -dev libs a fully-static link needs
+#               static = a curl-free fully-static link (adds nothing to core; see below)
 #               test   = the dynamic-analysis toolchain (valgrind, sanitizers)
 #   manager : apt (Debian/Ubuntu) | brew (macOS/Homebrew)
 #
@@ -51,50 +51,32 @@
 #                                   (TH8_ENABLE_UNBOUND).  Omit it and build
 #                                   `make ENABLE_UNBOUND=0` to drop DNS support.
 #
-# static -- LINUX ONLY: the extra -dev packages the STATIC_ENABLE_LIBCURL=1 shell
-# link needs.  Dynamic builds need NONE of this.  macOS is excluded (Apple ld
-# rejects -static / has no static libSystem), so no brew names.
+# static -- LINUX ONLY: packages a fully-static (`-static`) shell link needs
+# BEYOND `core`.  The supported static shell is CURL-FREE (STATIC_ENABLE_LIBCURL
+# defaults 0): a clean `-static` link of libth8.a + static OpenSSL + static glibc
+# with no shared-object dependencies.  That link needs NOTHING beyond `core` --
+# the static OpenSSL archives (libssl.a/libcrypto.a) ship in `core`'s libssl-dev,
+# and the static glibc archives (libc.a/libm.a) ship in libc6-dev, pulled by
+# `core`'s build-essential.  (Verified: Ubuntu's OpenSSL is built without zlib --
+# libssl3t64 depends only on libc6 -- so static OpenSSL pulls no -lz either.)
 #
-# WHAT THE LINK ACTUALLY IS (verified from the CI link line, 2026-08-07): a
-# SEMI-static link -- `-Wl,-Bstatic -lcurl -Wl,-Bdynamic <curl's deps>`.  Only
-# libcurl.a is pulled statically; every one of curl's dependency libraries is
-# linked DYNAMICALLY.  So this row does NOT need their `.a` archives -- it needs
-# each dep's unversioned `.so` LINKER SYMLINK (the `lib<x>.so` a `-dev` package
-# ships; the versioned `lib<x>.so.N` runtime alone is not enough for `-l<x>`).
-# libcurl.a and libssl.a come from the 'core' row (libcurl4-openssl-dev,
-# libssl-dev) and are not repeated here.
+# The row below is therefore a single GUARANTEED-INSTALLED placeholder, `libc6`
+# (present on every Debian/Ubuntu system; `apt-get install -y libc6` is a no-op).
+# It keeps `static` a valid, non-empty manifest row -- tools/pkgdeps.sh treats a
+# feature with NO apt/brew packages as an *error*, not "nothing to do" -- while
+# documenting that a curl-free static link adds nothing to `core`.  It is also
+# apt: a static binary embeds glibc, whose static archives come via core.  macOS
+# links nothing statically (Apple ld rejects -static), so no brew packages.
 #
-# One -dev package per `-l` in curl's dependency list (from `curl-config --libs`
-# on noble); each was verified on packages.ubuntu.com to ship the named symlink:
-#   package (apt)     provides linker symlink   satisfies
-#   zlib1g-dev        libz.so                   -lz        (transfer compression)
-#   libnghttp2-dev    libnghttp2.so             -lnghttp2  (HTTP/2)
-#   libbrotli-dev     libbrotlidec.so           -lbrotlidec(brotli decode)
-#   libzstd-dev       libzstd.so                -lzstd     (zstd)
-#   libidn2-dev       libidn2.so                -lidn2     (IDN)
-#   libpsl-dev        libpsl.so                 -lpsl      (public-suffix policy)
-#   libssh-dev        libssh.so                 -lssh      (SFTP/SCP)
-#   librtmp-dev       librtmp.so                -lrtmp     (RTMP)
-#   libldap-dev       libldap.so liblber.so     -lldap -llber (LDAP)
-#   libkrb5-dev       libgssapi_krb5.so         -lgssapi_krb5 (curl GSS-API/Negotiate)
-#
-# NOTES / gotchas learned the hard way:
-#   * libkrb5-dev ships NO `.a` on any Ubuntu release (noble AND jammy) -- but
-#     because this link is `-Bdynamic` for krb5, the `.a` is irrelevant; the
-#     `.so` symlink it ships is exactly what `-lgssapi_krb5` needs.  Omitting
-#     libkrb5-dev is what caused "cannot find -lgssapi_krb5".
-#   * On noble the real package is `libldap-dev`; `libldap2-dev` is now just a
-#     transitional wrapper for it.
-#   * The dynamic-link path does NOT reference -lsasl2 or -lunistring (libldap.so
-#     / libidn2.so carry those as their own runtime DT_NEEDED, which ld resolves
-#     under --allow-shlib-undefined), so no libsasl2-dev / libunistring-dev here.
-#   * Unbound is off in STATIC builds (STATIC_BUILD => ENABLE_UNBOUND=0), so the
-#     unbound deps (libevent-dev; nettle-dev; libgmp-dev) are NOT needed.  A
-#     static build WITH unbound would add those three -- all present on noble.
-#
-# If the link reports "cannot find -l<x>", the -dev package shipping lib<x>.so is
-# missing from the row below; the static-shell CI job's "Diagnose static libs"
-# step prints `curl-config --static-libs` plus which libs the runner provides.
+# WHY NOT a libcurl-enabled static shell: STATIC_ENABLE_LIBCURL=1 is UNBUILDABLE
+# on stock Ubuntu.  `curl-config --static-libs` there returns
+# `-Wl,-Bstatic -lcurl -Wl,-Bdynamic <deps>` -- it deliberately links curl's
+# dependencies DYNAMICALLY -- which collides with the global `-static` (ld errors
+# "attempted static link of dynamic object").  A truly fully-static curl is also
+# blocked: Ubuntu's libcurl is built with GSS-API, and libgssapi_krb5.a exists on
+# NO Ubuntu release (noble or jammy; only Heimdal ships a libkrb5.a, off-path).
+# A self-contained curl-enabled static binary would need libcurl rebuilt from
+# source without GSS-API -- out of scope for an apt-only build.
 #
 # test -- the dynamic-analysis toolchain (NOT needed for a normal build):
 #   valgrind / (n/a)               `make valgrind` memcheck, plus the Valgrind
@@ -125,7 +107,7 @@
 core	apt	build-essential pkg-config tcl-dev clang-format-19 mandoc libssl-dev libcurl4-openssl-dev libunbound-dev
 core	brew	pkg-config tcl-tk@8 openssl@3 unbound mandoc
 core	note-brew	build-essential -> Xcode Command Line Tools (run: xcode-select --install); clang-format-19 -> pinned pip venv, provisioned automatically (see docs/public/portability.md); libcurl and zlib are provided by the macOS SDK (no brew package)
-static	apt	zlib1g-dev libnghttp2-dev libbrotli-dev libzstd-dev libidn2-dev libpsl-dev libssh-dev librtmp-dev libldap-dev libkrb5-dev
+static	apt	libc6
 static	note-brew	nothing to install: TH8 does not statically link on macOS (Apple ships no static libSystem); the fully-static libs are a Linux-only concern
 test	apt	valgrind clang llvm
 test	note-brew	nothing to install: the sanitizers (asan/ubsan) use the system Apple clang from the Xcode CLT (installed by 'core'); valgrind, MemorySanitizer, and the llvm-cov/-profdata MC/DC tooling are unavailable on macOS

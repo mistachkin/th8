@@ -124,26 +124,23 @@ jobs:
           if-no-files-found: ignore
 
   # --------------------------------------------------------------------
-  # Fully-static shell (Ubuntu 22.04) -- validates the static-link
-  # deliverable with libcurl statically linked in.  Separate job on
-  # purpose: a static-link problem fails only here, never the test suite.
+  # Fully-static shell (Linux) -- validates the `-static` deliverable: a
+  # self-contained th8sh with no shared-object dependencies.  Separate job
+  # on purpose: a static-link problem fails only here, never the test suite.
   #
-  # A fully-static (`-static`) link of libcurl needs the `.a` archives for
-  # curl's whole transitive chain (nghttp2, idn2, ssh, psl, gssapi/krb5,
-  # ldap, rtmp, ...).  When only the `.so` is on the link path, ld fails
-  # with "attempted static link of dynamic object".  We install those
-  # archives via `pkg-deps-static` (tools/data/packages.tsv); if a link
-  # still fails, the "Diagnose static libs" step below dumps exactly which
-  # `.a` is present/missing and what `curl-config --static-libs` wants, so
-  # the fix is a package addition, not a guess.
-  #
-  # The policy lives HERE, not in the Makefile: the Makefile defaults
-  # STATIC_ENABLE_LIBCURL off (a plain static build needs no extra
-  # archives), and CI opts in via the make argument + `pkg-deps-static`.
+  # The static shell is CURL-FREE by design.  A libcurl-enabled static link
+  # is unbuildable on stock Ubuntu: `curl-config --static-libs` there emits
+  # `-Bstatic -lcurl -Bdynamic <deps>` (curl's dependencies are meant to link
+  # dynamically), which collides with the global `-static` -- ld errors
+  # "attempted static link of dynamic object".  A truly fully-static curl is
+  # also blocked: Ubuntu's libcurl is built with GSS-API and libgssapi_krb5.a
+  # is packaged on NO Ubuntu release.  So this builds the default
+  # STATIC_ENABLE_LIBCURL=0 shell (static OpenSSL + static glibc, no curl).
+  # Full rationale: tools/data/packages.tsv (the `static` feature).
   # macOS is excluded -- Apple ld rejects -static.
   # --------------------------------------------------------------------
   static-shell:
-    name: Static shell (Linux, libcurl)
+    name: Static shell (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -151,40 +148,28 @@ jobs:
         with:
           submodules: recursive
 
-      # pkg-deps-static installs pkg-deps-core PLUS the -dev archives that
-      # libcurl's fully-static link pulls in (see tools/data/packages.tsv).
+      # A curl-free static link needs nothing beyond `core` (static OpenSSL
+      # from libssl-dev, static glibc from libc6-dev via build-essential); the
+      # `static` feature is a no-op placeholder, so this resolves to core.
       - name: Install deps (pkg-deps-static)
         run: make pkg-deps-static
 
-      # Ground truth for the static chain: what the runner actually provides.
-      # Non-fatal -- purely informational so a link failure can be diagnosed
-      # from the log (which `.a` exists, which is `.so`-only) instead of
-      # theorizing.  If an archive is missing, `apt-file`/`apt-cache` tells us
-      # which package (often a separate `libfoo-dev` or a `...-static` split)
-      # ships it, and it gets added to packages.tsv.
-      - name: Diagnose static libs
-        run: |
-          . /etc/os-release; echo "runner: $PRETTY_NAME (glibc $(ldd --version | head -1))"
-          echo "== curl-config --static-libs =="
-          curl-config --static-libs || true
-          echo "== .a / .so for curl's transitive chain =="
-          for l in curl nghttp2 brotlidec brotlicommon zstd idn2 psl ssh ssh2 rtmp ldap lber sasl2 gssapi_krb5 krb5 k5crypto com_err z ssl crypto; do
-            a=$(find /usr/lib /usr/lib/x86_64-linux-gnu -name "lib$l.a" 2>/dev/null | head -1)
-            so=$(find /usr/lib /usr/lib/x86_64-linux-gnu -name "lib$l.so" 2>/dev/null | head -1)
-            printf '  %-14s a=%-1s so=%-1s\n' "$l" "${a:+yes}" "${so:+yes}"
-          done
-
-      # STATIC_ENABLE_LIBCURL=1 is the CI's choice, not a Makefile default.
       # `genstubs` is listed explicitly so the generated stub sources exist on
       # a clean tree (the `all`/`debug` targets run it, but `static-shell`
       # reaches `shell` directly, which does not).
-      - name: Build fully-static shell (libcurl enabled)
-        run: make -j"$(getconf _NPROCESSORS_ONLN)" ENABLE_TEST_KEY=1 STATIC_ENABLE_LIBCURL=1 clean genstubs static-shell
+      - name: Build fully-static shell
+        run: make -j"$(getconf _NPROCESSORS_ONLN)" ENABLE_TEST_KEY=1 clean genstubs static-shell
 
-      - name: Verify the static shell runs
+      - name: Verify the static shell runs and is static
         run: |
           file bin-static/th8sh
           echo 'puts [expr 6*7]' | bin-static/th8sh | grep -q 42
+          # A true -static binary has no dynamic (`=>`) dependencies.
+          if ldd bin-static/th8sh 2>&1 | grep -q '=>'; then
+            echo "ERROR: th8sh has shared-object dependencies (not static):"
+            ldd bin-static/th8sh
+            exit 1
+          fi
 
       - name: Upload static shell
         if: always()

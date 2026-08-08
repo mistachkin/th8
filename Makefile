@@ -951,12 +951,15 @@ $(B)bestline.o: $(BESTLINE_BUILD)/bestline.c $(BESTLINE_BUILD)/bestline.h | best
 # platform that supports -static).  macOS does not support fully
 # static executables; use the regular shell target there.
 #
-# By default, libcurl is disabled for static builds because static
-# linking requires .a archives for ALL transitive dependencies
-# (nghttp2, libidn2, libssh, libpsl, zstd, brotli, gssapi, etc.)
-# which are often not installed.  To enable:
-#   make static-shell STATIC_ENABLE_LIBCURL=1
-# (requires all static -dev packages to be installed).
+# libcurl is disabled for static builds by default (STATIC_ENABLE_LIBCURL=0),
+# and on stock Ubuntu it CANNOT be enabled: `curl-config --static-libs` there
+# emits `-Bstatic -lcurl -Bdynamic <deps>` (curl's dependencies are meant to
+# link dynamically), which contradicts the global `-static` and makes ld fail
+# with "attempted static link of dynamic object".  A truly fully-static curl
+# is also blocked -- Ubuntu's libcurl is built with GSS-API and libgssapi_krb5.a
+# is packaged on no Ubuntu release.  STATIC_ENABLE_LIBCURL=1 is retained only
+# for platforms that ship a fully-static-linkable libcurl (e.g. a custom curl
+# built without GSS-API).  See tools/data/packages.tsv (the `static` feature).
 #
 
 STATIC_ENABLE_LIBCURL ?= 0
@@ -2076,7 +2079,8 @@ vendoring: regex_vendor tommath_vendor mimalloc_vendor bestline_vendor spilornis
 #   pkg-deps-core    standard dynamic build (`make all`): compiler, pkg-config,
 #                    tclsh (vendoring/genstubs), clang-format-N (audit-format),
 #                    and OpenSSL / libcurl / unbound
-#   pkg-deps-static  + the -dev libs a FULLY-STATIC link needs
+#   pkg-deps-static  the curl-free static link (adds nothing to core; the
+#                    `static` feature is a guaranteed-present placeholder)
 #   pkg-deps-test    + the dynamic-analysis toolchain (valgrind on Linux; the
 #                    sanitizers themselves need no extra package under gcc)
 #
