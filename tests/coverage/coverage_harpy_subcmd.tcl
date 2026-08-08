@@ -102,7 +102,7 @@ runTest {test ha_sub-2.1 {
   == 8 (T) but Th8_Memcmp != 0 (F).  The parser falls
   through to the unknown-option error.
 } -constraints {
-    th8
+  th8 clock_ntp clock_ntp_network
 } -body {
   set rcs {}
   catch {clock ntp -bogusxz 100} m

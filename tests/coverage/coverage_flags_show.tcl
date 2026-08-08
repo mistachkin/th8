@@ -218,7 +218,7 @@ runTest {test flagsshow-5.1 {
   but memcmp differs.  The -timeout (8) and other length
   options take different paths.
 } -constraints {
-    th8 crypto_enabled
+    th8 crypto_enabled clock_ntp clock_ntp_network
 } -body {
   set rc [catch {clock ntp -bogusa 1.2.3.4} m]
   expr {$rc == 1}

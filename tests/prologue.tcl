@@ -64,6 +64,7 @@ testLoadLib
 
 ###############################################################################
 
+setupCommonConstraints
 setupLoadConstraints
 setupCryptoConstraints
 setupFaultConstraints
@@ -73,4 +74,3 @@ setupCommandConstraints
 setupSubCommandConstraints
 setupNamespaceConstraints
 setupCurlConstraints
-setupCommonConstraints

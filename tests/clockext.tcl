@@ -27,7 +27,7 @@ source tests/prologue.tcl
 runTest {test clockext-1.1 {
   R-14640-47759: clock ntp returns a plausible Unix epoch timestamp
 } -constraints {
-    th8 crypto_testlib clock_ntp_network
+    th8 crypto_testlib clock_ntp clock_ntp_network
 } -body {
   set t [clock ntp -server pool.ntp.org]
   # Must be after 2025-01-01 and before 2100-01-01
@@ -41,7 +41,7 @@ runTest {test clockext-1.1 {
 runTest {test clockext-1.2 {
   R-14640-47759: clock ntp with a custom server returns a timestamp
 } -constraints {
-    th8 crypto_testlib clock_ntp_network
+    th8 crypto_testlib clock_ntp clock_ntp_network
 } -body {
   set t [clock ntp -server pool.ntp.org -timeout 5000]
   set local [clock seconds]
@@ -59,7 +59,7 @@ runTest {test clockext-1.2 {
 runTest {test clockext-1.3 {
   R-14640-47759: clock ntp with a nonexistent server returns an error
 } -constraints {
-    th8 crypto_testlib
+    th8 crypto_testlib clock_ntp clock_ntp_network
 } -body {
   catch {clock ntp -server nonexistent.invalid.test -timeout 2000} msg
   string match {clock ntp:*} $msg
@@ -76,7 +76,7 @@ runTest {test clockext-1.3 {
 runTest {test clockext-2.1 {
   R-08803-10244: clock https returns a plausible Unix epoch timestamp
 } -constraints {
-    th8 crypto_testlib libcurl
+    th8 crypto_testlib libcurl clock_https clock_https_network
 } -body {
   set t [clock https]
   expr {$t > 1735689600 && $t < 4102444800}
@@ -89,7 +89,7 @@ runTest {test clockext-2.1 {
 runTest {test clockext-2.2 {
   R-08803-10244: clock https result agrees with clock seconds within 5 seconds
 } -constraints {
-    th8 crypto_testlib libcurl
+    th8 crypto_testlib libcurl clock_https clock_https_network
 } -body {
   set t [clock https]
   set local [clock seconds]
@@ -107,7 +107,7 @@ runTest {test clockext-3.1 {
                  non-numeric value is rejected at option-parse time,
                  before any network query (deterministic, network-free).
 } -constraints {
-    th8 crypto_testlib
+    th8 crypto_testlib clock_ntp clock_ntp_network
 } -body {
   #
   # The bad -attempts value fails in Th8_ToWideInt during option

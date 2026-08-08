@@ -402,7 +402,9 @@ runTest {test coverage8-9.5 {
 
 runTest {test coverage8-10.1 {
   R-14640-47759: clock ntp returns epoch seconds
-} -constraints {clock_ntp_network} -body {
+} -constraints {
+  clock_ntp clock_ntp_network
+} -body {
   set t [clock ntp -timeout 5000]
   # Should be a reasonable epoch time (after 2024-01-01)
   expr {$t > 1704067200}
@@ -414,6 +416,8 @@ runTest {test coverage8-10.1 {
 
 runTest {test coverage8-10.2 {
   R-57714-59415: clock ntp default server returns integer
+} -constraints {
+  clock_ntp clock_ntp_network
 } -body {
   # Reuse the result from 10.1 if NTP throttled.
   # Verify the clock ntp result format is integer.
@@ -432,6 +436,8 @@ runTest {test coverage8-10.2 {
 
 runTest {test coverage8-10.3 {
   R-08803-10244: clock https returns epoch seconds
+} -constraints {
+  clock_https clock_https_network
 } -body {
   set rc [catch {clock https} t]
   if {$rc == 0} then {
@@ -448,6 +454,8 @@ runTest {test coverage8-10.3 {
 
 runTest {test coverage8-10.4 {
   R-07082-35746: clock https plausible range
+} -constraints {
+  clock_https clock_https_network
 } -body {
   set rc [catch {clock https} t]
   if {$rc == 0} then {
@@ -624,6 +632,8 @@ runTest {test coverage8-13.1 {
 runTest {test coverage8-14.1 {
   R-32287-57587: clock ntp consistency check R-54400-11734: clock ntp monotonic
                  behavior
+} -constraints {
+  clock_ntp clock_ntp_network
 } -body {
   # NTP servers may throttle rapid requests; use catch to
   # handle rate-limit errors gracefully.
@@ -644,6 +654,8 @@ runTest {test coverage8-14.1 {
 
 runTest {test coverage8-14.3 {
   R-33190-18538: clock https generates nonce
+} -constraints {
+  clock_https clock_https_network
 } -body {
   # The nonce is internal; we verify https returns a valid timestamp
   set rc [catch {clock https} t]

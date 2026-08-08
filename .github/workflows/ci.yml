@@ -124,9 +124,18 @@ jobs:
           if-no-files-found: ignore
 
   # --------------------------------------------------------------------
-  # Fully-static shell (Linux) -- validates the static-link deliverable
-  # with libcurl statically linked in.  This is a separate job on purpose:
-  # a missing static -dev archive fails only here, never the test suite.
+  # Fully-static shell (Ubuntu 22.04) -- validates the static-link
+  # deliverable with libcurl statically linked in.  Separate job on
+  # purpose: a static-link problem fails only here, never the test suite.
+  #
+  # A fully-static (`-static`) link of libcurl needs the `.a` archives for
+  # curl's whole transitive chain (nghttp2, idn2, ssh, psl, gssapi/krb5,
+  # ldap, rtmp, ...).  When only the `.so` is on the link path, ld fails
+  # with "attempted static link of dynamic object".  We install those
+  # archives via `pkg-deps-static` (tools/data/packages.tsv); if a link
+  # still fails, the "Diagnose static libs" step below dumps exactly which
+  # `.a` is present/missing and what `curl-config --static-libs` wants, so
+  # the fix is a package addition, not a guess.
   #
   # The policy lives HERE, not in the Makefile: the Makefile defaults
   # STATIC_ENABLE_LIBCURL off (a plain static build needs no extra
@@ -146,6 +155,24 @@ jobs:
       # libcurl's fully-static link pulls in (see tools/data/packages.tsv).
       - name: Install deps (pkg-deps-static)
         run: make pkg-deps-static
+
+      # Ground truth for the static chain: what the runner actually provides.
+      # Non-fatal -- purely informational so a link failure can be diagnosed
+      # from the log (which `.a` exists, which is `.so`-only) instead of
+      # theorizing.  If an archive is missing, `apt-file`/`apt-cache` tells us
+      # which package (often a separate `libfoo-dev` or a `...-static` split)
+      # ships it, and it gets added to packages.tsv.
+      - name: Diagnose static libs
+        run: |
+          . /etc/os-release; echo "runner: $PRETTY_NAME (glibc $(ldd --version | head -1))"
+          echo "== curl-config --static-libs =="
+          curl-config --static-libs || true
+          echo "== .a / .so for curl's transitive chain =="
+          for l in curl nghttp2 brotlidec brotlicommon zstd idn2 psl ssh ssh2 rtmp ldap lber sasl2 gssapi_krb5 krb5 k5crypto com_err z ssl crypto; do
+            a=$(find /usr/lib /usr/lib/x86_64-linux-gnu -name "lib$l.a" 2>/dev/null | head -1)
+            so=$(find /usr/lib /usr/lib/x86_64-linux-gnu -name "lib$l.so" 2>/dev/null | head -1)
+            printf '  %-14s a=%-1s so=%-1s\n' "$l" "${a:+yes}" "${so:+yes}"
+          done
 
       # STATIC_ENABLE_LIBCURL=1 is the CI's choice, not a Makefile default.
       # `genstubs` is listed explicitly so the generated stub sources exist on

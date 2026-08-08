@@ -82,7 +82,7 @@ runTest {test mcdcfruit-2.1 {
   short option (F).  All error during option parsing BEFORE any
   network access, so this is offline.
 } -constraints {
-    th8 clock_ntp
+    th8 clock_ntp clock_ntp_network
 } -body {
   list \
       [catch {clock ntp -attempts 2 -badxyz99} m1] \
