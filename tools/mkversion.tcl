@@ -40,9 +40,18 @@ proc main {args} {
   set srcTags     "unknown"
   set srcVcs      "none"
 
-  if {![catch {exec fossil info} info]} then {
+  if {![catch {exec fossil info} info] && \
+      [string match "*\ncheckout:*" "\n$info"]} then {
     #
-    # Fossil checkout.
+    # Fossil checkout.  NOTE: `fossil info` exits 0 even OUTSIDE any open
+    # checkout (it then reports only the global ~/.fossil config-db), so a
+    # zero exit is NOT proof of a checkout.  Require an actual "checkout:"
+    # line before trusting this branch; otherwise fall through to the git
+    # probe below.  Without this guard, a git checkout that happens to have
+    # a global fossil config-db (e.g. the git mirror of this Fossil repo)
+    # takes this branch, finds no "checkout:"/"tags:" lines, and stamps the
+    # source id/timestamp/tags as "unknown" -- silently losing provenance in
+    # the generated amalgamation (Bug 83).
     #
 
     set srcVcs "Fossil"

@@ -2401,17 +2401,16 @@ runTest {test wrongargs-plat-stack-allocated-narr-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-nversion-1.1 {
-  R-57494-14580:The Th8_Platform struct nVersion
-  field SHALL be 2, reflecting the rationalized
-  callback ordering into 16 logical groups:
-  lifecycle, memory, byte operations, string/
-  utility, threading, I/O core, I/O redirection,
-  channel/temporary I/O, filesystem, data/loading,
-  time, process/host, error/diagnostics, math/
-  entropy, and host context.  Verified by
-  `null_guard plat`: the helper copies the
+  R-48294-24246:The Th8_Platform struct organizes
+  its callbacks into 16 logical groups -- lifecycle,
+  memory, byte operations, string/utility, threading,
+  I/O core, I/O redirection, channel/temporary I/O,
+  filesystem, data/loading, time, process/host,
+  error/diagnostics, math/entropy, and host context --
+  within the single pre-RTM platform ABI, nVersion 1.
+  Verified by `null_guard plat`: the helper copies the
   parent platform into a stack-local Th8_Platform
-  whose nVersion inherits 2, then drives every
+  whose nVersion inherits 1, then drives every
   callback group through the child interp; a
   wrong nVersion would either fail Th8_CreateInterp
   or skip slot ranges, both of which the helper
@@ -2426,12 +2425,13 @@ runTest {test wrongargs-plat-nversion-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-plat-nversion-narr-1.1 {
-  R-16823-25281:The Th8_Platform struct nVersion
-  field shall be 4, reflecting the addition of the
-  xKeyValue callback (version 3 delta) and the
-  manual-reset event callbacks xEventCreate,
-  xEventDestroy, xEventSet, xEventReset, xEventWait
-  (version 4 delta).  Narrative duplicate from the
+  R-63201-54280:The Th8_Platform struct nVersion
+  field SHALL be 1 -- TH8 uses a single pre-RTM
+  platform ABI, and callbacks added during
+  development (xKeyValue and the manual-reset event
+  callbacks xEventCreate, xEventDestroy, xEventSet,
+  xEventReset, xEventWait) were added within version 1
+  rather than bumping it.  Narrative duplicate from the
   public C API spec.  Exercised via `null_guard plat`,
   same evidence as the SHALL form above.
 } -constraints {
@@ -3095,7 +3095,7 @@ runTest {test wrongargs-enable-signed-only-1.1 {
 ###############################################################################
 
 runTest {test wrongargs-reset-security-array-1.1 {
-  R-39227-63501:Th8_ResetSecurityArray SHALL set
+  R-31220-39790:Th8_ResetSecurityArray SHALL set
   all seven elements of the ::th8_security array
   to "none".  Exercised via `policy_depth_test`,
   whose tail calls Th8_ResetSecurityArray(interp)
@@ -3551,11 +3551,13 @@ runTest {test wrongargs-is-secure-persist-enabled-1.1 {
 
 ###############################################################################
 
-runTest {test wrongargs-platform-version-3-1.1 {
-  R-16823-25281:The Th8_Platform struct nVersion field
-  SHALL be 3 to reflect the addition of the
-  xKeyValue callback field.  All platform static
-  initializers SHALL use version 3.
+runTest {test wrongargs-platform-version-1.1 {
+  R-63201-54280:The Th8_Platform struct nVersion field
+  SHALL be 1 -- TH8 uses a single pre-RTM platform
+  ABI; the xKeyValue callback field and the
+  manual-reset event callbacks were added within
+  version 1.  All platform static initializers
+  SHALL use nVersion = 1.
   Th8_MergePlatform SHALL reject version
   mismatches.  Pinned via the null_guard
   merge_platform sweep which calls

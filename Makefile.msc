@@ -513,13 +513,30 @@ RC_FLAGS    = /nologo /I$(S) /I$(B) /Irc
 # Default target.
 # ----------------------------------------------------------------
 
-all: $(STATIC_LIB) $(DYNAMIC_LIB) stubs $(SHELL_BIN) testlib bridge sqlite3-ext audit audit-reqs
+all: $(STATIC_LIB) $(DYNAMIC_LIB) stubs $(SHELL_BIN) root-anchor testlib bridge sqlite3-ext audit audit-reqs
+
+# ----------------------------------------------------------------
+# Build-configuration hermeticity guard (TH8K-029).
+#
+# Refuse to link an incompatible object set: object files left in $(B) by a
+# previous build configuration (e.g. ENABLE_TEST_KEY toggled without `nmake
+# ... clean`), which would produce a mixed library (a stub table out of sync
+# with the core -- the NULL-stub bug).  The compare logic lives in the shared
+# Tcl helper (identical to the POSIX Makefile) so the two guards cannot
+# diverge.  $(CFLAGS) captures the config surface (FEATURE_DEFS folds in every
+# /DTH8_ENABLE_*).  `clean` removes $(B) and the stamp, so the guard only
+# catches an in-place config switch.
+# ----------------------------------------------------------------
+
+check-buildconfig:
+	-if not exist "$(B)" mkdir "$(B)"
+	tclsh tools\check_buildconfig.tcl "$(B)\.buildsig" "$(B)" "$(CFLAGS)"
 
 # ----------------------------------------------------------------
 # Generated version header.
 # ----------------------------------------------------------------
 
-$(VERSIONHDR):
+$(VERSIONHDR): check-buildconfig
 	-if not exist "$(B)" mkdir "$(B)"
 	tclsh tools\mkversion.tcl "$(VERSIONHDR)"
 
@@ -610,11 +627,50 @@ genstubs:
 # GetModuleHandle("th8.dll") to succeed for base-path detection.
 # ----------------------------------------------------------------
 
-shell: $(DYNAMIC_LIB) $(SHELL_BIN)
+shell: $(DYNAMIC_LIB) $(SHELL_BIN) root-anchor
+
+# Bundled DNSSEC root trust anchor, copied next to the shell so the
+# module-adjacent anchor search finds "<dir>\root.key"; the unbound
+# integration signature-verifies root.key.b64sig before use
+# (th8VerifyAnchorSig).  Only when libunbound is compiled in.
+!IF $(ENABLE_UNBOUND)
+root-anchor:
+	copy /Y "tools\data\root.key" "$(B)\" >NUL
+	copy /Y "tools\data\root.key.b64sig" "$(B)\" >NUL
+!ELSE
+root-anchor:
+!ENDIF
 
 $(SHELL_BIN): $(B)\th8sh.obj $(B)\th8_shell.obj $(IMPORT_LIB) $(RC_RES_SHL)
 	$(LD) $(LDFLAGS) /OUT:$@ $(B)\th8sh.obj $(B)\th8_shell.obj \
 	  $(RC_RES_SHL) $(IMPORT_LIB) user32.lib advapi32.lib wintrust.lib crypt32.lib
+
+# ----------------------------------------------------------------
+# TH8K-004 standalone lifecycle-failure harness (Makefile parity).
+#
+# Fails xInitialize / xSetCwd and asserts Th8_Initialize rolls the
+# completed stages back in reverse order (verified via instrumented
+# callback counters, not via a same-process re-init -- see the file
+# header).  Runs each scenario in its own process.
+# ----------------------------------------------------------------
+LIFECYCLE_BIN = $(B)\th8_lifecycle_fail.exe
+
+$(B)\th8_lifecycle_fail.obj: $(S)\test\th8_lifecycle_fail.c $(S)\th8.h \
+	    $(S)\th8_meta_defs.h $(S)\th8_meta_libc.h
+	$(CC) $(CFLAGS_APP) /c /Fo$@ $(S)\test\th8_lifecycle_fail.c
+
+$(LIFECYCLE_BIN): $(B)\th8_lifecycle_fail.obj $(IMPORT_LIB)
+	$(LD) $(LDFLAGS) /OUT:$@ $(B)\th8_lifecycle_fail.obj \
+	  $(IMPORT_LIB) user32.lib advapi32.lib wintrust.lib crypt32.lib
+
+check-lifecycle: $(DYNAMIC_LIB) $(LIFECYCLE_BIN)
+	@echo === TH8K-004 lifecycle-failure harness (process-isolated) ===
+	$(LIFECYCLE_BIN) xinit
+	$(LIFECYCLE_BIN) xsetcwd
+	$(LIFECYCLE_BIN) recover
+	$(LIFECYCLE_BIN) reinit
+	$(LIFECYCLE_BIN) noid
+	@echo check-lifecycle: OK (reverse-order rollback + re-init recovery)
 
 # ----------------------------------------------------------------
 # zlib rules.
@@ -658,7 +714,11 @@ openssl: openssl-win32 openssl-win64
 th8test-only:
 	$(B)\th8sh.exe tests\all.tcl
 
-th8test: fresh th8test-only
+# Serialize via recursive make so a parallel build cannot race `fresh` (a full
+# rebuild) against `th8test-only` (which runs the suite against $(B)).
+th8test:
+	$(MAKE) -f Makefile.msc fresh
+	$(MAKE) -f Makefile.msc th8test-only
 
 tcltest:
 	tclsh tests\all.tcl
@@ -1080,8 +1140,9 @@ $(B)\th8_secure.obj: $(CRYPTOGRAPHY_PLUGIN_DIR)\th8_secure.c $(S)\th8.h \
 	$(CC) $(CFLAGS) /c /Fo$@ $(CRYPTOGRAPHY_PLUGIN_DIR)\th8_secure.c
 
 $(B)\th8_time.obj: $(HARPY_PLUGIN_DIR)\th8_time.c $(S)\th8.h $(S)\th8_int.h \
-	$(S)\th8_meta_defs.h $(S)\th8_meta_libc.h $(S)\th8_meta_msvc.h \
-	$(S)\th8_meta_posix.h $(S)\th8_meta_win32.h $(S)\th8_plat.h $(S)\th8_util.h
+	$(S)\th8_meta_defs.h $(S)\th8_meta_glibc.h $(S)\th8_meta_libc.h \
+	$(S)\th8_meta_msvc.h $(S)\th8_meta_posix.h $(S)\th8_meta_win32.h \
+	$(S)\th8_plat.h $(S)\th8_util.h
 	-if not exist "$(B)" mkdir "$(B)"
 	$(CC) $(CFLAGS) /c /Fo$@ $(HARPY_PLUGIN_DIR)\th8_time.c
 !ENDIF
@@ -1396,6 +1457,31 @@ amalgamation-shell: $(B)\th8_amal.obj $(B)\th8_shell_amal.obj $(MIMALLOC_STATIC_
 amalgamation-test: amalgamation-shell
 	$(B)\th8sh_amal.exe tests\all.tcl
 
+#
+# Bug 82 / Finding 066 regression guard: the crypto-WITHOUT-test-key build.
+# Mirrors the POSIX Makefile `check-amal-notestkey`.
+#
+# Every debug/test recipe passes ENABLE_TEST_KEY=1 (the signed-only tests need
+# a key to sign with), so the OFF arm of every `#if TH8_ENABLE_TEST_KEY` is
+# compiled by NO job in the matrix.  Yet crypto-enabled / test-key-absent is the
+# REAL production configuration -- and the default here (ENABLE_CRYPTOGRAPHY=1,
+# ENABLE_TEST_KEY=0) -- exactly what downstream embeddings ship.  So an
+# unconditional reference to a test-key-only symbol builds cleanly for us and
+# breaks only when the amalgamation is vendored (Bug 82: th8_time.c called the
+# test-key-gated Th8_GetEmbeddedKeyTest unconditionally).  This target
+# regenerates the amalgamation and compiles it with cryptography ON and the test
+# key explicitly OFF, so such a reference fails HERE instead of at the vendor.
+# Compile-only (the break is a translation-unit error, no link/run needed).
+# $(B)\th8_amal.obj lists the `amalgamation` phony as a prerequisite, so this
+# single recursive build also regenerates the amalgamation.  The recursive NMAKE
+# names the macros explicitly so the config holds even if the outer invocation
+# passed ENABLE_TEST_KEY=1.  Not part of the compiler-free `audit`; a
+# CI/pre-release gate alongside amalgamation-test.
+#
+check-amal-notestkey:
+	$(MAKE) /f Makefile.msc ENABLE_CRYPTOGRAPHY=1 ENABLE_TEST_KEY=0 $(B)\th8_amal.obj
+	@echo check-amal-notestkey: PASS -- crypto/no-test-key amalgamation built
+
 # ----------------------------------------------------------------
 # Clean.
 # ----------------------------------------------------------------
@@ -1434,7 +1520,7 @@ check-crt:
 # Mirrors the POSIX `audit` target.
 # ----------------------------------------------------------------
 
-audit: check-deps check-headers check-amal check-mcdc-doc check-cmdindex
+audit: check-deps check-headers check-amal check-stubguards check-mcdc-doc check-cmdindex
 	tclsh tools\audit_patterns.tcl source
 	tclsh tools\audit_patterns.tcl crt-objects $(B)
 
@@ -1468,6 +1554,15 @@ check-headers:
 #
 check-amal:
 	tclsh tools\check_amal.tcl
+
+#
+# Stub-table feature-guard audit (tools/check_stubguards.tcl).  Fails if a
+# TH8_API function declared under a feature #if in th8.h is missing from the
+# mkstubs.tcl guardMap (which would make the reduced-feature stub table
+# reference an undefined symbol).  Mirrors the POSIX Makefile check-stubguards.
+#
+check-stubguards:
+	tclsh tools\check_stubguards.tcl
 
 #
 # MC/DC waiver-register audit (tools/mkmcdcwaiverdoc.tcl --check).  Requires

@@ -415,7 +415,7 @@ runTest {test coverage8-10.1 {
 ###############################################################################
 
 runTest {test coverage8-10.2 {
-  R-57714-59415: clock ntp default server returns integer
+  R-03205-14299: clock ntp default server returns integer
 } -constraints {
   clock_ntp clock_ntp_network
 } -body {

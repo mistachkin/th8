@@ -64,6 +64,13 @@
  *	(and thus the test-library dump command) always resolves; it
  *	simply reports that a debug build is required.
  *
+ * Why / How:
+ *	The real dump only exists in a TH8_MEM_DEBUG build, but the
+ *	internal-stubs table is fixed at link time and must resolve the
+ *	symbol in every build.  This stub keeps the ABI stable by
+ *	ignoring its path arguments and failing with a clear message
+ *	instead of being absent.
+ *
  * Results:
  *	TH8_ERROR, with an explanatory interpreter result.
  *
@@ -95,6 +102,12 @@ th8MemTrackDump(Th8_Interp *interp, const char *zPath, size_t nPath)
  *	"ensure the tracker holds nothing", which is trivially true here).
  *	The symbol exists unconditionally so the internal-stubs table
  *	(and thus the test-library reset command) always resolves.
+ *
+ * Why / How:
+ *	Like the dump stub, this keeps the internal-stubs ABI stable in a
+ *	non-debug build.  Because there is no tracker state to release, a
+ *	reset trivially succeeds and reports zero blocks cleared, so
+ *	callers can invoke it unconditionally regardless of build type.
  *
  * Results:
  *	TH8_OK; interpreter result set to "0" (blocks cleared).
@@ -299,6 +312,14 @@ th8MemTraceHash(void *const *aFrames, int nFrames)
  *	fail).  Runs BEFORE the table lock is taken, so any lazy first-call
  *	unwind setup happens outside the lock.
  *
+ * Why / How:
+ *	Prefers the platform's xStackBackTrace callback (which skips the
+ *	innermost tracker frames) so dumps begin at the allocation
+ *	funnel.  If that callback is absent or returns nothing, it
+ *	degrades to the single immediate caller via
+ *	__builtin_return_address on GCC/Clang -- capture must never fail
+ *	(R5/R6), only produce fewer frames.
+ *
  * Results:
  *	Number of frames captured (0 if none available).
  *
@@ -389,6 +410,12 @@ th8MemRawAlloc(size_t nByte)
  *	process-global platform's xFree callback (see th8MemRawAlloc for
  *	why the tracker never uses the per-interp platform or Th8_Free).
  *
+ * Why / How:
+ *	Mirrors th8MemRawAlloc so bookkeeping is freed through the same
+ *	stable process-global allocator it was allocated from.  A NULL
+ *	pointer, or a missing xFree callback (only before
+ *	Th8_Initialize), is treated as a no-op so callers need not guard.
+ *
  * Results:
  *	None.
  *
@@ -420,6 +447,12 @@ th8MemRawFree(void *p)
  *	n is zero or the callback is unavailable (only possible before
  *	Th8_Initialize, where the tracker does not run).
  *
+ * Why / How:
+ *	Routes byte copies through the same stable process-global
+ *	platform the tracker uses for everything else, avoiding a direct
+ *	libc/per-interp dependency.  The zero-length / no-callback short
+ *	circuit keeps it safe to call before Th8_Initialize.
+ *
  * Results:
  *	None.
  *
@@ -446,6 +479,12 @@ th8MemCopy(void *dst, const void *src, size_t n)
  *	Zero n bytes of a tracker structure via the stable process-global
  *	platform's xMemset (see th8MemCopy).  A no-op if n is zero or the
  *	callback is unavailable.
+ *
+ * Why / How:
+ *	Same stable-platform rationale as th8MemCopy: newly allocated
+ *	tracker structures are cleared via the platform xMemset rather
+ *	than a direct memset, with a zero-length / no-callback short
+ *	circuit for safety before Th8_Initialize.
  *
  * Results:
  *	None.
@@ -475,6 +514,13 @@ th8MemZero(void *dst, size_t n)
  *	callback is unavailable it reports "equal" for a zero-length
  *	compare and "not equal" otherwise -- a safe default that only
  *	applies before Th8_Initialize, where the tracker does not run.
+ *
+ * Why / How:
+ *	Used to compare interned stack frames when deduplicating traces.
+ *	Routes through the stable process-global xMemcmp for the same
+ *	reason as th8MemCopy; if the callback is unavailable it reports
+ *	equality only for a zero-length compare, a conservative default
+ *	that never runs once the tracker is active.
  *
  * Results:
  *	<0, 0, or >0 like memcmp.
@@ -506,6 +552,24 @@ th8MemCmp(const void *a, const void *b, size_t n)
  *	known.  Must be called with the table lock held.  On allocation
  *	failure returns NULL (the caller still records the block,
  *	traceless).
+ *
+ * Why / How:
+ *	Many live blocks share the same allocation call site, so storing
+ *	each stack once and referencing it by pointer keeps the tracker's
+ *	footprint bounded (R9).  The frame array is hashed, the matching
+ *	bucket is scanned for an identical stack (same hash, frame count,
+ *	and bytes), and a hit is reused; a miss allocates a new trace via
+ *	th8MemRawAlloc, assigns it the next stable id, copies the frames,
+ *	and links it at the bucket head.
+ *
+ * Results:
+ *	Pointer to the interned th8MemTrace for this stack, or NULL if
+ *	the frame-array size computation overflows or the allocation
+ *	fails.
+ *
+ * Side effects:
+ *	May allocate a new trace node from the process-global platform,
+ *	link it into g_aTrace, and advance g_nNextTraceId.
  *
  *----------------------------------------------------------------------
  */
@@ -556,6 +620,20 @@ th8MemInternTrace(void *const *aFrames, int nFrames)
  *	Returns non-zero if a node was removed.  Interned traces are NOT
  *	freed (they are shared and cheap to retain for the process life).
  *
+ * Why / How:
+ *	Walks the address-bucket chain for pAddr; on a match it splices
+ *	the node out, subtracts its recorded size from g_nLiveBytes
+ *	(clamped at zero) and decrements g_nLiveBlocks, then frees the
+ *	node via th8MemRawFree.  The shared interned trace is left in
+ *	place because it may still describe other live blocks.
+ *
+ * Results:
+ *	1 if a node for pAddr was found and removed; 0 otherwise.
+ *
+ * Side effects:
+ *	Unlinks and frees the address node; decrements the live byte and
+ *	block totals.  Must be called with the global mutex held.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -595,6 +673,24 @@ th8MemUnlink(void *pAddr)
  *	captured stack.  Called from th8MallocCommon after a successful
  *	xMalloc.  No-op if pAddr is NULL or if already inside a tracker
  *	hook on this thread.
+ *
+ * Why / How:
+ *	The thread-local g_inHook guard prevents re-entry when the
+ *	tracker's own bookkeeping allocations run.  The stack is captured
+ *	BEFORE taking the lock (leaf-lock discipline, R4); then a node is
+ *	allocated, filled in with the address, size, and interned trace,
+ *	and pushed onto its address bucket under the global mutex while
+ *	the live totals are advanced.  The per-allocation interp is
+ *	intentionally ignored -- the tracker runs entirely through the
+ *	stable process-global platform.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Allocates and links an address node; increments g_nLiveBytes and
+ *	g_nLiveBlocks; may intern a new trace.  Briefly holds the global
+ *	mutex.  No-op on NULL pAddr or re-entry.
  *
  *----------------------------------------------------------------------
  */
@@ -648,6 +744,21 @@ th8MemTrackAlloc(Th8_Interp *interp, void *pAddr, size_t nByte)
  *	in-place case (pOld == pNew) correctly by unlinking then
  *	re-inserting.
  *
+ * Why / How:
+ *	Structurally identical to th8MemTrackAlloc (same g_inHook guard,
+ *	capture-before-lock discipline, and process-global platform use),
+ *	but first unlinks the old address record under the lock so an
+ *	in-place realloc does not leave a stale or duplicate node.  The
+ *	new block is then recorded with the realloc site's own stack.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Removes the old address node (if any) and links a new one;
+ *	adjusts g_nLiveBytes / g_nLiveBlocks; may intern a new trace.
+ *	Briefly holds the global mutex.  No-op on NULL pNew or re-entry.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -696,6 +807,21 @@ th8MemTrackRealloc(Th8_Interp *interp, void *pOld, void *pNew, size_t nByte)
  *	before the underlying xFree.  Freeing an untracked address
  *	(e.g. one allocated via a direct xMalloc that bypassed the
  *	funnel) is a silent no-op -- never an error.
+ *
+ * Why / How:
+ *	Raises the g_inHook re-entry guard, takes the global mutex, and
+ *	delegates to th8MemUnlink, which removes the node (if tracked)
+ *	and adjusts the live totals.  An untracked address simply finds
+ *	no node, so freeing blocks that bypassed the tracked funnel is
+ *	harmless.  The per-allocation interp is ignored, as elsewhere.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Removes the address node for pAddr (if any) and decrements the
+ *	live totals.  Briefly holds the global mutex.  No-op on NULL
+ *	pAddr or re-entry.
  *
  *----------------------------------------------------------------------
  */
@@ -906,6 +1032,20 @@ th8MemChanPuts(
  *	raw PC.  On Windows the raw PC is written (dbghelp symbolization
  *	is deferred -- see the note in th8MemTrackDump).
  *
+ * Why / How:
+ *	Formats one line into a fixed 256-byte buffer via th8Snprintf.
+ *	On POSIX/macOS dladdr maps the PC to "symbol+offset (module)";
+ *	if the lookup fails (static function or no symbol) it falls back
+ *	to the raw PC with "<unknown>".  On Windows it always writes the
+ *	raw hex PC.  The formatted line is written only when it fit the
+ *	buffer, so a truncated frame is dropped rather than mangled.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Writes up to one line to the open channel via th8MemChanWrite.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -977,6 +1117,16 @@ th8MemWriteFrame(
  *	reports its own authoritative live totals; the test library's
  *	logical-list-vs-side-table comparison provides the near-term
  *	cross-check (design section 3.4).
+ *
+ * Why / How:
+ *	Groups live blocks by their interned trace so each unique call
+ *	site is reported once with aggregate counts rather than one line
+ *	per allocation.  The two robustness choices above -- probing for
+ *	an existing file before create, and snapshotting the live set
+ *	under the lock but writing the file with the lock released --
+ *	avoid clobbering test output and a self-deadlock through the
+ *	channel write path, respectively.  Symbolization is delegated to
+ *	th8MemWriteFrame per frame.
  *
  * Results:
  *	TH8_OK on success (interpreter result = live block count);

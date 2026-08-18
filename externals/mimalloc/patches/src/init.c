@@ -749,21 +749,32 @@ void _mi_thread_done(mi_theap_t* _theap_main)
   // note: we store the tld as we should avoid reading `thread_tld` at this point (to avoid reinitializing the thread local storage)
   mi_tld_t* const tld = _theap_main->tld;
 
-  // adjust stats
-  // TH8 patch: guard against a NULL subproc->heap_main during thread
-  //            teardown.  The upstream call
-  //            mi_heap_stat_decrease(_mi_subproc_heap_main(tld->subproc), ...)
-  //            aborts under MI_DEBUG (mi_assert_internal in
-  //            _mi_subproc_heap_main) -- and, in a release build, writes
-  //            through a NULL heap (&NULL->stats.threads -> SIGSEGV) --
-  //            when heap_main is observed NULL on a worker thread's
-  //            pthread-TSD cleanup under load.  Read heap_main directly
-  //            (do NOT re-initialize the main heap while tearing a thread
-  //            down) and skip the non-critical thread-count statistic
-  //            when it is absent.  Report upstream (mimalloc v3.3.2).
+  // TH8 patch (TH8K-027): a POSIX pthread-key destructor can run MORE THAN
+  //            ONCE for the same thread -- teardown re-associates the key with
+  //            the empty theap (mi_thread_theaps_done ->
+  //            _mi_theap_default_set), so the runtime re-invokes mi_pthread_done
+  //            with a theap whose `tld` has already been freed/cleared.  On that
+  //            second pass `_theap_main->tld` is NULL, and EVERY statement below
+  //            dereferences `tld` (the stat read of tld->subproc->heap_main, the
+  //            tld->thread_id guard, mi_thread_theaps_done(tld), mi_tld_free(tld)).
+  //            This reproduced as a NULL deref (address 0x18 == &NULL->subproc)
+  //            in worker-thread teardown under the cancel-stress load, even after
+  //            TH8 stopped calling mi_thread_done() explicitly.  There is nothing
+  //            left to tear down once the tld is gone, so return.  This subsumes
+  //            the earlier NULL-heap_main guard.  Report upstream (mimalloc v3.3.2).
+  if (tld == NULL) {
+    return;
+  }
+
+  // adjust stats.  Read heap_main directly and guard it too (do NOT
+  // re-initialize the main heap while tearing a thread down); skip the
+  // non-critical thread-count statistic when subproc/heap_main is absent.
   {
+    mi_subproc_t* const th8_subproc = tld->subproc;
     mi_heap_t* const th8_mheap =
-      mi_atomic_load_ptr_relaxed(mi_heap_t, &tld->subproc->heap_main);
+      (th8_subproc == NULL) ? NULL
+                            : mi_atomic_load_ptr_relaxed(
+                                  mi_heap_t, &th8_subproc->heap_main);
     if (th8_mheap != NULL) {
       mi_heap_stat_decrease(th8_mheap, threads, 1);
     }

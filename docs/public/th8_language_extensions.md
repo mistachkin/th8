@@ -194,14 +194,33 @@ The following time-and-system commands are TH8-specific.
 
 #### 25.5  clock ntp
 
-**Synopsis:** `clock ntp` ?`-server` *host*? ?`-timeout` *ms*? ?`-attempts` *n*?
+**Synopsis:** `clock ntp` ?`-server` *host*? ?`-timeout` *ms*? ?`-attempts` *n*? ?`-insecure`?
 
 The `clock ntp` subcommand queries NTP v4 servers for authenticated
 wall-clock time.  Multiple `-server` options may be specified for
 multi-server consensus.  Because NTP runs over UDP, each server is
 queried with a small number of retry attempts (`-attempts`, default 3;
 1 disables retries) so that a single lost packet does not fail the
-query.
+query.  The built-in default server is a DNSSEC-signed name, so the
+default query succeeds securely on a validating build; `-insecure` (see
+below) is only needed to reach a server in an unsigned DNS zone.
+
+> **Security (implementation note).** In builds with libunbound, `clock ntp`
+> resolves the server name through a **DNSSEC-validating** resolver: it looks
+> up the A and AAAA records, requires a cryptographically *secure* answer, and
+> connects only to validated addresses — a spoofed or unsigned DNS response
+> makes the query fail closed rather than contact an attacker-chosen host. This
+> secure-by-default check applies to every server, **including one named
+> explicitly with `-server`**. The `-insecure` option opts a single invocation
+> out of the check, resolving the name with plain (unvalidated) `getaddrinfo`
+> so that a server in an unsigned zone (most public NTP hosts, e.g.
+> `pool.ntp.org`) can be reached; the NTP origin-timestamp anti-spoof remains
+> the response-integrity defense in that case. The root trust anchor is bundled
+> and signature-verified, and can be overridden with the `TH8_DNS_ROOT_KEY`
+> environment variable (which must itself be TH8-signed). See
+> `environment_variables.md`. This is a transport-security property of a
+> particular build, not a portable language requirement, so it is not stated as
+> a normative `SHALL`.
 
 R-14640-47759
 :   The `clock ntp` command SHALL query one or more NTP v4 servers and return the consensus wall-clock time as Unix epoch seconds.
@@ -209,10 +228,12 @@ R-32287-57587
 :   When multiple NTP servers are queried, the `clock ntp` command SHALL reject responses that disagree by more than the configured threshold.
 R-54400-11734
 :   The `clock ntp` command SHALL detect if the local clock has moved backward since the last successful NTP query and return an error.
-R-57714-59415
-:   The default NTP server SHALL be `urn.to`.
+R-03205-14299
+:   The default NTP server SHALL be a DNSSEC-signed name (`time.w.sb`) so that, on a build that validates DNS resolution, the default `clock ntp` query resolves to a cryptographically secure answer end-to-end without requiring the `-insecure` option.
 R-39982-49558
 :   The `clock ntp` subcommand SHALL retry a transient per-server failure -- a send error, a receive timeout, or a short response, all expected because NTP runs over UDP -- up to a bounded number of attempts before treating that server as unresponsive.  A response that arrives but fails validation SHALL NOT be retried.  The attempt count SHALL default to a fixed value and be configurable via the `-attempts` option, where 1 disables retries.
+R-12190-36531
+:   The `clock ntp` subcommand SHALL accept an `-insecure` option.  On a build that validates DNS resolution, `-insecure` SHALL disable, for that invocation only, the requirement that the server name resolve to a cryptographically secure (DNSSEC-validated) answer, so that a server in an unsigned DNS zone can be contacted.  On a build that does not validate DNS resolution, `-insecure` SHALL be accepted and impose no additional restriction.
 
 #### 25.6  clock https
 
@@ -252,6 +273,19 @@ R-28435-22737
 R-41140-31025
 :   The wildcard characters `*`, `#`, `!`, `$`, and `@` SHALL expand to all alphanumeric, all digits, all letters, uppercase letters, and lowercase letters respectively.
 
+### 5  String Extensions
+
+#### 15.6a  `string repeat` output limit
+
+TH8 hardens the core `string repeat` command (§15.6) with a dedicated,
+fixed output ceiling so a single command cannot fill a very large
+buffer in one uninterruptible pass and make the interpreter
+unresponsive.  This ceiling is TH8-specific and tighter than the
+general per-interpreter result-size limit.
+
+R-47403-50623
+:   `string repeat` SHALL reject any invocation whose output size (the byte length of the repeated string multiplied by the repeat count) would exceed a fixed hard limit of 1 MiB (1048576 bytes), which is applied in addition to and independently of the per-interpreter result-size limit, failing with the error "string too long" and producing no result.
+
 ---
 
 ## Part II --- Security and Cryptography
@@ -269,8 +303,8 @@ R-04287-59267
 :   The `::th8_security` array SHALL be declared as a system variable (read-only from scripts).
 R-50169-65270
 :   Scripts SHALL NOT be able to modify `::th8_security` via `set`, `unset`, `append`, `incr`, `lappend`, or `array set`.
-R-39227-63501
-:   `Th8_ResetSecurityArray` SHALL set all seven elements of the `::th8_security` array to `"none"`.
+R-31220-39790
+:   `Th8_ResetSecurityArray` SHALL set all seven elements of the `::th8_security` array to `"none"` and return `TH8_OK`; on the first allocation failure it SHALL stop and return `TH8_ERROR`, in which case the array MAY be left partially reset.  A caller that receives `TH8_ERROR` SHALL treat the security state as indeterminate and abort the current evaluation (discarding the interpreter or rejecting the eval) rather than exposing the partial array to a script, so a partial array is never observable by running script code.
 
 #### 29.2  Signed-Only Mode
 
@@ -348,8 +382,8 @@ R-34935-39021
 :   The [info nameofexecutable] command in a sandbox SHALL return a base-relative path, not an absolute path.
 R-55895-04504
 :   The [pwd] command in a sandbox SHALL return "." (the base directory).
-R-47394-37015
-:   Resource exhaustion attacks (regexp bombs, string amplification, list bombs, format abuse) SHALL be bounded by the sandbox step limit and memory allocation limit.
+R-24231-13066
+:   Resource exhaustion attacks (regexp bombs, string amplification, list bombs, format abuse) SHALL be bounded by the sandbox step limit, memory allocation limit, and -- for pathological regular expressions -- the regex complexity limit.
 R-27789-36268
 :   Integer overflow in sandbox [expr] operations SHALL produce an error when overflow checking is enabled.
 R-26649-55462
@@ -701,8 +735,8 @@ R-55340-20582
 
 #### 32.7  Platform Struct Versioning
 
-R-57494-14580
-:   The Th8_Platform struct nVersion field SHALL be 2, reflecting the rationalized callback ordering into 16 logical groups: lifecycle, memory, byte operations, string/utility, threading, I/O core, I/O redirection, channel/temporary I/O, filesystem, data/loading, time, process/host, error/diagnostics, math/entropy, and host context.
+R-48294-24246
+:   The Th8_Platform struct organizes its callbacks into 16 logical groups -- lifecycle, memory, byte operations, string/utility, threading, I/O core, I/O redirection, channel/temporary I/O, filesystem, data/loading, time, process/host, error/diagnostics, math/entropy, and host context -- within the single pre-RTM platform ABI, nVersion 1.
 
 #### 32.8  Public API Wrappers
 
@@ -750,6 +784,9 @@ R-24372-60291
 :   [file under name1 name2] SHALL return non-zero if name1 resides within the directory hierarchy of name2.
 R-53536-14671
 :   [file validname path ?pathType?] SHALL return non-zero only if the path is syntactically valid for the operating system. This command SHALL be exempt from base-path relative path restrictions. The only supported pathType value is "None" (case-insensitive).
+
+R-60472-12984
+:   [file tempname size] SHALL create a pre-allocated in-memory temporary channel of the given size in bytes and return its abstract channel name; size SHALL be a positive integer expression, and the resulting channel SHALL be registered in the channel table so that it appears in [file channels] and is closed by the temporary-channel close forms.
 
 #### 32.12  Hash Command
 
@@ -896,8 +933,8 @@ R-00313-45995
 
 #### 33.9  Platform Version
 
-R-16823-25281
-:   The `Th8_Platform` struct `nVersion` field SHALL be 4 to reflect the addition of the `xKeyValue` callback field (version 3 delta) and the manual-reset event callbacks `xEventCreate`, `xEventDestroy`, `xEventSet`, `xEventReset`, `xEventWait` (version 4 delta).  All platform static initializers under `Th8_GetPosixPlatform`, `Th8_GetWin32Platform`, `Th8_GetMacOSPlatform`, `Th8_GetIosPlatform`, `Th8_GetAndroidPlatform`, `Th8_GetCosmopolitanPlatform`, `Th8_GetLibcPlatform`, `Th8_GetNullIoPlatform`, `Th8_GetCurlPlatform`, `Th8_GetEnvPlatform`, `Th8_GetMemPlatform`, and `Th8_GetMimallocPlatform` SHALL use `nVersion = 4`.  `Th8_MergePlatform` SHALL reject version mismatches between source and destination platforms.
+R-63201-54280
+:   The `Th8_Platform` struct `nVersion` field SHALL be 1 (the value of `TH8_PLATFORM_VERSION`).  TH8 uses a single platform ABI version prior to RTM: callbacks added during development -- including `xKeyValue` and the manual-reset event callbacks `xEventCreate`, `xEventDestroy`, `xEventSet`, `xEventReset`, `xEventWait` -- were added within version 1 rather than bumping it.  All platform static initializers under `Th8_GetPosixPlatform`, `Th8_GetWin32Platform`, `Th8_GetMacOSPlatform`, `Th8_GetIosPlatform`, `Th8_GetAndroidPlatform`, `Th8_GetCosmopolitanPlatform`, `Th8_GetLibcPlatform`, `Th8_GetNullIoPlatform`, `Th8_GetCurlPlatform`, `Th8_GetEnvPlatform`, `Th8_GetMemPlatform`, and `Th8_GetMimallocPlatform` SHALL use `nVersion = 1`.  `Th8_MergePlatform` SHALL reject version mismatches between source and destination platforms.
 
 #### 33.10  EXISTS2 Operation
 

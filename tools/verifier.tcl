@@ -299,7 +299,11 @@ foreach f $allFiles {
         puts "FAIL      $rel  ($detail)"
       }
 
-      if {![string match tampered_* [file tail $rel]]} then {
+      set tail [file tail $rel]
+
+      if {![string match tampered_* $tail] && \
+          ![string match badtoken.tcl $tail] && \
+          ![string match notoken.tcl $tail]} then {
         if {$tcl_platform(platform) eq "windows"} then {
           if {$fix && ($force || $detail eq "no matching key")} then {
             exec -- $signTool [file nativename [file join $projectDir $rel]]

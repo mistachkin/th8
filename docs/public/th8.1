@@ -143,13 +143,14 @@ it is brace-quoted to prevent comment interpretation.
 .SH "BUILT-IN COMMANDS"
 .SS "CONTROL FLOW"
 .TP
-\fBbreak\fR
+\fBbreak\fR ?\fIstring\fR?
 Terminates the innermost enclosing
 .BR for ,
 .BR foreach ,
 or
 .B while
 loop.
+If \fIstring\fR is given it becomes the interpreter result.
 Returns TH8_BREAK.
 .TP
 \fBcatch\fR \fIscript\fR ?\fIvarname\fR?
@@ -159,8 +160,9 @@ error or success) is stored in the named variable.
 Returns the return code of \fIscript\fR as an integer string.
 Always returns TH8_OK itself.
 .TP
-\fBcontinue\fR
+\fBcontinue\fR ?\fIstring\fR?
 Skips to the next iteration of the innermost enclosing loop.
+If \fIstring\fR is given it becomes the interpreter result.
 Returns TH8_CONTINUE.
 .TP
 \fBconcat\fR ?\fIarg ...\fR?
@@ -201,11 +203,13 @@ in \fIbody\fR terminates the loop.
 .B continue
 in \fIbody\fR skips to \fInext\fR.
 .TP
-\fBforeach\fR \fIvarlist\fR \fIlist\fR \fIbody\fR
+\fBforeach\fR \fIvarlist\fR \fIlist\fR ?\fIvarlist\fR \fIlist\fR ...? \fIbody\fR
 \fIvarlist\fR is a list of variable names.
 For each group of \fIn\fR values from \fIlist\fR (where \fIn\fR
 is the length of \fIvarlist\fR), assigns each value to the
 corresponding variable and evaluates \fIbody\fR.
+Multiple \fIvarlist\fR/\fIlist\fR pairs iterate in lock-step
+across all lists; shorter lists are padded with empty values.
 Supports \fBbreak\fR and \fBcontinue\fR.
 .TP
 \fBif\fR \fIexpr\fR ?\fBthen\fR? \fIbody\fR ?\fBelseif\fR \fIexpr\fR ?\fBthen\fR? \fIbody\fR? ... ?\fBelse\fR \fIbody\fR?
@@ -229,14 +233,20 @@ stack trace.
 .BR \-errorcode " \fIcode\fR \(em"
 set
 .BR ::errorCode .
+.BR \-level " \fIlevel\fR \(em"
+number of stack levels the return code propagates (default 1).
 If \fIvalue\fR is given, it becomes the interpreter result;
 otherwise the result is the empty string.
 .TP
 \fBswitch\fR ?\fIoptions\fR? \fIstring\fR \fIpattern\fR \fIbody\fR ?\fIpattern\fR \fIbody\fR ...?
-Compares \fIstring\fR against each \fIpattern\fR in order.
+.TQ
+\fBswitch\fR ?\fIoptions\fR? \fIstring\fR \fB{\fR\fIpattern body\fR ?\fIpattern body\fR ...?\fB}\fR
+Compares \fIstring\fR against each \fIpattern\fR in order.  The
+\fIpattern\fR/\fIbody\fR arguments may be given individually or
+collected into a single braced list argument.
 Options:
 .BR \-exact " (default),"
-.BR \-glob ", " \-regexp ", " \-\- .
+.BR \-glob ", " \-regexp ", " \-nocase ", " \-\- .
 With
 .BR \-regexp ,
 patterns are treated as regular expressions (requires the
@@ -304,6 +314,16 @@ Appends each \fIvalue\fR to the variable \fIvarname\fR.
 Creates the variable if it does not exist.
 Returns the new value.
 .TP
+\fBarray anymore\fR \fIvarname\fR \fIsearchId\fR
+Returns
+.B 1
+if more elements remain in the search \fIsearchId\fR,
+.B 0
+otherwise.
+.TP
+\fBarray donesearch\fR \fIvarname\fR \fIsearchId\fR
+Ends the search \fIsearchId\fR, releasing its state.
+.TP
 \fBarray exists\fR \fIvarname\fR
 Returns
 .B 1
@@ -322,6 +342,10 @@ Returns a list of all element names in the array \fIvarname\fR.
 Returns an empty list if the variable does not exist or is not
 an array.
 .TP
+\fBarray nextelement\fR \fIvarname\fR \fIsearchId\fR
+Returns the name of the next element in the search \fIsearchId\fR,
+or the empty string when the search is exhausted.
+.TP
 \fBarray set\fR \fIvarname\fR \fIlist\fR
 Sets array elements from a name-value pair \fIlist\fR.  It is
 an error if \fIlist\fR has an odd number of elements.  An empty
@@ -330,6 +354,20 @@ list creates an empty array variable if it does not already exist.
 \fBarray size\fR \fIvarname\fR
 Returns the number of elements in the array.  Returns 0 if
 the variable does not exist or is not an array.
+.TP
+\fBarray startsearch\fR \fIvarname\fR
+Starts a search over the elements of the array \fIvarname\fR and
+returns a search identifier for use with
+.BR "array nextelement" ", " "array anymore" ", and " "array donesearch" .
+.TP
+\fBarray statistics\fR \fIvarname\fR
+Returns a multi-line summary of the array's internal state,
+including the element count and byte usage.
+.TP
+\fBarray unset\fR \fIvarname\fR ?\fIpattern\fR?
+Removes the array elements whose names match the glob
+\fIpattern\fR.  If \fIpattern\fR is omitted, all elements are
+removed.
 .TP
 \fBglobal\fR \fIvarname\fR ?\fIvarname ...\fR?
 Within a procedure, creates local variables linked to the
@@ -395,8 +433,9 @@ Creates local variables (\fImyvar\fR) linked to variables
 (default 1).
 .SS "EXPRESSIONS"
 .TP
-\fBexpr\fR \fIexpression\fR
-Evaluates \fIexpression\fR and returns the result.
+\fBexpr\fR \fIarg\fR ?\fIarg ...\fR?
+Concatenates all \fIarg\fRs with single spaces, then evaluates
+the result as an expression and returns its value.
 Operators (highest precedence first):
 .PP
 .RS
@@ -527,7 +566,13 @@ Options:
 .BR \-all " (return all matching indices),"
 .BR \-inline " (return values instead of indices),"
 .BR \-not " (negate the match),"
-.BR \-start " \fIn\fR (begin at index \fIn\fR)."
+.BR \-start " \fIn\fR (begin at index \fIn\fR),"
+.BR \-sorted " (binary search of a pre-sorted list),"
+.BR \-ascii " (string comparison, default, used with " \-sorted ),
+.BR \-integer " (integer comparison),"
+.BR \-dictionary " (dictionary comparison),"
+.BR \-increasing " (ascending order, default, used with " \-sorted ),
+.BR \-decreasing " (descending order, used with " \-sorted ).
 .TP
 \fBlsort\fR ?\fIoptions\fR? \fIlist\fR
 Returns a sorted copy of \fIlist\fR.
@@ -539,7 +584,19 @@ an integer.  The
 option sorts by the Nth sub-element of each list element.  The
 .B \-dictionary
 option uses case-insensitive comparison with embedded integers compared
-numerically.
+numerically.  The
+.B \-ascii
+option (default) sorts lexicographically in Unicode code point order; the
+.B \-integer
+and
+.B \-real
+options sort numerically.  The
+.B \-increasing
+option (default) sorts in ascending order and
+.B \-decreasing
+in descending order.  The
+.B \-unique
+option removes duplicate elements after sorting.
 .TP
 \fBsplit\fR \fIstring\fR ?\fIsplitchars\fR?
 Returns a list formed by splitting \fIstring\fR at each
@@ -683,7 +740,7 @@ and
 indices.
 Returns the empty string if out of range.
 .TP
-\fBstring is\fR \fIclass\fR \fIstring\fR
+\fBstring is\fR \fIclass\fR ?\fB\-strict\fR? \fIstring\fR
 Returns
 .B 1
 if every character in \fIstring\fR belongs to \fIclass\fR,
@@ -695,7 +752,7 @@ Supports \fB\-strict\fR flag.
 Classes:
 .BR alnum ", " alpha ", " ascii ", " boolean ", "
 .BR digit ", " double ", " false ", " integer ", "
-.BR list ", " space ", " tainted ", " true ", " xdigit .
+.BR list ", " space ", " tainted ", " true ", " wideinteger ", " xdigit .
 .TP
 \fBstring last\fR \fIneedle\fR \fIhaystack\fR ?\fIstartIndex\fR?
 Returns the character index of the last occurrence of
@@ -705,6 +762,10 @@ Returns the character index of the last occurrence of
 \fBstring length\fR \fIstring\fR
 Returns the number of characters (Unicode code points) in
 \fIstring\fR.
+.TP
+\fBstring bytelength\fR \fIstring\fR
+Returns the number of bytes used to represent \fIstring\fR in
+its UTF-8 encoding.
 .TP
 \fBstring map\fR ?\fB\-nocase\fR? \fImapping\fR \fIstring\fR
 \fImapping\fR is a list of key-value pairs.
@@ -745,7 +806,13 @@ the characters in the range are deleted.
 .TP
 \fBstring repeat\fR \fIstring\fR \fIcount\fR
 Returns \fIstring\fR concatenated \fIcount\fR times.
-Subject to the result size limit.
+The output is capped at a hard limit of 1 MiB (1048576 bytes),
+independent of and tighter than the result size limit; a larger
+result fails with "string too long".
+.TP
+\fBstring reverse\fR \fIstring\fR
+Returns a copy of \fIstring\fR with its characters in reverse
+order.
 .TP
 \fBstring trim\fR \fIstring\fR ?\fIchars\fR?
 Returns \fIstring\fR with leading and trailing characters in
@@ -760,10 +827,28 @@ removed.
 Returns \fIstring\fR with trailing characters in \fIchars\fR
 removed.
 .TP
+\fBstring tolower\fR \fIstring\fR ?\fIfirst\fR? ?\fIlast\fR?
+Returns a copy of \fIstring\fR with its characters converted to
+lowercase.  If \fIfirst\fR and \fIlast\fR are given, only the
+characters in that range are affected.
+.TP
 \fBstring totitle\fR \fIstring\fR ?\fIfirst\fR? ?\fIlast\fR?
 Returns a copy of \fIstring\fR with the first character converted to
 uppercase and the remaining characters to lowercase.  If \fIfirst\fR and
 \fIlast\fR are given, only the characters in that range are affected.
+.TP
+\fBstring toupper\fR \fIstring\fR ?\fIfirst\fR? ?\fIlast\fR?
+Returns a copy of \fIstring\fR with its characters converted to
+uppercase.  If \fIfirst\fR and \fIlast\fR are given, only the
+characters in that range are affected.
+.TP
+\fBstring wordend\fR \fIstring\fR \fIindex\fR
+Returns the index of the character just after the last character
+of the word containing the character at \fIindex\fR.
+.TP
+\fBstring wordstart\fR \fIstring\fR \fIindex\fR
+Returns the index of the first character of the word containing
+the character at \fIindex\fR.
 .TP
 \fBsubst\fR ?\fB\-nobackslashes\fR? ?\fB\-nocommands\fR? ?\fB\-novariables\fR? \fIstring\fR
 Performs variable, command, and backslash substitution on
@@ -821,27 +906,78 @@ Parse
 .I string
 according to
 .IR formatString ,
-which uses
-.BR % \-conversion
-specifiers analogous to
-.BR format .
-Supports
-.BR %d ", " %i ", " %u ", " %o ", " %x ", " %X ", "
-.BR %c ", " %s ", " %f ", " %n ", and "
-.BR %% .
-When variable names are given, assigns each conversion in
-order and returns the number of successful conversions.
-With no variable names, returns the conversions as a list.
-The
-.B %f
-scanner accepts an optional
-.RB ( + / \- )
-sign after the
-.B e
+extracting values (the inverse of
+.BR format ).
+Each conversion specifier has the form
+\fB%\fR[\fB*\fR][\fIwidth\fR][\fIsize\fR]\fIconv\fR, where
+\fIconv\fR is one of:
+.RS
+.TP
+.BR %d ", " %u ", " %i ", " %o ", " %x ", " %X ", " %b
+Integer conversions: signed decimal, unsigned decimal,
+base-detected (\fB0x\fR hex / \fB0\fR octal / decimal), octal,
+hexadecimal (\fB%x\fR and \fB%X\fR are equivalent for input), and
+binary.  The stored integer type follows the size modifier (see
+below); signed conversions (\fB%d\fR, \fB%i\fR) sign-extend and the
+rest zero-extend into that type.
+.TP
+.BR %e ", " %E ", " %f ", " %g ", " %G
+Floating-point number (an optional sign after the
+.BR e / E
+exponent is accepted, e.g.\&
+.RB \(dq 1e\-3 \(dq).
+Stored as a
+.B double
+by default, or a single-precision
+.B float
+with the
+.B h
+modifier.
+.TP
+.B %c
+A single character, stored as its integer code point.
+.TP
+.B %s
+A run of non-whitespace characters.
+.TP
+\fB%[\fR\fIchars\fR\fB]\fR, \fB%[^\fR\fIchars\fR\fB]\fR
+A run of characters that are (or, with
+.BR ^ ,
+are not) in the set.  A
+.B ]
+immediately after
+.B [
 or
-.B E
-exponent
-.RB ( \(dq1e\-3\(dq ", " \(dq2.5E+10\(dq ).
+.B [^
+is a set member; \fIa\fB\-\fIb\fR is an inclusive range.
+.TP
+.B %n
+Stores the number of characters consumed so far (consumes no input).
+.TP
+.B %%
+Matches a literal
+.BR % .
+.RE
+.PP
+A leading
+.B *
+suppresses assignment; a \fIwidth\fR bounds a conversion to that many
+input characters.  For a numeric conversion a size modifier selects the
+stored type \(em
+.BR hh " 8-bit, " h " 16-bit, none 32-bit, " l / L " 64-bit, " ll
+BigInt for integers; \fBnone\fR (double) or \fBh\fR (float) for
+floating-point, where other float modifiers are an error.  An unsigned
+.B ll
+scan of a negative value is an error.  A blank or tab in
+the format matches any run of input whitespace, and every conversion
+except
+.BR %c ", " %[ ", and " %n
+skips leading whitespace.  When variable names are given, each
+conversion is assigned in order and the result is the count of
+assignments (or
+.B \-1
+if end-of-input is reached before any conversion); with no variable
+names, the conversions are returned as a list.
 .SS "BINARY DATA"
 The
 .B binary
@@ -1117,6 +1253,11 @@ With
 .BR \-all ,
 collects all matches into a flat list.
 .PP
+.B \-about
+\(em compiles \fIpattern\fR and returns a metadata dictionary
+(nsub nstates nsubre nlacons matchall backref lookaround) instead
+of matching.
+.PP
 See
 .BR th8_re_syntax (1)
 for the complete regular expression syntax reference.
@@ -1127,6 +1268,10 @@ Substitutes the first (or all with
 .BR \-all )
 occurrences of \fIpattern\fR in \fIstring\fR with
 \fIreplacement\fR.
+Additional switches:
+.BR \-nocase " (case-insensitive matching),"
+.BR \-line " (newline-sensitive matching), and"
+.BR \-\- " (end of switches)."
 In \fIreplacement\fR,
 .B &
 is the matched text and
@@ -1418,19 +1563,51 @@ Returns
 .B 0
 if time is unsupported.
 .TP
-\fBclock ntp\fR ?\fIserver ...\fR?
-Queries NTP v4 servers for the current time.  Returns the
-Unix timestamp with anti-spoof origin timestamp verification,
-multi-server consensus, and backward-clock detection.
-Requires the platform's
+\fBclock ntp\fR ?\fB\-server\fR \fIhost\fR? ?\fB\-timeout\fR \fIms\fR? ?\fB\-attempts\fR \fIn\fR? ?\fB\-insecure\fR?
+Queries NTP v4 servers for authenticated wall-clock time and returns
+the consensus time as an integer Unix timestamp, with anti-spoof
+origin-timestamp verification, multi-server consensus, and
+backward-clock (time-travel) detection.  Requires the platform's
 .B xTimeMs
 callback.
+.RS
 .TP
-\fBclock https\fR
+.BR \-server " " \fIhost\fR
+NTP server to query.  May be repeated (up to a small fixed limit) for
+multi-server consensus.  If omitted, a built-in DNSSEC-signed default
+server is used.
+.TP
+.BR \-timeout " " \fIms\fR
+Per-receive timeout in milliseconds.  A value of
+.B 0
+(or omitted) selects the built-in default.
+.TP
+.BR \-attempts " " \fIn\fR
+Number of per-server send/receive attempts (default 3;
+.B 1
+disables retries).  Because NTP runs over UDP a lost packet is retried;
+a response that arrives but fails validation is never retried.
+.TP
+.B \-insecure
+Opt out of the require-DNSSEC-secure check for this query.  On a build
+with a validating resolver (libunbound) the server name must otherwise
+resolve to a cryptographically secure (DNSSEC-validated) answer \(em for
+every server, including one named with
+.BR \-server .
+Use
+.B \-insecure
+to reach a server in an unsigned DNS zone (most public NTP hosts, e.g.\&
+.IR pool.ntp.org );
+the NTP origin-timestamp anti-spoof remains the response-integrity
+defense.  A no-op on builds without a validating resolver.
+.RE
+.TP
+\fBclock https\fR ?\fIurl\fR?
 Retrieves authenticated time from an HTTPS endpoint with
 RSA-SHA512 signature verification against the embedded
 .B keyTime
 public key.  Uses a random nonce for anti-replay protection.
+If \fIurl\fR is omitted, a built-in default endpoint is used.
 .TP
 \fBafter\fR \fImilliseconds\fR
 Sleeps for \fImilliseconds\fR via the platform's
@@ -1530,6 +1707,18 @@ target namespace with the same name as an imported command is
 silently overwritten.  Without \fB\-force\fR, existing
 commands are not replaced.
 .RE
+.TP
+\fBnamespace which\fR ?\fB\-command\fR? ?\fB\-variable\fR? \fIname\fR
+Returns the fully-qualified name of the command (the default, or
+with \fB\-command\fR) or the variable (with \fB\-variable\fR) that
+\fIname\fR resolves to, or the empty string if there is no such
+command or variable.
+.TP
+\fBnamespace origin\fR \fIname\fR
+Returns the fully-qualified name of the command \fIname\fR resolves
+to.  TH8 has no import chains, so this is equivalent to
+.BR "namespace which \-command" .
+It is an error if \fIname\fR does not resolve to a command.
 .PP
 Command resolution: unqualified names are searched first in the
 current namespace, then in the global namespace.  Qualified
@@ -1553,9 +1742,17 @@ handler if no script is registered.
 Registers or queries the script that loads \fIname\fR version
 \fIversion\fR.
 .TP
+\fBpackage present\fR ?\fB\-exact\fR? \fIname\fR ?\fIversion\fR?
+Returns the version of \fIname\fR if it is already loaded \(em like
+.B "package require"
+but without loading it \(em or raises an error if it is not present.
+.TP
 \fBpackage names\fR
 Returns a list of all packages registered via
 .BR "package provide" .
+.TP
+\fBpackage versions\fR \fIname\fR
+Returns a list of all known versions of package \fIname\fR.
 .TP
 \fBpackage forget\fR \fIname\fR
 Removes all record of package \fIname\fR.
@@ -1571,16 +1768,19 @@ Returns \-1, 0, or 1 comparing dotted version strings.
 \fBpackage vsatisfies\fR \fIversion\fR \fIrequirement\fR
 Returns 1 if \fIversion\fR satisfies \fIrequirement\fR (same
 major, remaining components >=).
+.TP
+\fBpackage scan\fR
+Re-scans the
+.B auto_path
+variable for \fIpkgIndex\fR files and sources any newly discovered
+package index files.
 .SS "EVENTS"
 .TP
-\fBupdate\fR ?\fB\-idletasks\fR?
-Drain the per-interpreter event queue once and return.  Without
-\fB\-idletasks\fR, all queued events are processed; with
-\fB\-idletasks\fR, only idle-task events are processed.  The
-command does not block: when the queue is empty it returns
-immediately.  Useful for letting deferred work
-.RB ( "after 0" ", " "vwait" -signaled state updates) finish before
-proceeding.
+\fBupdate\fR ?\fB\-limit\fR \fIN\fR?
+Drains the per-interpreter event queue once and returns; it does
+not block (an empty queue returns immediately).  With
+\fB\-limit\fR \fIN\fR, stops after \fIN\fR callbacks have run
+(\fIN\fR must be >= 1).
 .TP
 \fBvwait\fR ?\fB\-timeout\fR \fIms\fR? \fIvarName\fR
 Block the current call until
@@ -1599,14 +1799,18 @@ is not signaled within
 milliseconds; otherwise the wait is unbounded.
 .SS "INTERPRETER CONTROL"
 .TP
-\fBinterp cancel\fR ?\fB\-unwind\fR? ?\fImessage\fR?
+\fBinterp cancel\fR ?\fB\-unwind\fR? ?\fB\-\-\fR? ?\fIpath\fR? ?\fIresult\fR?
 Cancels the current interpreter.  Without \fB\-unwind\fR, the
 cancellation is interceptable by
 .BR catch .
 With \fB\-unwind\fR, the cancellation propagates through
 .B catch
-and unwinds the entire call stack.  If \fImessage\fR is given,
-it becomes the error message; otherwise a default message is used.
+and unwinds the entire call stack.  The \fB\-\-\fR option marks
+the end of options.
+\fIpath\fR selects the target interpreter; TH8 has no child
+interpreters, so it must be the empty string if given.
+If \fIresult\fR is given, it becomes the error message; otherwise
+a default message is used.
 .SS "SECURITY COMMANDS"
 .TP
 \fBsecure create\fR \fIvarName\fR ?\fIvalue\fR?
@@ -1621,15 +1825,76 @@ Returns 1 if \fIvarName\fR is a secure variable, 0 otherwise.
 Securely deletes the variable: zeros the ciphertext, zeros and
 frees the key slot, and unsets the Tcl variable.
 .TP
-\fBflags have\fR \fIflags\fR \fIrequired\fR
+\fBsecure save\fR \fIvarName\fR
+Persists the encrypted variable \fIvarName\fR to backing store.
+Requires the secure-persistence gate and an embedder-configured
+master key.
+.TP
+\fBsecure load\fR \fIvarName\fR
+Restores a previously saved encrypted variable \fIvarName\fR.
+Subject to the same gating as
+.BR "secure save" .
+.TP
+\fBflags have\fR ?\fIoptions\fR? \fIflags\fR \fIrequired\fR
 Returns 1 if all of the \fIrequired\fR attribute flags are
 present in \fIflags\fR, 0 otherwise.  Supports wildcard
 characters: \fB*\fR, \fB#\fR, \fB!\fR, \fB$\fR, \fB@\fR.
 .TP
-\fBflags change\fR \fIflags\fR \fIchanges\fR
+\fBflags change\fR ?\fIoptions\fR? \fIflags\fR \fIchanges\fR
 Applies flag changes to \fIflags\fR, where \fIchanges\fR is a
-list of \fB+flag\fR (add) and \fB\-flag\fR (remove) directives.
+list of \fB+flag\fR (add), \fB\-flag\fR (remove), and \fB=flag\fR
+(clear then set) directives.
 Returns the resulting flags string.
+.TP
+\fBflags show\fR ?\fIoptions\fR? \fIflags\fR
+Parses \fIflags\fR and returns a dictionary mapping each key ID to
+its sorted flags, with the global key 0 first.
+.PP
+Each of the
+.B flags
+subcommands accepts the following
+.I options
+before its arguments:
+.RS
+.TP
+.B \-complex
+Parse and emit the complex, brace-delimited multi-key form
+(\fB{hexKey:flags}\fR groups) instead of a simple alphanumeric
+flag sequence.
+.TP
+.B \-space
+Ignore whitespace while parsing, and separate the emitted key
+groups with a space.
+.TP
+.B \-sort
+Emit each key's flags in ASCII order instead of their original
+insertion order.
+.TP
+.B \-all
+For
+.BR "flags have" ,
+require \fIall\fR of the queried flags to be present (\(lqhave-all\(rq)
+rather than any single one (\(lqhave-any\(rq, the default).
+.TP
+.B \-strict
+For
+.BR "flags have" ,
+treat an unknown or malformed flag in the query as a match failure
+(return 0) instead of ignoring it.
+.TP
+.B \-legacy
+Emit hexadecimal keys in the legacy format instead of the modern
+colon-separated form.
+.TP
+.B \-compact
+Reserved; currently accepted but has no effect.
+.TP
+.BR \-key " " \fIn\fR
+Operate on the flags for key ID \fIn\fR.
+.TP
+.B \-\-
+Marks the end of options.
+.RE
 .TP
 \fBharpy sign\fR \fIpublicKeyToken\fR \fIscriptText\fR
 Produce an RSA PKCS#1 v1.5 SHA\-512 detached signature over
@@ -1739,12 +2004,18 @@ Returns a list of the argument names of the procedure
 \fBinfo body\fR \fIprocname\fR
 Returns the body of the procedure \fIprocname\fR.
 .TP
+\fBinfo breakpoints\fR
+Returns the list of currently defined debug breakpoints.
+.TP
 \fBinfo default\fR \fIprocname\fR \fIargname\fR \fIvarname\fR
 Returns 1 if the argument \fIargname\fR of procedure \fIprocname\fR
 has a default value, storing it in \fIvarname\fR; returns 0
 otherwise.  When the argument has no default, \fIvarname\fR is set
 to the empty string.  It is an error if \fIprocname\fR does not
 exist or \fIargname\fR is not an argument of the procedure.
+.TP
+\fBinfo expansions\fR
+Returns the list of registered expansions.
 .TP
 \fBinfo functions\fR ?\fIpattern\fR?
 Returns a list of all registered math functions matching
@@ -1758,6 +2029,9 @@ interpreter.
 Returns the path to the host executable, as determined by the
 platform's \fBxGetExePath\fR callback.  Falls back to the
 \fB::th8_nameofexecutable\fR variable if set.
+.TP
+\fBinfo plugins\fR
+Returns the list of registered TH8 plugins.
 .TP
 \fBinfo procs\fR ?\fIpattern\fR?
 Returns a list of all procedures (defined via

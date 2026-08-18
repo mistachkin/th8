@@ -81,6 +81,24 @@ typedef struct Th8TclBridgeState {
  *	the result.  The return code is translated directly (the
  *	standard codes 0-4 are identical in Tcl and TH8).
  *
+ * Why / How:
+ *	Recovers the per-command Th8TclBridgeState from the command's
+ *	ClientData, checks the argument count, then calls Th8_Eval on
+ *	the persistent TH8 sub-interpreter with the script string.  The
+ *	TH8 result is copied into the host Tcl interpreter's object
+ *	result, and the TH8 return code is returned unchanged because
+ *	the standard 0-4 codes coincide between the two engines.
+ *
+ * Results:
+ *	The TH8 evaluation return code (TCL_OK/TCL_ERROR/... equal to
+ *	the matching TH8_OK/TH8_ERROR/... value); TCL_ERROR if called
+ *	with other than exactly one script argument.
+ *
+ * Side effects:
+ *	Evaluates the script in the TH8 sub-interpreter, mutating its
+ *	state, and sets the host Tcl interpreter's object result to the
+ *	TH8 result (or the wrong-num-args message).
+ *
  *----------------------------------------------------------------------
  */
 
@@ -122,6 +140,21 @@ th8Eval_objCmd(
  *	Command delete handler.  Destroys the TH8 sub-interpreter
  *	when the [th8Eval] command is deleted.
  *
+ * Why / How:
+ *	Registered as the delete proc of [th8Eval] so that tearing down
+ *	the command also releases everything the bridge owns.  Deletes
+ *	the TH8 sub-interpreter, then frees the merged platform block
+ *	and the state struct, both of which were allocated with ckalloc
+ *	(the platform predates the interpreter, so Th8_Malloc could not
+ *	be used).  Guards against a NULL state and NULL members.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Deletes the TH8 sub-interpreter and frees the platform block
+ *	and the Th8TclBridgeState.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -157,6 +190,26 @@ th8Eval_deleteProc(ClientData clientData) /* Th8TclBridgeState*. */
  *	and registers the [th8Eval] command.
  *
  *	Loaded via: load <path> Tclth8bridge
+ *
+ * Why / How:
+ *	The [load] entry point for the bridge in TH8-in-Tcl mode.
+ *	Initializes the Tcl stubs, builds a TH8 platform by merging the
+ *	libc platform with the posix or win32 platform, initializes the
+ *	TH8 library, creates the sub-interpreter, registers the TH8
+ *	built-in language in it, then installs [th8Eval] (carrying the
+ *	bridge state as ClientData) and provides the th8bridge package.
+ *
+ * Results:
+ *	TCL_OK once the sub-interpreter and command are in place;
+ *	TCL_ERROR (with a Tcl result message) if the stubs fail to
+ *	initialize, the sub-interpreter cannot be created, or the TH8
+ *	language cannot be registered.
+ *
+ * Side effects:
+ *	Allocates the platform block and bridge state, initializes the
+ *	TH8 library, creates a TH8 sub-interpreter, adds the [th8Eval]
+ *	command to the host Tcl interpreter, and registers the
+ *	th8bridge package.  On failure, frees whatever it allocated.
  *
  *----------------------------------------------------------------------
  */
@@ -226,7 +279,15 @@ Tclth8bridge_Init(Tcl_Interp *tclInterp) /* Host Tcl interpreter. */
      * Register the TH8 built-in commands in the sub-interpreter.
      */
 
-    Th8_RegisterLanguage(pState->th8Interp);
+    if (Th8_RegisterLanguage(pState->th8Interp) != TH8_OK) {
+	Th8_DeleteInterp(pState->th8Interp);
+	ckfree((char *)pState->pPlatform);
+	ckfree((char *)pState);
+	Tcl_SetObjResult(
+	    tclInterp,
+	    Tcl_NewStringObj("failed to register TH8 language", -1));
+	return TCL_ERROR;
+    }
 
     /*
      * Register [th8Eval] in the host Tcl interpreter.
@@ -248,6 +309,22 @@ Tclth8bridge_Init(Tcl_Interp *tclInterp) /* Host Tcl interpreter. */
  *
  *	Tcl package unload.  The sub-interpreter is destroyed by
  *	the command delete proc when [th8Eval] is removed.
+ *
+ * Why / How:
+ *	The [unload] entry point.  Renames [th8Eval] away, which fires
+ *	th8Eval_deleteProc to destroy the sub-interpreter and free the
+ *	bridge state.  When the unload detaches the library from the
+ *	process, the TH8 library is finalized as well.  Finally the
+ *	th8bridge package registration is forgotten.  The catch wrappers
+ *	make each step tolerant of an already-removed command/package.
+ *
+ * Results:
+ *	TCL_OK.
+ *
+ * Side effects:
+ *	Removes the [th8Eval] command (which destroys the sub-interp and
+ *	frees bridge state), optionally finalizes the TH8 library, and
+ *	forgets the th8bridge package.
  *
  *----------------------------------------------------------------------
  */
@@ -334,6 +411,25 @@ static void *th8TclBridgeCtx = 0;
  *	the result.  Return codes are translated directly (the
  *	standard codes 0-4 are identical in TH8 and Tcl).
  *
+ * Why / How:
+ *	Checks the argument count and that a Tcl context exists, then
+ *	calls evaluateTcl (a reverse-stubs entry point) to run the
+ *	script in the persistent Tcl sub-interpreter.  Any result
+ *	string returned by evaluateTcl is copied into the TH8 result and
+ *	then freed with the C library free(), since it was allocated by
+ *	the Tcl side.  The Tcl return code is returned unchanged because
+ *	the standard 0-4 codes coincide between the two engines.
+ *
+ * Results:
+ *	The Tcl evaluation return code (equal to the matching TH8 code);
+ *	TH8_ERROR (with an interpreter result) on the wrong argument
+ *	count or when the Tcl interpreter is not available.
+ *
+ * Side effects:
+ *	Evaluates the script in the Tcl sub-interpreter, mutating its
+ *	state, sets the TH8 interpreter result, and frees the
+ *	Tcl-allocated result string.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -382,6 +478,26 @@ tclEval_command(
  *
  *	Loaded via: load <path>:Th8bridge
  *
+ * Why / How:
+ *	The [load] entry point for the bridge in Tcl-in-TH8 mode.
+ *	Initializes the TH8 stubs (when built with USE_TH8_STUBS), then
+ *	calls createTclInterp -- a reverse-stubs loader that dynamically
+ *	loads the Tcl shared library and bootstraps its stubs table at
+ *	runtime -- storing the opaque Tcl context in a file-scope
+ *	global.  On success it installs the [tclEval] command and
+ *	provides the th8bridge package.
+ *
+ * Results:
+ *	TH8_OK once the Tcl interpreter and command are in place;
+ *	TH8_ERROR (with an interpreter result message) if the TH8 stubs
+ *	fail or the Tcl interpreter cannot be created.
+ *
+ * Side effects:
+ *	Loads the Tcl shared library and creates a Tcl sub-interpreter
+ *	(stored in th8TclBridgeCtx), adds the [tclEval] command, and
+ *	registers the th8bridge package.  On failure, frees the error
+ *	message from the loader.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -429,6 +545,20 @@ Th8bridge_Init(Th8_Interp *interp) /* Host TH8 interpreter. */
  *
  *	TH8 package unload.  Destroys the Tcl sub-interpreter
  *	and removes the [tclEval] command.
+ *
+ * Why / How:
+ *	The [unload] entry point.  Renames [tclEval] away, then, if a
+ *	Tcl context exists, calls unloadTcl to tear down the Tcl
+ *	sub-interpreter and clears the file-scope context pointer.
+ *	Finally the th8bridge package registration is forgotten.  The
+ *	catch wrappers tolerate an already-removed command/package.
+ *
+ * Results:
+ *	TH8_OK.
+ *
+ * Side effects:
+ *	Removes the [tclEval] command, destroys the Tcl sub-interpreter
+ *	(clearing th8TclBridgeCtx), and forgets the th8bridge package.
  *
  *----------------------------------------------------------------------
  */

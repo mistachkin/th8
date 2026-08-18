@@ -1468,6 +1468,20 @@ Th8Shell_EmitResult(Th8_Interp *interp, int rc, int repl)
  *	same fields (TH8_PATCH_LEVEL, TH8_SOURCE_ID, TH8_SOURCE_TIMESTAMP,
  *	etc.) queryable from any platform via `th8sh --version`.
  *
+ * Why / How:
+ *	Emits a single line built entirely from compile-time string
+ *	macros stamped into the build (patch level, source check-in id,
+ *	timestamp, tags, and VCS), so the reported identity always
+ *	matches the exact sources the binary was built from.  Kept
+ *	dependency-free (only stdout) so --version works even on a
+ *	half-broken installation before any TH8 initialization.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Writes one version line to stdout.  No allocation.
+ *
  *----------------------------------------------------------------------
  */
 

@@ -141,11 +141,24 @@ static TH8_THREAD_LOCAL volatile int th8_regex_oom_flag = 0;
  *	interpreter.  Returns NULL if no interpreter is set or if
  *	the OOM flag has been raised.
  *
+ * Why / How:
+ *	The engine reaches this via its MALLOC macro (regcustom_th8.h)
+ *	and has no interp of its own, so the allocation is charged to
+ *	the thread-local th8_regex_interp published by th8RegexSetup.
+ *	Short-circuits when th8_regex_oom_flag is set (a prior
+ *	cancel/limit was seen) so the engine unwinds through its
+ *	out-of-memory path, and when Th8_Ready reports a
+ *	cancel/limit it raises that flag first.  The NULL-interp
+ *	guard is the Bug 26 family fix: a NEVER-style assert would
+ *	collapse under TH8_OMIT_AUXILIARY_SAFETY_CHECKS and deref a
+ *	NULL interp when the engine is invoked outside a setup window.
+ *
  * Results:
  *	Pointer to allocated memory, or NULL on failure.
  *
  * Side effects:
- *	Allocates memory via the platform allocator.
+ *	Allocates memory via the platform allocator.  May set
+ *	th8_regex_oom_flag when the interpreter is not ready.
  *
  *----------------------------------------------------------------------
  */
@@ -182,11 +195,20 @@ th8_regex_malloc(size_t n)
  *	Free memory allocated by th8_regex_malloc.  Routes through
  *	Th8_Free using the global regex interpreter.
  *
+ * Why / How:
+ *	The engine reaches this via its FREE macro and has no interp
+ *	of its own, so the block is returned to the thread-local
+ *	th8_regex_interp that allocated it.  When no interp is set
+ *	(the Bug 26 window: engine invoked outside a setup/teardown
+ *	pair) it is a no-op, mirroring the standard free(NULL) shape
+ *	and avoiding the TH8_OMIT NULL-deref.
+ *
  * Results:
  *	None.
  *
  * Side effects:
- *	Frees memory via the platform allocator.
+ *	Frees memory via the platform allocator (no-op when no
+ *	interpreter is set).
  *
  *----------------------------------------------------------------------
  */
@@ -216,11 +238,22 @@ th8_regex_free(void *p)
  *	pointer valid and frees it during cleanup (same ANSI C
  *	realloc contract as libtommath).
  *
+ * Why / How:
+ *	The engine reaches this via its REALLOC macro against the
+ *	thread-local th8_regex_interp.  The NULL-interp guard is the
+ *	Bug 26 family fix (see th8_regex_malloc).  A cancel/limit
+ *	seen via Th8_Ready raises th8_regex_oom_flag and returns
+ *	NULL; because ANSI realloc leaves the original block valid
+ *	on failure, the engine's own cleanup frees it -- so this
+ *	must not free p itself.
+ *
  * Results:
- *	Pointer to reallocated memory, or NULL on failure.
+ *	Pointer to reallocated memory, or NULL on failure (original
+ *	block left intact).
  *
  * Side effects:
- *	Reallocates memory via the platform allocator.
+ *	Reallocates memory via the platform allocator.  May set
+ *	th8_regex_oom_flag when the interpreter is not ready.
  *
  *----------------------------------------------------------------------
  */
@@ -250,6 +283,15 @@ th8_regex_realloc(void *p, size_t n)
  *	the INTERRUPT macro.  If interrupted, sets the OOM flag so
  *	all subsequent MALLOC calls return NULL, forcing the engine
  *	to abort via its out-of-memory error path.
+ *
+ * Why / How:
+ *	The Spencer engine has no direct notion of TH8 cancellation
+ *	or resource limits, so this bridge polls Th8_Ready on the
+ *	thread-local th8_regex_interp from inside the engine's inner
+ *	loops.  Rather than aborting mid-loop, it converts a not-ready
+ *	condition into the engine's existing out-of-memory unwind by
+ *	raising th8_regex_oom_flag, which makes every later allocation
+ *	fail cleanly.  A no-op when no interpreter is set.
  *
  * Results:
  *	1 if the interpreter is interrupted, 0 otherwise.
@@ -287,6 +329,21 @@ th8_regex_interrupted(void)
  *	Called by the Spencer engine's stack_is_too_deep() inline.
  *	Routes to th8CheckStack.
  *
+ * Why / How:
+ *	The engine's recursive matcher guards against C-stack
+ *	exhaustion by asking the host whether the stack is nearly
+ *	full; TH8 answers using th8CheckStack on the thread-local
+ *	th8_regex_interp, which applies TH8's configured stack limit.
+ *	A no-op returning 0 (not too deep) when no interpreter is
+ *	set, so the engine keeps its own default behavior.
+ *
+ * Results:
+ *	Non-zero if the stack is too deep to recurse further, 0
+ *	otherwise (including when no interpreter is set).
+ *
+ * Side effects:
+ *	None.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -308,6 +365,14 @@ th8_regex_stack_too_deep(void)
  *	Character classification bridge for isalnum.  Routes through
  *	TH8's th8IsAlnum for ASCII characters.  Returns 0 for
  *	non-ASCII code points until Unicode tables are integrated.
+ *
+ * Why / How:
+ *	The engine's bracket-expression and locale code classify
+ *	code points through this bridge; TH8 answers from its own
+ *	th8IsAlnum table so behavior does not depend on the C
+ *	library's locale.  Only the ASCII range (c < 128) is defined
+ *	so far, so higher code points deliberately return 0 rather
+ *	than a locale-dependent guess.
  *
  * Results:
  *	Non-zero if the character is alphanumeric, 0 otherwise.
@@ -333,6 +398,12 @@ th8_regex_isalnum(unsigned int c)
  *	Character classification bridge for isalpha.  Returns 0 for
  *	non-ASCII code points.
  *
+ * Why / How:
+ *	Same design as th8_regex_isalnum: the engine classifies code
+ *	points through TH8's own th8IsAlpha table (not the C library
+ *	locale), and only the ASCII range (c < 128) is defined, so
+ *	higher code points return 0.
+ *
  * Results:
  *	Non-zero if the character is alphabetic, 0 otherwise.
  *
@@ -356,6 +427,12 @@ th8_regex_isalpha(unsigned int c)
  *
  *	Character classification bridge for isdigit.  Returns 0 for
  *	non-ASCII code points.
+ *
+ * Why / How:
+ *	Same design as th8_regex_isalnum: the engine classifies code
+ *	points through TH8's own th8IsDigit table (not the C library
+ *	locale), and only the ASCII range (c < 128) is defined, so
+ *	higher code points return 0.
  *
  * Results:
  *	Non-zero if the character is a digit, 0 otherwise.
@@ -381,6 +458,12 @@ th8_regex_isdigit(unsigned int c)
  *	Character classification bridge for isspace.  Returns 0 for
  *	non-ASCII code points.
  *
+ * Why / How:
+ *	Same design as th8_regex_isalnum: the engine classifies code
+ *	points through TH8's own th8IsSpace table (not the C library
+ *	locale), and only the ASCII range (c < 128) is defined, so
+ *	higher code points return 0.
+ *
  * Results:
  *	Non-zero if the character is whitespace, 0 otherwise.
  *
@@ -405,11 +488,20 @@ th8_regex_isspace(unsigned int c)
  *	Bridge memcpy for the Spencer engine.  Routes through
  *	Th8_Memcpy using the global regex interpreter.
  *
+ * Why / How:
+ *	TH8's layer discipline forbids the engine from calling the C
+ *	library directly, so regcustom_th8.h redirects its memcpy to
+ *	this bridge, which dispatches to the platform's memcpy
+ *	callback via the thread-local th8_regex_interp.  With no
+ *	interpreter set there is nothing to dispatch through, so it
+ *	returns dst untouched.
+ *
  * Results:
  *	The dst pointer.
  *
  * Side effects:
- *	Copies n bytes from src to dst.
+ *	Copies n bytes from src to dst (no-op when no interpreter is
+ *	set).
  *
  *----------------------------------------------------------------------
  */
@@ -432,8 +524,16 @@ th8_regex_memcpy(void *dst, const void *src, size_t n)
  *	Bridge memcmp for the Spencer engine.  Routes through
  *	Th8_Memcmp using the global regex interpreter.
  *
+ * Why / How:
+ *	Same layer-discipline rationale as th8_regex_memcpy: the
+ *	engine's memcmp is redirected here and dispatched to the
+ *	platform callback via the thread-local th8_regex_interp.
+ *	With no interpreter set it returns 0 (compare-equal) since
+ *	there is nothing to dispatch through.
+ *
  * Results:
- *	Negative, zero, or positive integer indicating comparison.
+ *	Negative, zero, or positive integer indicating comparison
+ *	(0 when no interpreter is set).
  *
  * Side effects:
  *	None.
@@ -459,11 +559,19 @@ th8_regex_memcmp(const void *a, const void *b, size_t n)
  *	Bridge memset for the Spencer engine.  Routes through the
  *	platform's xMemset callback.
  *
+ * Why / How:
+ *	Same layer-discipline rationale as th8_regex_memcpy: the
+ *	engine's memset is redirected here.  It calls the platform's
+ *	xMemset callback directly (via Th8_GetPlatform on the
+ *	thread-local th8_regex_interp) only when both the interp and
+ *	the callback are present; otherwise it leaves dst unchanged.
+ *
  * Results:
  *	The dst pointer.
  *
  * Side effects:
- *	Fills n bytes of dst with value c.
+ *	Fills n bytes of dst with value c (no-op when no interpreter
+ *	or no xMemset callback is available).
  *
  *----------------------------------------------------------------------
  */
@@ -489,6 +597,15 @@ th8_regex_memset(void *dst, int c, size_t n)
  *
  *	Bridge strlen for the Spencer engine.  Routes through the
  *	platform's xStrlen callback with a hand-rolled fallback.
+ *
+ * Why / How:
+ *	Same layer-discipline rationale as th8_regex_memcpy: the
+ *	engine's strlen is redirected here and dispatched to the
+ *	platform's xStrlen callback.  Because strlen is a pure query
+ *	that can be needed even outside a setup window (or on a
+ *	platform without the callback), it also carries a
+ *	self-contained byte-counting fallback so it always returns a
+ *	correct length.
  *
  * Results:
  *	Length of the NUL-terminated string.
@@ -528,6 +645,13 @@ th8_regex_strlen(const char *s)
  *	Bridge strcmp for the Spencer engine.  Routes through the
  *	platform's xStrcmp callback with a byte-by-byte fallback.
  *
+ * Why / How:
+ *	Same layer-discipline rationale as th8_regex_strlen: the
+ *	engine's strcmp is redirected here and dispatched to the
+ *	platform's xStrcmp callback, with a self-contained
+ *	byte-by-byte fallback so a missing interp or callback still
+ *	yields a correct ordering.
+ *
  * Results:
  *	Negative, zero, or positive integer indicating comparison.
  *
@@ -564,6 +688,14 @@ th8_regex_strcmp(const char *s1, const char *s2)
  *	Bridge strcpy for the Spencer engine.  Uses th8_regex_strlen
  *	and th8_regex_memcpy internally.
  *
+ * Why / How:
+ *	Same layer-discipline rationale as th8_regex_memcpy: the
+ *	engine's strcpy is redirected here.  Rather than call the C
+ *	library it is composed from the other bridges -- it measures
+ *	src with th8_regex_strlen and copies length + 1 bytes (to
+ *	include the NUL) with th8_regex_memcpy -- so it inherits their
+ *	platform routing automatically.
+ *
  * Results:
  *	The dst pointer.
  *
@@ -590,6 +722,13 @@ th8_regex_strcpy(char *dst, const char *src)
  *
  *	Bridge strchr for the Spencer engine.  Routes through the
  *	platform's xStrchr callback with a linear-scan fallback.
+ *
+ * Why / How:
+ *	Same layer-discipline rationale as th8_regex_strlen: the
+ *	engine's strchr is redirected here and dispatched to the
+ *	platform's xStrchr callback, with a self-contained linear
+ *	scan fallback that (like C strchr) also matches a search for
+ *	the terminating NUL.
  *
  * Results:
  *	Pointer to the first occurrence of c in s, or NULL.
@@ -627,11 +766,21 @@ th8_regex_strchr(const char *s, int c)
  *	Bridge sprintf for the Spencer engine.  Routes through the
  *	platform's xVsnprintf callback with a 256-byte limit.
  *
+ * Why / How:
+ *	Same layer-discipline rationale as th8_regex_memcpy: the
+ *	engine's sprintf is redirected here.  The engine only uses it
+ *	to format short error/diagnostic strings, so this collects
+ *	the varargs and dispatches to the platform's bounded
+ *	xVsnprintf with a fixed 256-byte cap -- turning an unbounded
+ *	sprintf into a safe snprintf.  With no interp or callback it
+ *	writes nothing.
+ *
  * Results:
- *	Number of characters written, or 0 if no interpreter.
+ *	Number of characters written, or 0 when no interpreter or no
+ *	xVsnprintf callback is available.
  *
  * Side effects:
- *	Writes formatted output into buf.
+ *	Writes formatted output into buf (up to 256 bytes).
  *
  *----------------------------------------------------------------------
  */
@@ -664,6 +813,14 @@ th8_regex_sprintf(char *buf, const char *fmt, ...)
  *
  *	Bridge atoi for the Spencer engine.  Routes through the
  *	platform's xAtoi callback with a hand-rolled fallback.
+ *
+ * Why / How:
+ *	Same layer-discipline rationale as th8_regex_strlen: the
+ *	engine's atoi is redirected here and dispatched to the
+ *	platform's xAtoi callback, with a self-contained fallback
+ *	that skips leading blanks, honors an optional +/- sign, and
+ *	accumulates decimal digits so a missing interp or callback
+ *	still parses correctly.
  *
  * Results:
  *	Integer value of the string.
@@ -714,11 +871,19 @@ th8_regex_atoi(const char *s)
  *	Bridge qsort for the Spencer engine.  Routes through the
  *	platform's xQsort callback.
  *
+ * Why / How:
+ *	Same layer-discipline rationale as th8_regex_memcpy: the
+ *	engine's qsort is redirected here and dispatched to the
+ *	platform's xQsort callback via the thread-local
+ *	th8_regex_interp.  There is no in-tree fallback sort, so with
+ *	no interp or callback the array is simply left unsorted.
+ *
  * Results:
  *	None.
  *
  * Side effects:
- *	Sorts the array in place.
+ *	Sorts the array in place (no-op when no interpreter or no
+ *	xQsort callback is available).
  *
  *----------------------------------------------------------------------
  */
@@ -761,6 +926,24 @@ th8_regex_qsort(
  *	Convert a UTF-8 string to a chr (UTF-32) array using
  *	ConvertUTF_v2 for strict UTF-8 validation.  Caller must
  *	free the result with Th8_Free.
+ *
+ * Why / How:
+ *	The Spencer engine matches over fixed-width 32-bit code
+ *	points, so TH8's UTF-8 command arguments must be widened at
+ *	the API boundary.  A worst-case buffer of one UTF-32 unit per
+ *	input byte (plus a NUL) is allocated, then ConvertUTF8toUTF32
+ *	runs first in strictConversion mode; if the input is
+ *	malformed it re-runs in lenientConversion mode so bad bytes
+ *	become U+FFFD instead of failing the command.  The decoded
+ *	length is reported through *pnChr.
+ *
+ * Results:
+ *	Pointer to a newly allocated, NUL-terminated UTF-32 array
+ *	(caller frees with Th8_Free), with *pnChr set to the code
+ *	point count; NULL on allocation failure, with *pnChr set to 0.
+ *
+ * Side effects:
+ *	Allocates memory on the interpreter's allocator.
  *
  *----------------------------------------------------------------------
  */
@@ -815,6 +998,25 @@ th8Utf8ToChr(Th8_Interp *interp, const char *z, size_t n, int *pnChr)
  *
  *	Convert a chr (UTF-32) array back to UTF-8 using
  *	ConvertUTF_v2.  Caller must free with Th8_Free.
+ *
+ * Why / How:
+ *	The inverse of th8Utf8ToChr: match results and extracted
+ *	substrings leave the engine as UTF-32 and must be narrowed
+ *	back to UTF-8 before being returned as TH8 results.  A
+ *	non-positive nChr is handled up front by returning a fresh
+ *	empty string, guarding both the multiply and the converter
+ *	against a zero/negative count; otherwise a worst-case buffer
+ *	of four bytes per code point (plus a NUL) is allocated and
+ *	ConvertUTF32toUTF8 fills it in strictConversion mode.  The
+ *	byte length is reported through *pnUtf8.
+ *
+ * Results:
+ *	Pointer to a newly allocated, NUL-terminated UTF-8 string
+ *	(caller frees with Th8_Free), with *pnUtf8 set to its byte
+ *	length; NULL on allocation failure, with *pnUtf8 set to 0.
+ *
+ * Side effects:
+ *	Allocates memory on the interpreter's allocator.
  *
  *----------------------------------------------------------------------
  */
@@ -910,10 +1112,20 @@ th8RegexSetup(Th8_Interp *interp)
  *	error) so the mutex never deadlocks subsequent
  *	callers.
  *
+ * Why / How:
+ *	The bridge's file-scope state (th8_regex_interp,
+ *	th8_regex_oom_flag) and the global mutex are shared serially
+ *	across regex operations, so each operation must publish them
+ *	on entry (th8RegexSetup) and retract them here on every exit
+ *	path.  Clearing the interp pointer prevents a later,
+ *	setup-less engine invocation from charging work to a stale
+ *	interp (the Bug 26 window), and releasing the mutex last
+ *	keeps subsequent callers from deadlocking.
+ *
  * Parameters:
  *	(none)
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -952,6 +1164,23 @@ th8RegexTeardown(void)
  *	does not exceed the NFA state limit.  Returns TH8_OK if the
  *	pattern is acceptable, TH8_ERROR if it is too complex.
  *
+ * Why / How:
+ *	A pathological pattern can compile into an enormous NFA and
+ *	drive catastrophic match times (a regex-bomb), so before any
+ *	pattern is executed its state count is measured with
+ *	th8_regex_analyze and compared against TH8_REGEX_MAX_STATES.
+ *	Rejecting at compile time -- rather than relying only on the
+ *	per-operation cancel/limit checks -- caps worst-case cost up
+ *	front.
+ *
+ * Results:
+ *	TH8_OK if the pattern is within the state limit; TH8_ERROR
+ *	(with an interpreter result of "regular expression too
+ *	complex") if it exceeds TH8_REGEX_MAX_STATES.
+ *
+ * Side effects:
+ *	On rejection, sets the interpreter result message.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -975,12 +1204,41 @@ th8RegexCheckComplexity(Th8_Interp *interp, const regex_t *pRe)
  *
  * regexp_command --
  *
- *	Match a string against a regular expression.
+ *	Implements the Tcl [regexp] command: match a string against a
+ *	regular expression.
  *
  *	regexp ?SWITCHES? PATTERN STRING ?MATCHVAR? ?SUBVAR ...?
  *
- *	Stub: reports "not yet wired" until the command-level
- *	integration with th8_regcomp/th8_regexec is complete.
+ *	Supports -nocase, -expanded, -line, -linestop, -lineanchor,
+ *	-all, -inline, -indices, -start, -about, and -- switches.
+ *
+ * Why / How:
+ *	Parses the switch prefix into REG_* compile/exec flags, then
+ *	widens the pattern and subject to UTF-32 with th8Utf8ToChr,
+ *	compiles via th8_regcomp, and rejects regex-bombs with
+ *	th8RegexCheckComplexity before executing.  th8_regexec is run
+ *	in a loop (advancing past each match, and past zero-length
+ *	matches by one, so -all cannot spin) collecting results.  The
+ *	-inline form builds a result list of matches/submatches; the
+ *	variable form stores each (sub)match into the caller's
+ *	MATCHVAR/SUBVAR arguments; -indices reports "start end" pairs
+ *	instead of text; -about returns compiled-pattern metadata
+ *	without matching.  All setup/teardown of the shared engine
+ *	state is bracketed by th8RegexSetup/th8RegexTeardown on every
+ *	exit path.
+ *
+ * Results:
+ *	TH8_OK on success.  The interpreter result is the match count
+ *	for -all, the match list for -inline, or 1/0 for a plain
+ *	match; -about yields a metadata dictionary.  TH8_ERROR (with
+ *	an interpreter result message) on a wrong argument count, a
+ *	bad switch, a compile error, an over-complex pattern, out of
+ *	memory, or interpreter cancellation/limit.
+ *
+ * Side effects:
+ *	Allocates and frees working buffers; may set caller variables
+ *	(when TH8_ENABLE_VARIABLES); sets the interpreter result.
+ *	Enters and leaves the global regex mutex.
  *
  *----------------------------------------------------------------------
  */
@@ -1420,9 +1678,39 @@ cleanup:
  *
  * regsub_command --
  *
- *	Perform regular expression substitution.
+ *	Implements the Tcl [regsub] command: perform regular
+ *	expression substitution.
  *
  *	regsub ?SWITCHES? PATTERN STRING REPLACEMENT ?VARNAME?
+ *
+ *	Supports -nocase, -all, -line, and -- switches.
+ *
+ * Why / How:
+ *	Parses the switch prefix into REG_* flags, widens the pattern
+ *	and subject to UTF-32 with th8Utf8ToChr, compiles via
+ *	th8_regcomp, and rejects regex-bombs with
+ *	th8RegexCheckComplexity.  It then walks matches with
+ *	th8_regexec, appending the pre-match text, then the expanded
+ *	replacement -- where & is the whole match, \1..\9 are
+ *	submatches, and \\ or any escaped char is a literal -- and
+ *	finally the trailing text.  Zero-length matches advance by
+ *	one code point (copied through) so -all cannot spin.  When no
+ *	match occurs the original string is emitted unchanged.  Shared
+ *	engine state is bracketed by th8RegexSetup/th8RegexTeardown on
+ *	every exit path.
+ *
+ * Results:
+ *	TH8_OK on success: with a VARNAME the substituted string is
+ *	stored in that variable and the result is the substitution
+ *	count; without one the result is the substituted string.
+ *	TH8_ERROR (with an interpreter result message) on a wrong
+ *	argument count, a bad switch, a compile error, an over-complex
+ *	pattern, or out of memory.
+ *
+ * Side effects:
+ *	Allocates and frees working buffers; may set the caller's
+ *	VARNAME variable (when TH8_ENABLE_VARIABLES); sets the
+ *	interpreter result.  Enters and leaves the global regex mutex.
  *
  *----------------------------------------------------------------------
  */
@@ -1742,11 +2030,20 @@ static Th8_CommandEntry th8RegexpCommands[] = {
  *
  *	NULL `pnCommand` is always an error.
  *
+ * Why / How:
+ *	The plugin loader discovers a plugin's commands with a
+ *	two-call protocol: first a count-only call (NULL pCommand)
+ *	to learn how many entries exist, then a second call with a
+ *	buffer of that size to copy them out.  This implements that
+ *	protocol over the static th8RegexpCommands table, refusing to
+ *	write past a caller buffer that is too small so the loader
+ *	never overflows.
+ *
  * Parameters:
  *	pCommand  -- caller-supplied output buffer or NULL.
  *	pnCommand -- in/out count.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success; `TH8_ERROR` on missing
  *	`pnCommand` or insufficient buffer.
  *

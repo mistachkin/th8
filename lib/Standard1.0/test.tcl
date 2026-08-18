@@ -1591,6 +1591,10 @@ namespace eval ::th8test {
   proc sandboxAllocCount { result } {
     return [lindex $result 3]
   }
+
+  proc sandboxPeak { result } {
+    return [lindex $result 4]
+  }
 
   #
   # faultRc / faultResult / faultAllocCount / faultTriggered --
@@ -1633,7 +1637,7 @@ namespace eval ::th8test {
       setupNamespaceConstraints setupCurlConstraints setupCommonConstraints
 
   namespace export sandboxRc sandboxResult sandboxSteps sandboxAllocCount \
-      faultRc faultResult faultAllocCount faultTriggered
+      sandboxPeak faultRc faultResult faultAllocCount faultTriggered
 
   namespace eval :: {namespace import -force ::th8test::*}
 

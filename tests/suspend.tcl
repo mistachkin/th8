@@ -412,7 +412,9 @@ runTest {test suspend-6.5 {
 } -setup {
 } -body {
   set outer_rc [catch {
-    set inner_rc [catch {interp cancel -- "inner"}]
+    # Empty path selects the current interpreter; "inner" is the
+    # cancel message (not an interpreter path).
+    set inner_rc [catch {interp cancel -- "" "inner"}]
   }]
   list $outer_rc $inner_rc
 } -cleanup {

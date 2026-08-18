@@ -91,6 +91,24 @@ struct ub_ctx;
  *	    never feeds libunbound a truncated trust-anchor
  *	    file.
  *
+ *	xGetModuleAnchorPath
+ *	    Compose the module-adjacent candidate anchor path
+ *	    (`<dir-of-this-image>/root.key`) into `zBuf`.  This
+ *	    is the TH8-BUNDLED location; the shared driver uses
+ *	    it to recognise when `xFindStaticAnchorPath`
+ *	    returned the bundled anchor (which must be signature-
+ *	    verified) versus an OS system anchor (trusted as-is).
+ *	    Returns 0 if the image directory cannot be resolved.
+ *
+ *	xReadFile
+ *	    Read up to `nBuf` bytes of `zPath` into the caller-
+ *	    provided buffer `zBuf`, setting `*pnRead`.  RAW read:
+ *	    it MUST NOT invoke the signed-only script policy (the
+ *	    driver uses it to read a trust anchor and its
+ *	    `.b64sig`, and routing through the policy would
+ *	    recurse).  Returns 0 on any error, including a file
+ *	    that does not fit in `nBuf` (no partial read).
+ *
  *----------------------------------------------------------------------
  */
 
@@ -100,6 +118,12 @@ typedef struct Th8_UnboundOps {
     int (*xPathReadable)(const char *zPath);
     int (*xEnsureParentDir)(const char *zPath);
     int (*xCopyFileContents)(const char *zSrc, const char *zDst);
+    int (*xGetModuleAnchorPath)(char *zBuf, size_t nBuf);
+    int (*xReadFile)(
+        const char *zPath,
+        char *zBuf,
+        size_t nBuf,
+        size_t *pnRead);
 } Th8_UnboundOps;
 
 /*

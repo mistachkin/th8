@@ -1,0 +1,98 @@
+# loop_bounded.tsv -- TH8K-009 reviewed loop dispositions (the BOUNDED/SAFE set).
+#
+# file<TAB>function<TAB>reason.  Command-surface functions whose loop(s) do NOT
+# poll Th8_Ready because the iteration count is bounded, not because the loop
+# was overlooked.  discover_loops.tcl treats a function here (or in
+# poll_required.tsv) as accounted for.  Four bound classes are used:
+#   CONST  -- loop over a fixed/compile-time structure (e.g. a static command
+#             table); bound is a small constant.
+#   ARGV   -- loop over THIS command's argument vector (argc); every arg was a
+#             word the (now-polled) parser produced in this same invocation, so
+#             the loop is <=2x the parse it is already bounded by.
+#   HASHENUM-- enumerate an interp command/variable/package table; each entry was
+#             created by a step-counted command, so <=2x amplification.
+#   SPLIT  -- loop over the ELEMENTS of a list/dict value, materialized by
+#             Th8_SplitList; per-element work is a pointer/length copy, and the
+#             element count is bounded by the (step-limited) work that built the
+#             value.  Polling these is a candidate future hardening; unlike the
+#             string value-loops (per-char classification/rewrite, which DO poll)
+#             the per-element cost here is trivial.
+#   CAPPED -- loop bounded by an explicit constant cap.
+#   BODY   -- per-iteration Th8_Eval of a script body re-enters the polled
+#             evaluator (empty-body {} caveat noted in loop_audit.md).
+#   PARSE  -- the parser scanning attacker-supplied input.  A LINEAR pass whose
+#             length is bounded by the size of the input/value being parsed --
+#             which is itself bounded by the script size or by the
+#             allocation-quota- and step-limited work that built the value -- so
+#             it is not an amplification.  The parser (th8NextWord) is also
+#             shared with the debug suspend/resume path, where a cancel poll
+#             would treat TH8_SUSPEND as a fatal error and abort a resumed
+#             script; and it runs on every word during evaluation, where a poll
+#             inflates the step counter for short words.  Cancellation of the
+#             surrounding work is the eval loop's job (it polls per command).
+#
+# ---- CONST: static *GetCommands tables ----
+src/plugins/th8_binary.c	th8BinaryGetCommands	CONST static command table
+src/plugins/th8_control.c	th8ControlGetCommands	CONST static command table
+src/plugins/th8_extensibility.c	th8ExtensibilityGetCommands	CONST static command table
+src/plugins/th8_filesystems.c	th8FilesystemsGetCommands	CONST static command table
+src/plugins/th8_formatting.c	th8FormattingGetCommands	CONST static command table
+src/plugins/th8_introspection.c	th8IntrospectionGetCommands	CONST static command table
+src/plugins/th8_io.c	th8IoGetCommands	CONST static command table
+src/plugins/th8_lists.c	th8ListsGetCommands	CONST static command table
+src/plugins/th8_looping.c	th8LoopingGetCommands	CONST static command table
+src/plugins/th8_management.c	th8ManagementGetCommands	CONST static command table
+src/plugins/th8_strings.c	th8StringsGetCommands	CONST static command table
+src/plugins/th8_variables.c	th8VariablesGetCommands	CONST static command table
+# ---- HASHENUM: interp table enumeration (<=2x amplification) ----
+src/th8_hash.c	Th8_HashIterate	HASHENUM entries created by step-counted commands
+src/plugins/th8_introspection.c	info_commands_command	HASHENUM command table enumeration
+src/plugins/th8_introspection.c	info_procs_command	HASHENUM proc table enumeration
+src/plugins/th8_introspection.c	info_globals_command	HASHENUM global-var table enumeration
+src/plugins/th8_introspection.c	info_vars_command	HASHENUM var table enumeration
+src/plugins/th8_introspection.c	info_subcommands_command	HASHENUM ensemble subcommand table (static)
+src/plugins/th8_introspection.c	info_args_command	ARGV proc arg list (bounded by proc definition)
+src/plugins/th8_introspection.c	info_default_command	ARGV proc arg scan (bounded by proc definition)
+src/plugins/th8_introspection.c	info_level_command	ARGV frame level args (bounded by frame)
+# ---- ARGV: loop over this command's parsed argument vector (<=2x parse) ----
+src/plugins/th8_lists.c	list_command	ARGV builds a list from argv
+src/plugins/th8_lists.c	lappend_command	ARGV appends argv to a var
+src/plugins/th8_variables.c	concat_command	ARGV concatenates argv
+src/plugins/th8_variables.c	append_command	ARGV appends argv to a var
+src/plugins/th8_variables.c	global_command	ARGV links argv names to globals
+src/plugins/th8_variables.c	upvar_command	ARGV links argv name pairs
+src/plugins/th8_variables.c	unset_command	ARGV unsets each argv name
+src/plugins/th8_control.c	if_command	ARGV elseif clause scan
+src/plugins/th8_control.c	return_command	ARGV option scan
+src/plugins/th8_control.c	eval_command	ARGV concatenates argv before eval
+src/plugins/th8_control.c	subst_command	ARGV option scan
+src/plugins/th8_control.c	coroutine_command	ARGV option/args scan
+src/plugins/th8_management.c	interp_cancel_command	ARGV option scan
+src/plugins/th8_management.c	namespace_export_command	ARGV pattern list scan
+src/plugins/th8_management.c	namespace_import_command	ARGV pattern list scan
+src/plugins/th8_management.c	namespace_delete_command	ARGV namespace-name list scan
+src/plugins/th8_management.c	namespace_eval_command	ARGV concatenates trailing args
+src/plugins/th8_management.c	namespace_which_command	ARGV option scan
+src/plugins/th8_extensibility.c	package_vcompare_command	ARGV short version-component scan
+src/plugins/th8_extensibility.c	package_vsatisfies_command	ARGV short version-requirement scan
+src/plugins/th8_extensibility.c	unload_command	ARGV option scan
+src/plugins/th8_binary.c	binary_scan_command	ARGV format-string cursor (bounded by format arg)
+src/plugins/th8_filesystems.c	file_validname_command	ARGV single-path byte scan (bounded by path arg)
+src/plugins/th8_filesystems.c	file_channels_command	CONST open-channel enumeration (bounded)
+src/plugins/th8_io.c	close_command	CONST open-channel enumeration (bounded)
+# ---- SPLIT: loop over list/dict VALUE elements via Th8_SplitList (<=2x) ----
+src/th8_core.c	Th8_SplitList	SPLIT element metadata copy (per-element pointer/len)
+src/plugins/th8_lists.c	th8DictSplit	SPLIT dict-value element copy via Th8_SplitList
+src/plugins/th8_lists.c	dict_create_command	SPLIT builds dict from argv/value elements
+src/plugins/th8_lists.c	dict_exists_command	SPLIT nested key lookup over value elements
+src/plugins/th8_lists.c	dict_set_command	SPLIT nested key set over value elements
+src/plugins/th8_lists.c	dict_unset_command	SPLIT nested key unset over value elements
+src/plugins/th8_lists.c	dict_for_command	BODY per-pair Th8_Eval of the loop body (empty-body caveat)
+src/plugins/th8_lists.c	dict_map_command	BODY per-pair Th8_Eval of the loop body (empty-body caveat)
+src/plugins/th8_looping.c	foreach_command	BODY per-iteration Th8_Eval of the loop body
+# ---- PARSE: parser linear scan of attacker input (memory/script-size bounded) ----
+src/th8_core.c	th8NextWord	PARSE single-word extent scan; on eval + suspend path, must not poll
+src/th8_core.c	th8ParseCommand	PARSE [info complete] byte scans; value already in memory, not on suspend path but same linear-scan class
+# ---- CAPPED / delegated ----
+src/plugins/th8_strings.c	string_repeat_command	CAPPED by TH8_MX_STRING_REPEAT (1 MiB)
+src/plugins/th8_strings.c	string_match_command	delegated to th8GlobMatch2 (polled)

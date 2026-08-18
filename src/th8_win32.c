@@ -3238,19 +3238,17 @@ th8Win32MemBarrier(Th8_Interp *interp, void *pCtx)
  *
  *	Create a Win32 manual-reset event handle for the
  *	per-interp event queue.  Mirror of
- *	`th8PosixEventCreate`.  Wraps `CreateEventW` with:
- *	  *  manual-reset = TRUE (signaled state persists
- *	     until an explicit `ResetEvent`, so concurrent
- *	     producers can signal-coalesce safely without
- *	     losing wakeups),
- *	  *  initial state = FALSE (unsignaled),
- *	  *  no security attributes / name.
+ *	`th8PosixEventCreate`.  The `interp` and `pCtx`
+ *	parameters are ignored.
  *
- * Parameters:
- *	interp -- ignored.
- *	pCtx   -- platform context (ignored).
+ * Why / How:
+ *	Wraps `CreateEventW` with manual-reset = TRUE (signaled
+ *	state persists until an explicit `ResetEvent`, so
+ *	concurrent producers can signal-coalesce safely without
+ *	losing wakeups), initial state = FALSE (unsignaled), and
+ *	no security attributes or name.
  *
- * Returns:
+ * Results:
  *	Non-NULL HANDLE on success; NULL on failure
  *	(`GetLastError` available to the caller).
  *
@@ -3274,15 +3272,17 @@ th8Win32EventCreate(Th8_Interp *interp, void *pCtx)
  *
  *	Close a Win32 manual-reset event handle returned by
  *	`th8Win32EventCreate`.  NULL `pEvent` is a no-op.
- *	Mirror of `th8PosixEventDestroy`.
+ *	Mirror of `th8PosixEventDestroy`.  The `interp` and
+ *	`pCtx` parameters are ignored.
  *
- * Parameters:
- *	interp -- ignored.
- *	pCtx   -- platform context (ignored).
- *	pEvent -- HANDLE returned by `th8Win32EventCreate`, or
- *		NULL.
+ * Why / How:
+ *	Delegates directly to `CloseHandle`; Win32 kernel objects
+ *	are reference-counted so closing the handle releases
+ *	TH8's reference without any further teardown -- unlike
+ *	`th8PosixEventDestroy`, there is no separate mutex/cond
+ *	pair to tear down.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -3307,14 +3307,17 @@ th8Win32EventDestroy(Th8_Interp *interp, void *pCtx, void *pEvent)
  *
  *	Transition the manual-reset event to the signaled
  *	state via `SetEvent`.  Idempotent.  NULL `pEvent` is a
- *	no-op.  Mirror of `th8PosixEventSet`.
+ *	no-op.  Mirror of `th8PosixEventSet`.  The `interp` and
+ *	`pCtx` parameters are ignored.
  *
- * Parameters:
- *	interp -- ignored.
- *	pCtx   -- platform context (ignored).
- *	pEvent -- HANDLE, or NULL.
+ * Why / How:
+ *	Setting an already-signaled manual-reset event is a
+ *	no-op at the OS level, so no extra synchronization is
+ *	needed to make repeated `SetEvent` calls from multiple
+ *	producer threads safe; the event simply stays signaled
+ *	until a subsequent `th8Win32EventReset`.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -3342,14 +3345,17 @@ th8Win32EventSet(Th8_Interp *interp, void *pCtx, void *pEvent)
  *	events do not auto-reset on `Wait`; callers must
  *	explicitly reset them when one-shot semantics are
  *	desired.  NULL `pEvent` is a no-op.  Mirror of
- *	`th8PosixEventReset`.
+ *	`th8PosixEventReset`.  The `interp` and `pCtx`
+ *	parameters are ignored.
  *
- * Parameters:
- *	interp -- ignored.
- *	pCtx   -- platform context (ignored).
- *	pEvent -- HANDLE, or NULL.
+ * Why / How:
+ *	`ResetEvent` simply clears the OS-maintained signaled
+ *	flag; because manual-reset events never auto-clear per
+ *	waiter, the dispatcher calls this right after waking
+ *	from `th8Win32EventWait` to avoid a spurious immediate
+ *	re-wake on the next poll.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -3381,7 +3387,8 @@ th8Win32EventReset(Th8_Interp *interp, void *pCtx, void *pEvent)
  *	`th8Win32EventWait` returns `-1` so the caller re-polls
  *	(the APC body has already run).  Mirror of
  *	`th8PosixEventWait` (which uses `pthread_kill`
- *	signal-interruption to achieve the same effect).
+ *	signal-interruption to achieve the same effect).  The
+ *	`interp` and `pCtx` parameters are ignored.
  *
  *	Timeout encoding: negative means `INFINITE`; zero is a
  *	poll; positive is the millisecond bound.  NULL
@@ -3389,14 +3396,15 @@ th8Win32EventReset(Th8_Interp *interp, void *pCtx, void *pEvent)
  *	timeout (1) to preserve the calling-thread invariants
  *	the dispatcher expects on error paths.
  *
- * Parameters:
- *	interp     -- ignored.
- *	pCtx       -- platform context (ignored).
- *	pEvent     -- HANDLE, or NULL.
- *	nTimeoutMs -- timeout in milliseconds; negative for
- *		infinite, zero for poll, positive for bounded.
+ * Why / How:
+ *	The dispatcher needs to tell an APC-driven wake (where
+ *	the APC body has already run and it must re-poll) apart
+ *	from an ordinary timeout; folding `WAIT_FAILED` into the
+ *	timeout return preserves that same "keep going" behavior
+ *	on the rare OS-level failure instead of introducing a
+ *	fourth outcome every caller would have to special-case.
  *
- * Returns:
+ * Results:
  *	0  -- event was signaled before the timeout.
  *	1  -- timeout reached, or `WAIT_FAILED`, or NULL event.
  *	-1 -- alertable wake (`WAIT_IO_COMPLETION`); APC ran.
@@ -5125,8 +5133,17 @@ th8Win32SameFile(
  *	Compose the path to a candidate trust anchor co-located
  *	with the currently-loaded TH8 module (`th8.dll`, or the
  *	host EXE for a statically-linked build): the directory
- *	containing the image, plus `\\root.key`.
+ *	containing the image, plus `\\root.key`.  `zBuf` receives
+ *	the NUL-terminated path on success and must be at least
+ *	`nBuf` bytes.
  *
+ *	Does NOT check whether the file actually exists --
+ *	callers use the returned path with `ub_ctx_add_ta_file`
+ *	or `th8Win32PathReadable` to determine that.
+ *
+ *	Gated on `TH8_ENABLE_UNBOUND`.
+ *
+ * Why / How:
  *	Uses `GetModuleHandleExA` with
  *	`GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS` on this
  *	function's own address so detection works regardless of
@@ -5135,18 +5152,7 @@ th8Win32SameFile(
  *	`UNCHANGED_REFCOUNT` ensures the probe does not pin the
  *	module against unload.
  *
- *	Does NOT check whether the file actually exists --
- *	callers use the returned path with `ub_ctx_add_ta_file`
- *	or `th8Win32PathReadable` to determine that.
- *
- *	Gated on `TH8_ENABLE_UNBOUND`.
- *
- * Parameters:
- *	zBuf -- output buffer; receives the NUL-terminated path
- *		on success.
- *	nBuf -- size of `zBuf` in bytes.
- *
- * Returns:
+ * Results:
  *	1 on success; 0 if `GetModuleHandleExA` failed,
  *	`GetModuleFileNameA` returned an error or full-buffer
  *	truncation indicator, the resolved path contained no
@@ -5199,18 +5205,16 @@ th8Win32GetModuleAnchorPath(char *zBuf, size_t nBuf)
  *	probe and avoids the side-effect of bumping the file's
  *	last-access timestamp.
  *
+ *	Gated on `TH8_ENABLE_UNBOUND`.
+ *
+ * Why / How:
  *	Returns 0 for directories, broken reparse points, or any
  *	other case where `GetFileAttributesA` reports
  *	`INVALID_FILE_ATTRIBUTES` or sets the `FILE_ATTRIBUTE_DIRECTORY`
  *	bit.  ACL-denied paths also return 0 (good -- the
  *	subsequent `CreateFileA` would have failed anyway).
  *
- *	Gated on `TH8_ENABLE_UNBOUND`.
- *
- * Parameters:
- *	zPath -- NUL-terminated path to test.
- *
- * Returns:
+ * Results:
  *	1 if `zPath` is an existing readable file; 0 otherwise.
  *
  * Side effects:
@@ -5237,6 +5241,9 @@ th8Win32PathReadable(const char *zPath)
  *	when `zRelPath` is NULL) and write the resulting path
  *	into `zBuf`.  Returns 1 on success.
  *
+ *	Gated on `TH8_ENABLE_UNBOUND`.
+ *
+ * Why / How:
  *	Used by `th8Win32GetManagedAnchorPath` to compose
  *	candidate `%APPDATA%`-relative paths, and by
  *	`th8Win32FindStaticAnchorPath` (via wrapper) to compose
@@ -5248,17 +5255,7 @@ th8Win32PathReadable(const char *zPath)
  *	check whether the resulting file exists; callers
  *	pair it with `th8Win32PathReadable`.
  *
- *	Gated on `TH8_ENABLE_UNBOUND`.
- *
- * Parameters:
- *	zBuf     -- output buffer.
- *	nBuf     -- size of `zBuf` in bytes.
- *	zEnvName -- environment-variable name to read.
- *	zRelPath -- relative-path suffix to append after the
- *		env-var value (e.g. `"\\Unbound\\root.key"`),
- *		or NULL to use the env-var value verbatim.
- *
- * Returns:
+ * Results:
  *	1 on success; 0 if the env var is unset or empty, or
  *	the composed path would exceed `nBuf`.
  *
@@ -5307,8 +5304,13 @@ th8Win32TryComposeEnvPath(
  *
  *	Each candidate is screened by `th8Win32PathReadable`
  *	before being returned, so the function never returns a
- *	path that the caller would fail to open.
+ *	path that the caller would fail to open.  `zBuf`
+ *	receives the NUL-terminated anchor path on success and
+ *	must be at least `nBuf` bytes.
  *
+ *	Gated on `TH8_ENABLE_UNBOUND`.
+ *
+ * Why / How:
  *	The module-directory candidate wins over every
  *	system-wide / user-wide path because an anchor sitting
  *	next to the library was clearly intended for that
@@ -5319,14 +5321,7 @@ th8Win32TryComposeEnvPath(
  *	Used as the SOURCE for the bootstrap-then-auto-roll
  *	flow in `th8Win32SetupManagedAnchor`.
  *
- *	Gated on `TH8_ENABLE_UNBOUND`.
- *
- * Parameters:
- *	zBuf -- output buffer; receives the NUL-terminated
- *		anchor path on success.
- *	nBuf -- size of `zBuf` in bytes.
- *
- * Returns:
+ * Results:
  *	1 if a readable static anchor was found; 0 if none of
  *	the candidates existed.
  *
@@ -5382,8 +5377,12 @@ th8Win32FindStaticAnchorPath(char *zBuf, size_t nBuf)
  *	of the trust anchor.  This is the file libunbound's
  *	`ub_ctx_add_ta_autr` reads on every resolve and writes
  *	state-machine updates to as the RFC 5011 hold-down
- *	timer advances.
+ *	timer advances.  `zBuf` receives the NUL-terminated path
+ *	on success and must be at least `nBuf` bytes.
  *
+ *	Gated on `TH8_ENABLE_UNBOUND`.
+ *
+ * Why / How:
  *	Directory selection follows the Windows per-user
  *	roaming-profile convention: `%APPDATA%\\TH8\\root.key`.
  *	`%APPDATA%` is set on every interactive logon (and on
@@ -5397,14 +5396,7 @@ th8Win32FindStaticAnchorPath(char *zBuf, size_t nBuf)
  *	function fails -- there is no usable per-user location
  *	and the caller must fall back to static-anchor mode.
  *
- *	Gated on `TH8_ENABLE_UNBOUND`.
- *
- * Parameters:
- *	zBuf -- output buffer; receives the NUL-terminated path
- *		on success.
- *	nBuf -- size of `zBuf` in bytes.
- *
- * Returns:
+ * Results:
  *	1 on success; 0 if `%APPDATA%` is unset or the composed
  *	path would exceed `nBuf`.
  *
@@ -5426,31 +5418,27 @@ th8Win32GetManagedAnchorPath(char *zBuf, size_t nBuf)
  *
  * th8Win32EnsureParentDir --
  *
- *	Ensure every parent directory of `zPath` exists.  Each
- *	intermediate component is created via `CreateDirectoryA`
- *	with `lpSecurityAttributes = NULL` so the new directory
- *	inherits the parent's ACL -- on the `%APPDATA%` chain
- *	this means the user-only ACL is propagated automatically
- *	and the managed copy is not exposed to other local users.
- *
- *	`ERROR_ALREADY_EXISTS` is benign (the directory exists);
- *	any other failure is fatal.
- *
- *	Equivalent to `mkdir -p $(dirname zPath)`.  Mutates a
- *	private copy of `zPath` rather than `zPath` itself so
- *	the caller's buffer is unchanged.
- *
- *	Accepts both `\\` and `/` as path separators so callers
- *	don't have to normalise.
+ *	Ensure every parent directory of `zPath` exists.  The
+ *	basename of `zPath` is ignored -- only its parent
+ *	components are created.  Equivalent to
+ *	`mkdir -p $(dirname zPath)`.
  *
  *	Gated on `TH8_ENABLE_UNBOUND`.
  *
- * Parameters:
- *	zPath -- NUL-terminated path whose parent directories
- *		should be created.  The basename of `zPath` is
- *		ignored.
+ * Why / How:
+ *	Each intermediate component is created via
+ *	`CreateDirectoryA` with `lpSecurityAttributes = NULL` so
+ *	the new directory inherits the parent's ACL -- on the
+ *	`%APPDATA%` chain this means the user-only ACL is
+ *	propagated automatically and the managed copy is not
+ *	exposed to other local users.  `ERROR_ALREADY_EXISTS` is
+ *	benign (the directory exists); any other failure is
+ *	fatal.  Mutates a private copy of `zPath` rather than
+ *	`zPath` itself so the caller's buffer is unchanged.
+ *	Accepts both `\\` and `/` as path separators so callers
+ *	don't have to normalise.
  *
- * Returns:
+ * Results:
  *	1 on success; 0 on `CreateDirectoryA` failure other than
  *	`ERROR_ALREADY_EXISTS`, or on `zPath` being too long
  *	for the scratch buffer.
@@ -5496,6 +5484,9 @@ th8Win32EnsureParentDir(const char *zPath)
  *	managed copy from a vendor-supplied static anchor on
  *	the first run after install.
  *
+ *	Gated on `TH8_ENABLE_UNBOUND`.
+ *
+ * Why / How:
  *	Routed through `CopyFileA(..., FAIL_IF_EXISTS = FALSE)`,
  *	which is atomic relative to other readers (the
  *	destination becomes visible only after the full payload
@@ -5511,14 +5502,7 @@ th8Win32EnsureParentDir(const char *zPath)
  *	to parse a truncated trust-anchor file and the next
  *	resolve would silently lose validation).
  *
- *	Gated on `TH8_ENABLE_UNBOUND`.
- *
- * Parameters:
- *	zSrc -- NUL-terminated source path (readable).
- *	zDst -- NUL-terminated destination path (will be
- *		created or replaced).
- *
- * Returns:
+ * Results:
  *	1 on success; 0 if `CopyFileA` failed.
  *
  * Side effects:
@@ -5538,6 +5522,65 @@ th8Win32CopyFileContents(const char *zSrc, const char *zDst)
 /*
  *----------------------------------------------------------------------
  *
+ * th8Win32ReadFile --
+ *
+ *	Read up to `nBuf` bytes of `zPath` into the caller-provided buffer
+ *	`zBuf`, setting `*pnRead` to the byte count (0 on failure).  A RAW
+ *	read (CreateFileA + ReadFile) that never touches the signed-only
+ *	script policy: the shared unbound driver uses it to read a trust
+ *	anchor and its `.b64sig` for signature verification, and routing
+ *	through the policy would recurse.
+ *
+ *	Gated on `TH8_ENABLE_UNBOUND`.
+ *
+ * Why / How:
+ *	Opens with `CreateFileA` / `GENERIC_READ` / `FILE_SHARE_READ`,
+ *	queries the file size via `GetFileSize`, and refuses to proceed if
+ *	the size exceeds `nBuf` -- there is no partial-read fallback
+ *	because a truncated anchor or signature file must never reach the
+ *	verification step.  `*pnRead` is zeroed up front so a caller who
+ *	ignores the return value still observes zero bytes on failure.
+ *
+ * Results:
+ *	1 on success; 0 on open/read failure OR if the file does not fit in
+ *	nBuf (no partial read -- a truncated anchor or signature must never
+ *	reach verification).
+ *
+ * Side effects:
+ *	Reads from the filesystem.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8Win32ReadFile(const char *zPath, char *zBuf, size_t nBuf, size_t *pnRead)
+{
+    HANDLE h;
+    DWORD nSize;
+    DWORD nRead = 0;
+
+    if (pnRead) *pnRead = 0;
+    if (!zPath || !zBuf || nBuf == 0) return 0;
+    h = CreateFileA(
+        zPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    nSize = GetFileSize(h, NULL);
+    if (nSize == INVALID_FILE_SIZE || (size_t)nSize > nBuf) {
+	CloseHandle(h);
+	return 0; /* error, or too large -- no partial read */
+    }
+    if (!ReadFile(h, zBuf, nSize, &nRead, NULL) || nRead != nSize) {
+	CloseHandle(h);
+	return 0;
+    }
+    CloseHandle(h);
+    if (pnRead) *pnRead = (size_t)nRead;
+    return 1;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8Win32UnboundOps --
  *
  *	Static `Th8_UnboundOps` instance handed to every call
@@ -5550,9 +5593,13 @@ th8Win32CopyFileContents(const char *zSrc, const char *zDst)
  *----------------------------------------------------------------------
  */
 static const Th8_UnboundOps th8Win32UnboundOps = {
-    th8Win32FindStaticAnchorPath, th8Win32GetManagedAnchorPath,
-    th8Win32PathReadable,         th8Win32EnsureParentDir,
+    th8Win32FindStaticAnchorPath,
+    th8Win32GetManagedAnchorPath,
+    th8Win32PathReadable,
+    th8Win32EnsureParentDir,
     th8Win32CopyFileContents,
+    th8Win32GetModuleAnchorPath,
+    th8Win32ReadFile,
 };
 
 /*
@@ -5567,21 +5614,21 @@ static const Th8_UnboundOps th8Win32UnboundOps = {
  *	in `src/th8_unbound.c`.  This function exists only to
  *	bind the platform-callback signature to the shared
  *	driver and to supply the Win32 `Th8_UnboundOps` vtable.
+ *	`zName`/`nName` name the host to resolve, `eType` is the
+ *	libunbound `LDNS_RR_TYPE_*` record type, and `*ppResult`
+ *	receives the result pointer on success (NULL on failure).
  *
  *	Gated on `TH8_ENABLE_UNBOUND`.
  *
- * Parameters:
- *	interp   -- live interpreter (used for allocation in
- *		the shared driver).
- *	pCtx     -- unused platform context.
- *	zName    -- hostname.
- *	nName    -- hostname length.
- *	eType    -- DNS record type (libunbound
- *		`LDNS_RR_TYPE_*`).
- *	ppResult -- output: result pointer on success;
- *		NULL on failure.
+ * Why / How:
+ *	Forwards `interp`, `zName`, `nName`, `eType`, and
+ *	`ppResult` directly to `th8UnboundResolve`, passing
+ *	`th8Win32UnboundOps` (the Win32 implementations of the
+ *	anchor-path and file-I/O primitives defined above) as
+ *	the platform-ops vtable; `pCtx` is unused because the
+ *	shared driver carries no Win32-specific context.
  *
- * Returns:
+ * Results:
  *	Whatever `th8UnboundResolve` returns: `TH8_OK` on
  *	success; `TH8_ERROR` on any failure.
  *
@@ -5614,17 +5661,18 @@ th8Win32DnsResolve(
  *	side adapter that forwards to the shared
  *	`th8UnboundResolveFree`.  The teardown logic does not
  *	depend on any Win32-specific behaviour, so no vtable
- *	is needed here.
+ *	is needed here.  `pResult` is the value returned by
+ *	`th8Win32DnsResolve`, or NULL.
  *
  *	Gated on `TH8_ENABLE_UNBOUND`.
  *
- * Parameters:
- *	interp  -- live interpreter (used for `Th8_Free`).
- *	pCtx    -- unused platform context.
- *	pResult -- result returned by `th8Win32DnsResolve`,
- *		or NULL.
+ * Why / How:
+ *	Simply calls `th8UnboundResolveFree(interp, pResult)`;
+ *	`pCtx` is unused since freeing a `Th8_DnsResult`
+ *	requires only the interpreter's allocator, not any
+ *	platform-ops vtable.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:

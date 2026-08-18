@@ -546,6 +546,7 @@ typedef struct Th8InternalStubsTable {
         int timeoutMs,
         int maxDisagreeSec,
         int attempts,
+        int bRequireSecure,
         th8_int64_t *pEpochSec);
     int (*th8_ProtectedAlloc)(
         Th8_Interp *interp,
@@ -917,6 +918,13 @@ typedef struct Th8InternalStubsTable {
         Th8_RsaKey *pKey,
         unsigned char *pSavedBlob,
         size_t nSaved);
+    int (*th8_RsaSignRawBlock)(
+        Th8_Interp *interp,
+        const Th8_RsaKey *pKey,
+        const unsigned char *zBlock,
+        size_t nBlock,
+        unsigned char **ppSig,
+        size_t *pnSig);
     int (*th8_NtpValidateResponse)(
         Th8_Interp *interp,
         const void *respv,
@@ -951,7 +959,7 @@ typedef struct Th8InternalStubsTable {
  */
 
 #define TH8_INTERNAL_STUBS_MAGIC   (0x54483849)  /* "TH8I" */
-#define TH8_INTERNAL_STUBS_VERSION (55)
+#define TH8_INTERNAL_STUBS_VERSION (56)
 
 /*
  * Optional macro-redirection for plugins.  When
@@ -1142,6 +1150,7 @@ extern const Th8InternalStubsTable *th8InternalStubsPtr;
 	(th8InternalStubsPtr->th8_TestRsaKeyClearPubBlob)
 #    define th8TestRsaKeyRestorePubBlob                                      \
 	(th8InternalStubsPtr->th8_TestRsaKeyRestorePubBlob)
+#    define th8RsaSignRawBlock (th8InternalStubsPtr->th8_RsaSignRawBlock)
 #    define th8NtpValidateResponse                                           \
 	(th8InternalStubsPtr->th8_NtpValidateResponse)
 #    define th8FinalizeSensitiveResult                                       \

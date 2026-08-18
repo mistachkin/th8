@@ -174,6 +174,7 @@ proc main {argv} {
     Th8_PolicyPreloadKey           {defined(TH8_ENABLE_CRYPTOGRAPHY)}
     Th8_PolicyGetKeyTokens         {defined(TH8_ENABLE_CRYPTOGRAPHY)}
     Th8_GetEmbeddedKeyRoot         {defined(TH8_ENABLE_CRYPTOGRAPHY)}
+    Th8_GetEmbeddedKeyring         {defined(TH8_ENABLE_CRYPTOGRAPHY)}
     Th8_GetEmbeddedKey0            {defined(TH8_ENABLE_CRYPTOGRAPHY)}
     Th8_GetEmbeddedKeyTest         {defined(TH8_ENABLE_CRYPTOGRAPHY) && defined(TH8_ENABLE_TEST_KEY)}
     Th8_GetPublicKeyTest           {defined(TH8_ENABLE_CRYPTOGRAPHY) && defined(TH8_ENABLE_TEST_KEY)}

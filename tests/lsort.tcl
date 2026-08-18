@@ -230,5 +230,91 @@ runTest {test lsort-8.4 {
 } -result {banana}}
 
 ###############################################################################
+#
+# Section 9 -- lsort: TH8K-017 robustness regressions
+#
+###############################################################################
+
+runTest {test lsort-9.1 {
+  R-12054-28168: lsort -dictionary compares digit runs by magnitude
+                 without integer overflow (runs wider than a 32-bit int
+                 must still order correctly)
+} -body {
+  #
+  # "4294967296" (2^32) and "10000000000" (10^10) both exceed the
+  # signed 32-bit range that the old num=num*10+digit accumulator
+  # overflowed, which produced wrong orderings.  Magnitude order is
+  # 5 < 4294967296 < 10000000000.
+  #
+  lsort -dictionary {a10000000000 a5 a4294967296}
+} -result {a5 a4294967296 a10000000000}}
+
+###############################################################################
+
+runTest {test lsort-9.2 {
+  R-12054-28168: lsort -dictionary numerically-equal runs order by
+                 length (leading zeros as tiebreak)
+} -body {
+  lsort -dictionary {x007 x7 x07}
+} -result {x7 x07 x007}}
+
+###############################################################################
+
+runTest {test lsort-9.2.1 {
+  R-12054-28168: lsort -dictionary all-zero digit runs (every digit is
+                 a leading zero) order by length
+} -body {
+  lsort -dictionary {x0 x000 x00}
+} -result {x0 x00 x000}}
+
+###############################################################################
+
+runTest {test lsort-9.3 {
+  R-34299-16437: lsort -index reports an error (rather than silently
+                 ignoring the split) when a list element is not a
+                 well-formed sub-list -- unmatched open quote
+} -body {
+  catch {lsort -index 0 [list {a b} "\""]}
+} -result {1}}
+
+###############################################################################
+
+runTest {test lsort-9.4 {
+  R-34299-16437: lsort -index reports an error on a malformed sub-list
+                 -- unmatched open brace
+} -body {
+  catch {lsort -index 0 {{a b} \{}}
+} -result {1}}
+
+###############################################################################
+
+runTest {test lsort-9.5 {
+  R-53425-17573: lsort -integer sorts a large reversed list correctly
+                 (exercises the O(n log n) merge across width levels)
+} -setup {
+  set input {}
+  for {set i 200} {$i > 0} {incr i -1} {
+    lappend input $i
+  }
+  set want {}
+  for {set i 1} {$i <= 200} {incr i} {
+    lappend want $i
+  }
+} -body {
+  expr {[lsort -integer $input] eq $want}
+} -cleanup {
+  unset -nocomplain input want i
+} -result {1}}
+
+###############################################################################
+
+runTest {test lsort-9.6 {
+  R-39269-21617: lsort -decreasing with a -command comparator applies
+                 the direction flip safely and stably
+} -body {
+  lsort -decreasing -command {apply {{a b} {expr {$a - $b}}}} {3 1 2 3 1}
+} -result {3 3 2 1 1}}
+
+###############################################################################
 
 source tests/epilogue.tcl

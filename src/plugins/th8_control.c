@@ -478,6 +478,17 @@ th8ParseReturnCode(Th8_Interp *interp, const char *z, size_t n, int *piCode)
  *	propagation mechanism so the caller's frame observes
  *	the override.
  *
+ * Why / How:
+ *	Walks the argv option/value pairs (`-code`, `-level`,
+ *	`-errorinfo`, `-errorcode`), capturing the -errorinfo /
+ *	-errorcode values without applying them yet: per
+ *	R-03654-57637 they are only committed when the final code is
+ *	TH8_ERROR, so a successful `[return]` that happens to pass
+ *	them does not clobber ::errorInfo / ::errorCode.  The trailing
+ *	non-option word becomes the interpreter result, and the
+ *	selected code is returned to unwind the requested number of
+ *	frames.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	ctx    -- unused command context.
@@ -486,7 +497,7 @@ th8ParseReturnCode(Th8_Interp *interp, const char *z, size_t n, int *piCode)
  *		the option/value suffix.
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Results:
  *	The selected return code (default `TH8_RETURN`); the
  *	interpreter result is the trailing value (or empty).
  *	`TH8_ERROR` on bad option syntax (interpreter result:
@@ -1095,6 +1106,29 @@ oom:
  *	optional case folding.  For regexp mode, builds and evals a
  *	[regexp] command via Th8_ListAppend (proper list quoting).
  *
+ * Why / How:
+ *	Branches on `useGlob`: 2 = regexp (assembles and evals a
+ *	`regexp ?-nocase? pat str` list so the real regexp engine is
+ *	reused rather than re-implemented), 1 = glob (delegates to
+ *	Th8_GlobMatch, ASCII-lowercasing both operands first when
+ *	-nocase), and 0 = exact (length check then Th8_Memcmp, or a
+ *	byte-by-byte case-folded compare).  The byte-folding loops
+ *	poll Th8_Ready every 4096 bytes (TH8K-009) so an attacker
+ *	supplying huge -nocase inputs can still be cancelled; a trip
+ *	is reported through `*pReadyRc` while the int return stays the
+ *	match boolean.
+ *
+ * Results:
+ *	1 if the pattern matches, 0 otherwise (0 is also returned on
+ *	an OOM during -nocase folding or on a cancel/step-limit trip).
+ *	When `pReadyRc` is non-NULL it is set to TH8_OK, or to
+ *	TH8_ERROR if Th8_Ready tripped mid-compare.
+ *
+ * Side effects:
+ *	In regexp mode, evaluates a `regexp` command (which sets the
+ *	interpreter result).  Temporarily allocates and frees
+ *	lowercase copies of the operands in -nocase glob mode.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1106,8 +1140,13 @@ th8SwitchMatch(
     const char *zStr,
     size_t nStr,
     int useGlob,
-    int noCase)
+    int noCase,
+    int *pReadyRc) /* OUT: TH8_OK, or TH8_ERROR if cancel/step-limit
+			 * tripped during a -nocase byte fold/compare
+			 * (TH8K-009).  The int return value stays the
+			 * match boolean. */
 {
+    if (pReadyRc) *pReadyRc = TH8_OK;
     if (useGlob == 2) {
 	/* Regexp mode: build [regexp ?-nocase? pattern string] */
 	char *zCmd = 0;
@@ -1153,12 +1192,31 @@ th8SwitchMatch(
 		return 0;
 	    }
 	    for (i = 0; i < nPat; i++) {
-		unsigned char c = (unsigned char)zPat[i];
+		unsigned char c;
+		/* TH8K-009: poll every 4096 bytes of the fold. */
+		if ((i & 0xFFF) == 0) {
+		    if (Th8_Ready(interp) != TH8_OK) {
+			Th8_Free(interp, zLPat);
+			Th8_Free(interp, zLStr);
+			if (pReadyRc) *pReadyRc = TH8_ERROR;
+			return 0;
+		    }
+		}
+		c = (unsigned char)zPat[i];
 		zLPat[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : (char)c;
 	    }
 	    zLPat[nPat] = '\0';
 	    for (i = 0; i < nStr; i++) {
-		unsigned char c = (unsigned char)zStr[i];
+		unsigned char c;
+		if ((i & 0xFFF) == 0) {
+		    if (Th8_Ready(interp) != TH8_OK) {
+			Th8_Free(interp, zLPat);
+			Th8_Free(interp, zLStr);
+			if (pReadyRc) *pReadyRc = TH8_ERROR;
+			return 0;
+		    }
+		}
+		c = (unsigned char)zStr[i];
 		zLStr[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : (char)c;
 	    }
 	    zLStr[nStr] = '\0';
@@ -1175,8 +1233,16 @@ th8SwitchMatch(
     if (noCase) {
 	size_t j;
 	for (j = 0; j < nPat; j++) {
-	    unsigned char a = (unsigned char)zPat[j];
-	    unsigned char b = (unsigned char)zStr[j];
+	    unsigned char a;
+	    unsigned char b;
+	    if ((j & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) {
+		    if (pReadyRc) *pReadyRc = TH8_ERROR;
+		    return 0;
+		}
+	    }
+	    a = (unsigned char)zPat[j];
+	    b = (unsigned char)zStr[j];
 	    if (a >= 'A' && a <= 'Z') a += 32;
 	    if (b >= 'A' && b <= 'Z') b += 32;
 	    if (a != b) return 0;
@@ -1327,12 +1393,21 @@ switch_command(
 	 */
 
 	for (k = 0; k + 1 < nPairs; k += 2) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		Th8_Free(interp, azPairs);
+		return TH8_ERROR;
+	    }
 	    if (th8StrEq(interp, azPairs[k], anPairs[k], "default")) {
 		matched = 1;
 	    } else {
+		int readyRc;
 		matched = th8SwitchMatch(
 		    interp, azPairs[k], TH8_LEN(anPairs[k]), zString,
-		    TH8_LEN(nString), useGlob, noCase);
+		    TH8_LEN(nString), useGlob, noCase, &readyRc);
+		if (readyRc != TH8_OK) {
+		    Th8_Free(interp, azPairs);
+		    return TH8_ERROR;
+		}
 	    }
 	    if (matched) {
 		/* Fall-through: skip "-" bodies */
@@ -1365,9 +1440,13 @@ switch_command(
 	if (th8StrEq(interp, argv[i], argl[i], "default")) {
 	    matched = 1;
 	} else {
+	    int readyRc;
 	    matched = th8SwitchMatch(
 	        interp, argv[i], TH8_LEN(argl[i]), zString, TH8_LEN(nString),
-	        useGlob, noCase);
+	        useGlob, noCase, &readyRc);
+	    if (readyRc != TH8_OK) {
+		return TH8_ERROR;
+	    }
 	}
 
 	if (matched) {
@@ -1542,7 +1621,96 @@ subst_command(
 
 
 /*
- * try_post_finally -- NRE callback after the finally script completes.
+ *----------------------------------------------------------------------
+ *
+ * try_return_saved --
+ *
+ *	Restore the saved try-script result/rc into the interpreter and
+ *	tear down the TryState.  Shared by every [try] exit path that
+ *	returns the try script's own result: the exit-flag and
+ *	stack/suspension skip paths in try_post_try, and the
+ *	finally-succeeded path in try_post_finally.
+ *
+ * Why / How:
+ *	Copies pState->zTryResult back into the interpreter result via
+ *	Th8_SetResult.  That copy can fail under memory pressure, and a
+ *	`void`-style ignore would leave the interpreter with an empty or
+ *	stale result while still reporting the try's success code -- a
+ *	silent loss of the result (TH8K-020).  So the return is checked:
+ *	on failure it reports "out of memory" (via Th8_SetResultStatic,
+ *	which stores a static pointer and cannot itself allocate) and
+ *	returns TH8_ERROR.  pState and its owned result are freed on
+ *	every path.
+ *
+ * Results:
+ *	The saved try return code (pState->tryRc) on success; TH8_ERROR
+ *	if the saved result could not be restored (out of memory).
+ *
+ * Side effects:
+ *	Sets the interpreter result; frees pState->zTryResult and pState.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+try_return_saved(Th8_Interp *interp, TryState *pState)
+{
+    int rc = pState->tryRc;
+    int ok =
+        (Th8_SetResult(interp, pState->zTryResult, pState->nTryResult) ==
+         TH8_OK);
+
+    Th8_Free(interp, pState->zTryResult);
+    Th8_Free(interp, pState);
+    if (!ok) {
+	Th8_SetResultStatic(interp, "out of memory", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    return rc;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * try_post_finally --
+ *
+ *	NRE callback invoked after the finally script has finished
+ *	evaluating.  It records the finally outcome, restores the
+ *	state that try_post_try altered, and chooses the final
+ *	result/return code for the whole [try].
+ *
+ * Why / How:
+ *	Stashes the finally result/rc in the interpreter's dedicated
+ *	finally fields (th8SetFinallyState) so introspection can see
+ *	them, then restores the allocation counter to the pre-finally
+ *	value PLUS whatever the finally block left live (the counter
+ *	was reset to 0 for the finally block, so its current value is
+ *	exactly the finally block's net residue).  This gives the
+ *	finally block a fresh budget DURING execution (peak <= 2x the
+ *	limit) while still charging its persistent allocations against
+ *	the interpreter's cap afterward -- otherwise a finally block
+ *	could retain unbounded memory that the counter never sees, a
+ *	silent bypass of Th8_SetAllocLimit (TH8K-023/-018).  It then
+ *	restores the saved cancel state.  Precedence follows Eagle
+ *	semantics:
+ *	if finally succeeded, the try script's saved result/rc win; if
+ *	finally failed, its own result/rc (already in the interp) win.
+ *	Finally it frees the saved try result and the TryState.
+ *
+ * Results:
+ *	The try script's saved return code when the finally block
+ *	succeeded; otherwise the finally block's own `rc`.  TH8_ERROR if
+ *	restoring the saved try result fails (out of memory), via
+ *	try_return_saved.
+ *
+ * Side effects:
+ *	Sets the interpreter result and finally-state fields; restores
+ *	the allocation counter (pre-finally value plus the finally
+ *	block's live residue) and cancel state; frees pState->zTryResult
+ *	and pState.
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -1551,6 +1719,8 @@ try_post_finally(Th8_Interp *interp, void *pData[], int rc)
     TryState *pState = (TryState *)pData[0];
     const char *zFinallyResult;
     size_t nFinallyResult;
+    size_t nFinallyLive;
+    size_t nRestored;
 
     /*
      * Store the finally result/rc in the dedicated interp fields.
@@ -1559,11 +1729,23 @@ try_post_finally(Th8_Interp *interp, void *pData[], int rc)
     th8SetFinallyState(interp, zFinallyResult, nFinallyResult, rc);
 
     /*
-     * Restore the pre-finally allocation counter.  The finally
-     * block's allocations are allowed to persist, but the counter
-     * is reset so it doesn't permanently consume the budget.
+     * Restore the allocation counter.  try_post_try reset it to 0
+     * before the finally block, so its current value is exactly the
+     * bytes the finally block left LIVE.  Charge those against the
+     * pre-finally total so persistent finally allocations still count
+     * toward the cap (TH8K-023/-018): discarding them would let a
+     * finally block retain memory the counter never sees, silently
+     * bypassing Th8_SetAllocLimit.  On the (astronomical) overflow of
+     * saved + residue, saturate to poison the counter rather than wrap
+     * past the ceiling -- mirrors th8AccountAlloc.
      */
-    th8SetAllocBytes(interp, pState->nSavedAllocBytes);
+    nFinallyLive = Th8_GetAllocBytes(interp);
+    if (Th8_SafeAdd(
+            interp, pState->nSavedAllocBytes, nFinallyLive, &nRestored) !=
+        TH8_OK) {
+	nRestored = (size_t)-1;
+    }
+    th8SetAllocBytes(interp, nRestored);
 
     /*
      * Restore the cancel state.
@@ -1575,10 +1757,10 @@ try_post_finally(Th8_Interp *interp, void *pData[], int rc)
      */
     if (rc == TH8_OK) {
 	/*
-	 * Finally succeeded: return the try script's result/rc.
+	 * Finally succeeded: restore and return the try script's result/rc
+	 * (reporting OOM rather than silently losing it -- TH8K-020).
 	 */
-	Th8_SetResult(interp, pState->zTryResult, pState->nTryResult);
-	rc = pState->tryRc;
+	return try_return_saved(interp, pState);
     }
     /* else: finally failed -- its result/rc is already in the interp. */
 
@@ -1589,7 +1771,47 @@ try_post_finally(Th8_Interp *interp, void *pData[], int rc)
 
 
 /*
- * try_post_try -- NRE callback after the try script completes.
+ *----------------------------------------------------------------------
+ *
+ * try_post_try --
+ *
+ *	NRE callback invoked after the try script has finished
+ *	evaluating.  It captures the try outcome and, when a finally
+ *	clause is present and permitted, sets up and launches the
+ *	finally block.
+ *
+ * Why / How:
+ *	Saves the try script's rc into pState.  With no finally clause
+ *	the try result already sits in the interpreter, so it just
+ *	frees pState and returns the try rc directly -- no copy is made
+ *	(copying would leak on this path, and an OOM copy could clobber
+ *	a good result).  Otherwise a finally block follows and will
+ *	overwrite the interpreter result, so it first preserves a copy
+ *	of the try result (Th8_Strdup); on OOM it reports the
+ *	allocation failure rather than silently returning an empty or
+ *	stale result (TH8K-020).  It then enforces the security rules
+ *	before running finally: skip finally if the exit flag is set,
+ *	and skip it if a stack or suspension Th8_Ready check trips
+ *	(cancellation deliberately excluded -- finally must run to
+ *	clean up).  When cleared to proceed it saves/clears the cancel
+ *	state and grants the finally block a fresh allocation budget
+ *	(counter reset to 0, so total peak is at most 2x the limit),
+ *	then pushes try_post_finally and evaluates the finally script.
+ *
+ * Results:
+ *	The try script's return code when finally is skipped or
+ *	absent; otherwise the return code of the Th8_NREval that
+ *	launches the finally block (resolved later by
+ *	try_post_finally).  TH8_ERROR if the try result cannot be
+ *	copied for the finally block (out of memory).
+ *
+ * Side effects:
+ *	When a finally clause is present, allocates a copy of the try
+ *	result (or reports out of memory); may free pState; sets the
+ *	interpreter result; saves cancel state and resets the
+ *	allocation counter; registers the try_post_finally callback.
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -1600,15 +1822,16 @@ try_post_try(Th8_Interp *interp, void *pData[], int rc)
     size_t nResult;
 
     /*
-     * Save the try script's result and return code.
+     * Save the try script's return code.
      */
     zResult = Th8_GetResult(interp, &nResult);
     pState->tryRc = rc;
-    pState->zTryResult = Th8_Strdup(interp, zResult, nResult);
-    pState->nTryResult = nResult;
 
     /*
-     * If there is no finally clause, we're done.
+     * If there is no finally clause, the try result already sits in
+     * the interpreter -- return it directly.  Do NOT copy it here: the
+     * copy would leak on this path, and an OOM copy could clobber a
+     * good result.
      */
     if (!pState->zFinally) {
 	Th8_Free(interp, pState);
@@ -1616,14 +1839,24 @@ try_post_try(Th8_Interp *interp, void *pData[], int rc)
     }
 
     /*
+     * A finally clause follows and will overwrite the interpreter
+     * result, so preserve a copy of the try result across it.  On OOM
+     * the result cannot be saved; report the allocation failure rather
+     * than silently returning an empty or stale result (TH8K-020).
+     */
+    pState->zTryResult = Th8_Strdup(interp, zResult, nResult);
+    if (!pState->zTryResult) {
+	Th8_Free(interp, pState);
+	Th8_SetResultStatic(interp, "out of memory", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    pState->nTryResult = nResult;
+
+    /*
      * Check: do NOT evaluate finally if exit flag is set.
      */
     if (Th8_IsExited(interp)) {
-	Th8_SetResult(interp, pState->zTryResult, pState->nTryResult);
-	rc = pState->tryRc;
-	Th8_Free(interp, pState->zTryResult);
-	Th8_Free(interp, pState);
-	return rc;
+	return try_return_saved(interp, pState);
     }
 
     /*
@@ -1672,11 +1905,7 @@ try_post_try(Th8_Interp *interp, void *pData[], int rc)
 	    triggerFinallySkip = 1;
 	}
 	if (triggerFinallySkip) {
-	    Th8_SetResult(interp, pState->zTryResult, pState->nTryResult);
-	    rc = pState->tryRc;
-	    Th8_Free(interp, pState->zTryResult);
-	    Th8_Free(interp, pState);
-	    return rc;
+	    return try_return_saved(interp, pState);
 	}
     }
 
@@ -1703,7 +1932,36 @@ try_post_try(Th8_Interp *interp, void *pData[], int rc)
 
 
 /*
- * try_command -- entry point.
+ *----------------------------------------------------------------------
+ *
+ * try_command --
+ *
+ *	Implements the Eagle-style `[try script ?finally script?]`
+ *	command -- the entry point of the three-phase NRE chain
+ *	(try_command -> try_post_try -> try_post_finally).
+ *
+ * Why / How:
+ *	Validates the argument count (2 or 4) and, for the 4-arg
+ *	form, that argv[2] is exactly the literal "finally".
+ *	Allocates and initializes a TryState carrying the finally
+ *	script (or NULL) and the accumulators the later callbacks
+ *	fill in, then registers try_post_try and hands the try
+ *	script to Th8_NREval.  Doing the real work in NRE callbacks
+ *	keeps [try] non-recursive so deeply nested scripts do not
+ *	consume C stack.
+ *
+ * Results:
+ *	TH8_OK / whatever code the try (and finally) evaluation
+ *	ultimately yields via the NRE chain; TH8_ERROR on a wrong
+ *	argument count, a missing "finally" keyword, or a TryState
+ *	allocation failure (interpreter result: diagnostic).
+ *
+ * Side effects:
+ *	Allocates a TryState; registers the try_post_try NRE
+ *	callback; evaluates the try script (which may set the
+ *	interpreter result and have arbitrary script side effects).
+ *
+ *----------------------------------------------------------------------
  */
 
 static int

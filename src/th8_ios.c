@@ -74,15 +74,13 @@ static os_log_t th8IosLogHandle = NULL;
  *	`os_log_create` cost in iOS apps that never trigger a
  *	trace.
  *
+ * Why / How:
  *	Apple's documentation states that `os_log_t` handles
  *	are intentionally leaked process-wide; there is no
  *	matching destroy step, which is why this file owns no
  *	teardown function.
  *
- * Parameters:
- *	(none)
- *
- * Returns:
+ * Results:
  *	A non-NULL `os_log_t` for the TH8 subsystem.
  *
  * Side effects:
@@ -118,6 +116,15 @@ th8IosGetLog(void)
  *
  *	Format string is "%{public}s" so the message text isn't redacted
  *	by Apple's privacy-preserving logging defaults.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Writes zMsg to the unified logging system at OS_LOG_TYPE_DEBUG
+ *	severity via `th8IosGetLog` (which may create the process-global
+ *	log handle on first use).  Produces no output when zMsg is NULL
+ *	or empty.
  *
  *----------------------------------------------------------------------
  */
@@ -158,6 +165,15 @@ th8IosEmitTrace(Th8_Interp *interp, void *pCtx, const char *zMsg)
  *	Messages longer than 1023 bytes are truncated; the truncation
  *	ASCII marker "..." is appended in that case so callers can
  *	see when they've exceeded the cap.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Emits either a fixed "no message" string (zMsg NULL) or the
+ *	NUL-terminated, possibly-truncated copy of zMsg to the unified
+ *	logging system at OS_LOG_TYPE_FAULT severity via `th8IosGetLog`
+ *	(which may create the process-global log handle on first use).
  *
  *----------------------------------------------------------------------
  */
@@ -205,6 +221,14 @@ th8IosPanic(Th8_Interp *interp, void *pCtx, const char *zMsg, size_t nMsg)
  *	open, and works inside the iOS sandbox where /dev/urandom may
  *	be reachable but is not the recommended path.  Cannot fail in
  *	a way that matters at this scale, so we always return TH8_OK.
+ *
+ * Results:
+ *	TH8_OK on success, including the nByte == 0 no-op case;
+ *	TH8_ERROR if pBuf is NULL while nByte is nonzero.
+ *
+ * Side effects:
+ *	Fills the first nByte bytes of *pBuf with random data drawn
+ *	from arc4random_buf.  No effect when nByte is 0.
  *
  *----------------------------------------------------------------------
  */
@@ -373,10 +397,19 @@ static Th8_Platform th8IosPlatformData = {
  *	with Th8_GetMacOSPlatform(), Th8_GetPosixPlatform(), and
  *	Th8_GetLibcPlatform() before passing to Th8_CreateInterp.
  *
+ * Why / How:
  *	The macOS layer must be merged before the POSIX layer so the
  *	private malloc zone wins over POSIX's NULL slots; both must
  *	come after the iOS layer so iOS's xPanic / xEmitTrace /
  *	xRandomBytes win over the lower layers.
+ *
+ * Results:
+ *	A pointer to the process-wide static th8IosPlatformData table.
+ *	Never NULL; the pointer remains valid for the life of the
+ *	process.
+ *
+ * Side effects:
+ *	None.
  *
  *----------------------------------------------------------------------
  */

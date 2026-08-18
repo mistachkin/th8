@@ -92,11 +92,8 @@ runTest {test fmtspec-2.2 {
 ###############################################################################
 
 runTest {test fmtspec-2.3 {
-  scan with multi-character width specifier exercises
-  th8_formatting.c:871 (zFmt[iFmt] <= '9') beyond the
-  first digit of the width spec.  TH8's scan does not
-  enforce the width-truncate semantic on %d, but the
-  parse path still runs.
+  scan honors a multi-character field width: %5d reads at most
+  five input characters, so "123456" yields 12345 (Tcl 8.6 parity).
 } -constraints {
     th8
 } -body {
@@ -104,7 +101,7 @@ runTest {test fmtspec-2.3 {
       [scan "12345"  "%5d"] \
       [scan "123456" "%5d"] \
       [scan "12"     "%5d"]
-} -result {12345 123456 12}}
+} -result {12345 12345 12}}
 
 ###############################################################################
 
@@ -143,11 +140,9 @@ runTest {test fmtspec-3.2 {
 ###############################################################################
 
 runTest {test fmtspec-3.3 {
-  scan with format containing more conversion specifiers
-  than the input has tokens drives the C2-pair at
-  th8_formatting.c:843 (iStr > nStr) -- the loop exits
-  via the second condition when the input is exhausted
-  before the format is.
+  scan in list mode returns one element per non-suppressed specifier,
+  padding unmatched trailing specifiers with empty strings, except
+  that an empty input yields the empty list (Tcl 8.6 parity).
 } -constraints {
     th8
 } -body {
@@ -155,7 +150,7 @@ runTest {test fmtspec-3.3 {
       [scan "abc" "%s %s"] \
       [scan "1" "%d %d"] \
       [scan "" "%s"]
-} -result {abc 1 {{}}}}
+} -result {{abc {}} {1 {}} {}}}
 
 ###############################################################################
 

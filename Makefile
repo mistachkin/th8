@@ -33,8 +33,8 @@
         genstubs audit audit-reqs audit-format regex_vendor bestline_vendor tommath_vendor mimalloc_vendor vendoring pkg-deps-core pkg-deps-static pkg-deps-test apt-deps apt-deps-static apt-deps-test clean install debug memdebug FORCE \
         th8test tcltest eagletest \
         amalgamation amalgamation-test \
-        asan ubsan msan sanitize asan-test asan-test-macos \
-        sanitize-test sanitize-test-macos valgrind check-crt check-crt-debug \
+        asan ubsan msan tsan tsan-cancel sanitize asan-test asan-test-macos \
+        sanitize-test sanitize-test-macos valgrind valgrind-smoke check-crt check-crt-debug \
         coverage coverage-report coverage-branches coverage-clean \
         mcdc mcdc-report mcdc-uncovered mcdc-clean check-mcdc check-mcdc-doc \
         check-cmdindex \
@@ -44,7 +44,8 @@
         afl-run-format afl-run-harpy afl-run-snk \
         afl-status afl-stop \
         profile-shell profile profile-mimalloc-shell profile-mimalloc \
-        check-deps check-headers check-amal check-tcl86 check-eagle \
+        check-deps check-headers check-amal check-stubguards check-amal-notestkey check-tcl86 check-eagle \
+        check-polls check-loops check-lifecycle \
         manlint
 
 #
@@ -198,7 +199,12 @@ else ifeq ($(UNAME_S),Linux)
   SHLIB_EXT    = .so
   SHLIB_FLAGS  = -shared -Wl,-soname,libth8$(SHLIB_EXT)
   PLAT_SRC = th8_posix.c
-  PLAT_LIBS = -ldl -lpthread
+  # -lresolv: th8NtpResolveInsecure (harpy/th8_time.c) calls res_ninit/res_nquery
+  # under a __GLIBC__ guard for its DNSSEC AD-bit check.  glibc < 2.34 keeps
+  # those in libresolv; >= 2.34 folds them into libc (the link is then a
+  # harmless empty stub).  musl ships an empty libresolv stub too, so this is
+  # safe across Linux libcs (the resolver code itself only compiles on glibc).
+  PLAT_LIBS = -ldl -lpthread -lresolv
 else ifneq (,$(findstring MINGW,$(UNAME_S)))
   SHLIB_EXT    = .dll
   SHLIB_FLAGS  = -shared
@@ -819,10 +825,34 @@ all-non-static: genstubs $(VERSIONHDR) $(AMAL_PREREQ) $(ALL_NON_STATIC_TARGETS)
 all: genstubs $(VERSIONHDR) $(AMAL_PREREQ) $(ALL_TARGETS) manlint audit audit-reqs
 
 # ----------------------------------------------------------------
+# Build-configuration hermeticity guard (TH8K-029).
+#
+# Toggling a config knob (e.g. ENABLE_TEST_KEY, MODE, a crypto/unbound
+# flag) WITHOUT `make clean` leaves object files built under the previous
+# configuration in $(B).  Linking those against freshly-built objects (or a
+# regenerated stub table) produces a mixed, incoherent library -- the
+# concrete failure was ENABLE_TEST_KEY flipping the stub table's test-key
+# slots to NULL while the core still exported the functions, so a coverage
+# test called a NULL stub.  `make all` used to neither detect nor reject
+# this.  `$(CFLAGS)` captures the whole object-compat surface (FEATURE_DEFS
+# folds in every -DTH8_ENABLE_*, plus MODE and hardening); tools/check_buildconfig.tcl
+# stamps it into $(B).buildsig and, before any object is built, refuses to
+# proceed when the stamp disagrees with the current config AND stale objects
+# are present.  `make clean`/`fresh` wipe $(B) (and the stamp), so the guard
+# never bites the documented clean-first workflow; it only catches an in-place
+# config switch.  The check lives in a Tcl helper (invoked the same way from
+# Makefile.msc) so the POSIX and Windows guards cannot diverge.
+# ----------------------------------------------------------------
+
+.PHONY: check-buildconfig
+check-buildconfig: | $(B)
+	@$(TCLSH) tools/check_buildconfig.tcl "$(B).buildsig" "$(B)" "$(CFLAGS)"
+
+# ----------------------------------------------------------------
 # Generated version header.
 # ----------------------------------------------------------------
 
-$(VERSIONHDR): FORCE | $(B)
+$(VERSIONHDR): FORCE | $(B) check-buildconfig
 	@$(TCLSH) tools/mkversion.tcl $(VERSIONHDR)
 
 FORCE:
@@ -873,7 +903,27 @@ $(SHARED_LIB): $(CORE_OBJ_PIC) $(PLAT_OBJ_PIC) $(LIBC_OBJ_PIC) | $(B)
 # Interactive shell (with bestline and platform file).
 # ----------------------------------------------------------------
 
-shell: $(VERSIONHDR) shared stubs $(SHELL_BIN)
+# ----------------------------------------------------------------
+# Bundled DNSSEC root trust anchor.  Copied into $(B), next to the shell, so
+# the platform module-adjacent anchor search (th8{Posix,Win32}GetModuleAnchor
+# Path -> "<dir-of-image>/root.key") finds it.  The unbound integration
+# signature-verifies root.key.b64sig (against the compiled-in key) BEFORE
+# trusting it -- see th8VerifyAnchorSig.  Only bundled when libunbound is
+# compiled in (a curl-free / no-unbound static shell has no validator).
+# ----------------------------------------------------------------
+ifeq ($(ENABLE_UNBOUND),1)
+ROOT_ANCHOR = $(B)root.key $(B)root.key.b64sig
+else
+ROOT_ANCHOR =
+endif
+
+$(B)root.key: tools/data/root.key | $(B)
+	cp $< $@
+
+$(B)root.key.b64sig: tools/data/root.key.b64sig | $(B)
+	cp $< $@
+
+shell: $(VERSIONHDR) shared stubs $(SHELL_BIN) $(ROOT_ANCHOR)
 
 #
 # The shell links dynamically against libth8.so/.dylib.
@@ -1186,16 +1236,74 @@ endif
 # Testing rules.
 # ----------------------------------------------------------------
 
-th8test-only:
-	TH8SH_YES_TESTLIB=1 $(SHELL_BIN) tests/all.tcl | tee $(B)th8-test.log
+# TH8K-028: pipe the runner through tee WITHOUT letting tee's exit status
+# mask a crashed or early-exiting runner.  The suite harness prints
+# "OVERALL STATUS:" only after it completes and never calls exit itself, so
+# a normal run (even with allowed curl failures) exits 0 with that sentinel,
+# while a native crash exits by signal and truncates the log.  Each recipe
+# therefore captures the runner's REAL status past the pipe and requires the
+# completion sentinel: a signal exit or truncated log fails the target
+# instead of masquerading as make success.  Logical pass/fail is still read
+# from the log (unchanged); this only rejects non-completion.
+th8test-only: check-lifecycle
+	@rm -f $(B)th8-test.log.status
+	( TH8SH_YES_TESTLIB=1 $(SHELL_BIN) tests/all.tcl; echo $$? > $(B)th8-test.log.status ) | tee $(B)th8-test.log
+	@st=`cat $(B)th8-test.log.status 2>/dev/null || echo 127`; \
+	  grep -q "OVERALL STATUS:" $(B)th8-test.log || { echo "FATAL: TH8 suite did not complete -- crash or early exit (runner status $$st)"; exit 1; }; \
+	  [ "$$st" = "0" ] || { echo "FATAL: TH8 test runner exited with status $$st (crash/signal)"; exit 1; }
 
-th8test: fresh th8test-only
+# Serialize via recursive make: a plain `th8test: fresh th8test-only` lets `-jN`
+# run `fresh` (a full rebuild) concurrently with `th8test-only` (which runs the
+# suite against bin/), racing a rebuild against the tree it is testing.  Two
+# ordered sub-makes force the rebuild to finish before the suite starts.
+th8test:
+	$(MAKE) fresh
+	$(MAKE) th8test-only
 
 tcltest:
-	$(TCLSH) tests/all.tcl | tee $(B)tcl-test.log
+	@rm -f $(B)tcl-test.log.status
+	( $(TCLSH) tests/all.tcl; echo $$? > $(B)tcl-test.log.status ) | tee $(B)tcl-test.log
+	@st=`cat $(B)tcl-test.log.status 2>/dev/null || echo 127`; \
+	  grep -q "OVERALL STATUS:" $(B)tcl-test.log || { echo "FATAL: Tcl suite did not complete -- crash or early exit (runner status $$st)"; exit 1; }; \
+	  [ "$$st" = "0" ] || { echo "FATAL: Tcl test runner exited with status $$st (crash/signal)"; exit 1; }
 
 eagletest:
-	CreateFlags=+UseNamespaces dotnet exec --roll-forward Major "$(EAGLE_SHELL)" -preInitialize "expr {flags(\"+BooleanToInteger StringToInteger\")}" -file tests/all.tcl | tee $(B)eagle-test.log
+	@rm -f $(B)eagle-test.log.status
+	( CreateFlags=+UseNamespaces dotnet exec --roll-forward Major "$(EAGLE_SHELL)" -preInitialize "expr {flags(\"+BooleanToInteger StringToInteger\")}" -file tests/all.tcl; echo $$? > $(B)eagle-test.log.status ) | tee $(B)eagle-test.log
+	@st=`cat $(B)eagle-test.log.status 2>/dev/null || echo 127`; \
+	  grep -q "OVERALL STATUS:" $(B)eagle-test.log || { echo "FATAL: Eagle suite did not complete -- crash or early exit (runner status $$st)"; exit 1; }; \
+	  [ "$$st" = "0" ] || { echo "FATAL: Eagle test runner exited with status $$st (crash/signal)"; exit 1; }
+
+# ----------------------------------------------------------------
+# TH8K-004 standalone lifecycle-failure harness.
+#
+# Th8_Initialize is once-per-process and its failure rollback calls
+# Th8_ThreadDone (mi_thread_done on mimalloc), tearing down the shared
+# allocator heap -- so the "fail a lifecycle callback and verify
+# reverse-order rollback" test CANNOT run inside the in-process suite.
+# This tiny standalone harness runs each failure scenario in its OWN
+# process: it fails xInitialize / xSetCwd, asserts Th8_Initialize fails,
+# then asserts a fresh Th8_Initialize succeeds (proving the rollback left
+# a clean slate).  Any non-zero exit fails the target.
+# ----------------------------------------------------------------
+LIFECYCLE_BIN ?= $(B)th8_lifecycle_fail
+
+$(B)th8_lifecycle_fail.o: $(S)test/th8_lifecycle_fail.c $(S)th8.h \
+	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h | $(B)
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)test/th8_lifecycle_fail.c
+
+$(LIFECYCLE_BIN): $(B)th8_lifecycle_fail.o $(SHARED_LIB) | $(B)
+	$(CC) $(CFLAGS) $(HARDEN_LDFLAGS) $(EXTRA_LDFLAGS) $(SHELL_RPATH) \
+	  -o $@ $(B)th8_lifecycle_fail.o $(TH8_LIBS)
+
+check-lifecycle: $(VERSIONHDR) shared $(LIFECYCLE_BIN)
+	@echo "=== TH8K-004 lifecycle-failure harness (process-isolated) ==="
+	$(LIFECYCLE_BIN) xinit
+	$(LIFECYCLE_BIN) xsetcwd
+	$(LIFECYCLE_BIN) recover
+	$(LIFECYCLE_BIN) reinit
+	$(LIFECYCLE_BIN) noid
+	@echo "check-lifecycle: OK (reverse-order rollback + re-init recovery)"
 
 # ----------------------------------------------------------------
 # Compilation rules.
@@ -1661,13 +1769,15 @@ $(B)th8_protect.pic.o: $(S)th8_protect.c $(S)th8.h $(S)th8_int.h \
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)th8_protect.c
 
 $(B)th8_time.o: $(S)plugins/harpy/th8_time.c $(S)th8.h $(S)th8_int.h \
-	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_meta_msvc.h \
-	    $(S)th8_meta_posix.h $(S)th8_meta_win32.h $(S)th8_plat.h $(S)th8_util.h | $(B)
+	    $(S)th8_meta_defs.h $(S)th8_meta_glibc.h $(S)th8_meta_libc.h \
+	    $(S)th8_meta_msvc.h $(S)th8_meta_posix.h $(S)th8_meta_win32.h \
+	    $(S)th8_plat.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(S)plugins/harpy/th8_time.c
 
 $(B)th8_time.pic.o: $(S)plugins/harpy/th8_time.c $(S)th8.h $(S)th8_int.h \
-	    $(S)th8_meta_defs.h $(S)th8_meta_libc.h $(S)th8_meta_msvc.h \
-	    $(S)th8_meta_posix.h $(S)th8_meta_win32.h $(S)th8_plat.h $(S)th8_util.h | $(B)
+	    $(S)th8_meta_defs.h $(S)th8_meta_glibc.h $(S)th8_meta_libc.h \
+	    $(S)th8_meta_msvc.h $(S)th8_meta_posix.h $(S)th8_meta_win32.h \
+	    $(S)th8_plat.h $(S)th8_util.h | $(B)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PIC_DEFS) -c -o $@ $(S)plugins/harpy/th8_time.c
 
 $(B)th8_crypto_cmds.o: $(S)plugins/crypto/th8_crypto_cmds.c $(S)th8.h \
@@ -1837,7 +1947,7 @@ genstubs:
 # line to suppress the check; see the tool header for details.
 #
 
-audit: check-deps check-headers check-amal check-mcdc-doc check-cmdindex audit-format
+audit: check-deps check-headers check-amal check-stubguards check-mcdc-doc check-cmdindex check-polls check-loops audit-format
 	$(TCLSH) tools/audit_patterns.tcl source
 	$(TCLSH) tools/audit_patterns.tcl crt-objects $(B)
 
@@ -1852,6 +1962,27 @@ audit: check-deps check-headers check-amal check-mcdc-doc check-cmdindex audit-f
 #
 check-headers:
 	$(TCLSH) tools/check_headers.tcl
+
+#
+# Loop-poll audit (tools/check_polls.tcl, TH8K-009).  Every function in
+# tools/data/poll_required.tsv -- the reviewed set of command functions
+# with an attacker-controlled loop -- must still contain a Th8_Ready()
+# cancellation/step-limit poll.  Fails the build if a poll is removed or
+# a listed function is renamed, so the loop-audit result cannot silently
+# regress.  The full reviewed matrix is docs/internal/loop_audit.md.
+#
+check-polls:
+	$(TCLSH) tools/check_polls.tcl
+
+#
+# Loop-inventory completeness (tools/discover_loops.tcl, TH8K-009).  Sweeps the
+# attacker-reachable command surface and fails if any function has a for/while
+# loop that is NOT accounted for -- neither polled (poll_required.tsv) nor
+# recorded as bounded/safe (loop_bounded.tsv).  This keeps the reachable-loop
+# inventory COMPLETE: a new command with an unreviewed loop cannot land silently.
+#
+check-loops:
+	$(TCLSH) tools/discover_loops.tcl -strict
 
 #
 # Header-dependency audit.  Verifies that every object dependency line
@@ -1878,6 +2009,16 @@ check-deps:
 #
 check-amal:
 	$(TCLSH) tools/check_amal.tcl
+
+#
+# Stub-table feature-guard audit (tools/check_stubguards.tcl).  Fails if a
+# TH8_API function declared under a feature #if in th8.h is missing from the
+# mkstubs.tcl guardMap -- which would make the reduced-feature stub table
+# reference an undefined symbol (e.g. Th8_GetEmbeddedKeyring under
+# ENABLE_CRYPTOGRAPHY=0).  Keeps reduced-feature builds link-clean.
+#
+check-stubguards:
+	$(TCLSH) tools/check_stubguards.tcl
 
 #
 # Tcl 8.6 differential-conformance gate.  Runs the full test suite under a
@@ -2209,6 +2350,11 @@ install: all
 	cp $(STATIC_LIB) $(DESTDIR)$(LIBDIR)/
 	cp $(SHARED_LIB) $(DESTDIR)$(LIBDIR)/
 	cp $(S)th8.h $(S)th8_util.h $(DESTDIR)$(INCDIR)/
+# Install the signed DNSSEC root anchor next to libth8 so the module-adjacent
+# search (which dladdr-resolves libth8's directory) finds it after install.
+ifeq ($(ENABLE_UNBOUND),1)
+	cp $(B)root.key $(B)root.key.b64sig $(DESTDIR)$(LIBDIR)/
+endif
 	# Ship the Win32-format icon alongside the package data so any
 	# downstream consumer (desktop integration, packaging tooling,
 	# embedded GUI shells) has a canonical file to reference.  POSIX
@@ -2652,6 +2798,35 @@ amalgamation-shell: amalgamation $(B)bestline.o $(B)mimalloc_static.o
 amalgamation-test: amalgamation-shell
 	$(B)th8sh_amal tests/all.tcl
 
+#
+# Bug 82 / Finding 066 regression guard: the crypto-WITHOUT-test-key build.
+#
+# Every debug/mcdc/test recipe passes ENABLE_TEST_KEY=1 (the signed-only tests
+# need a key to sign with), so the OFF arm of every `#if TH8_ENABLE_TEST_KEY`
+# is compiled by NO job in the matrix.  Yet crypto-enabled / test-key-absent is
+# the REAL production configuration -- it is the plain default here
+# (ENABLE_CRYPTOGRAPHY ?= 1, ENABLE_TEST_KEY ?= 0) and exactly what downstream
+# embeddings ship (e.g. Ladybird: crypto for signature verification, no test
+# key).  So an unconditional reference to a test-key-only symbol compiles
+# cleanly for us and breaks only when the amalgamation is vendored (Bug 82:
+# th8_time.c called the test-key-gated Th8_GetEmbeddedKeyTest unconditionally).
+#
+# This target closes the gap at the source: it regenerates the amalgamation and
+# compiles it with cryptography ON and the test key explicitly OFF, so any
+# test-key-gated symbol used unconditionally fails HERE instead of at the
+# vendor.  Compile-only (the break is a translation-unit error, no link/run
+# needed).  A fresh sub-make with explicit flags cannot be polluted by an outer
+# ENABLE_TEST_KEY=1 (a sub-make's own command-line vars win), which is the whole
+# point -- it must build the config the rest of the matrix never does.  Not part
+# of the compiler-free `audit`; a CI / pre-release gate alongside
+# amalgamation-test.
+#
+check-amal-notestkey:
+	@echo "=== Bug 82 guard: amalgamation compiles crypto/no-test-key ==="
+	$(MAKE) ENABLE_CRYPTOGRAPHY=1 ENABLE_TEST_KEY=0 amalgamation
+	$(MAKE) ENABLE_CRYPTOGRAPHY=1 ENABLE_TEST_KEY=0 $(B)th8_amal.o
+	@echo "check-amal-notestkey: PASS -- crypto/no-test-key amalgamation built"
+
 # ----------------------------------------------------------------
 # Cosmopolitan APE build wrappers.
 #
@@ -2780,18 +2955,47 @@ endif
 SANITIZE_ASAN  = -fsanitize=address -fno-omit-frame-pointer
 SANITIZE_UBSAN = -fsanitize=undefined -fno-sanitize-recover=all
 SANITIZE_MSAN  = -fsanitize=memory -fno-omit-frame-pointer
+SANITIZE_TSAN  = -fsanitize=thread -fno-omit-frame-pointer
 SANITIZE_ALL   = $(SANITIZE_ASAN) $(SANITIZE_UBSAN)
 
+# asan/ubsan/msan/sanitize override CFLAGS, so a prior ordinary build leaves
+# objects compiled with different flags.  The check_buildconfig guard (TH8K-029)
+# correctly refuses to link those mismatched objects, so each sanitizer target
+# must start from a clean tree -- mirroring the tsan target below.
 asan:
+	$(MAKE) clean
 	$(MAKE) CFLAGS="$(CFLAGS_DEBUG) $(SANITIZE_ASAN)" all-non-static
 
 ubsan:
+	$(MAKE) clean
 	$(MAKE) CFLAGS="$(CFLAGS_DEBUG) $(SANITIZE_UBSAN)" all-non-static
 
 msan:
+	$(MAKE) clean
 	$(MAKE) CFLAGS="$(CFLAGS_DEBUG) $(SANITIZE_MSAN)" all-non-static
 
+#
+# tsan / tsan-cancel: ThreadSanitizer.  Built without mimalloc (a custom
+# allocator confuses TSan's shadow memory).  tsan-cancel runs ONLY the TH8K-008
+# concurrent-cancellation stress (::th8testlib::cancel_stress) -- the
+# cross-thread path whose lock-free request publication TSan is meant to vet.  A
+# full-suite TSan run is deliberately not the default: TH8's broader concurrency
+# uses the pre-C11 volatile+barrier+CAS model, which TSan reports on widely; this
+# focuses the tool on the newly-synchronized cancel-request slot, whose lock
+# (Th8_IntCmpXchg acquire/release) gives TSan the happens-before it needs.
+#
+tsan:
+	$(MAKE) ENABLE_MIMALLOC=0 clean
+	$(MAKE) ENABLE_MIMALLOC=0 MODE=debug EXTRA_CFLAGS="$(SANITIZE_TSAN)" \
+	    all-non-static
+
+tsan-cancel: tsan
+	TH8SH_YES_TESTLIB=1 TH8SH_NO_SCRIPT_SECURITY=1 \
+	  TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1 \
+	  $(SHELL_BIN) tests/security/cancel_stress.tcl
+
 sanitize:
+	$(MAKE) clean
 	$(MAKE) CFLAGS="$(CFLAGS_DEBUG) $(SANITIZE_ALL)" all-non-static
 
 asan-test: asan
@@ -2816,7 +3020,27 @@ sanitize-test-macos: sanitize
 	  UBSAN_OPTIONS=print_stacktrace=1 \
 	  $(SHELL_BIN) tests/all.tcl
 
-valgrind:
+# --------------------------------------------------------------------
+# valgrind-smoke: `valgrind` minus the large-inner-loop test files that
+# dominate (or would time out) under Valgrind's ~20-40x slowdown.  The
+# exclusion set was chosen from per-file CPU measurement: these three
+# account for the bulk of the suite's Valgrind wall-time (sandbox_resource
+# ~68s CPU, benchmark ~37s, coverage_wrong_args ~13s, vs a ~0.4s median),
+# so dropping them removes ~an hour of Valgrind time while the rest of the
+# suite -- including the core engine / expr / string files -- stays
+# reasonable.  Tune the list here as needed.
+#
+# `valgrind` (full) excludes NOTHING: VG_NOTFILE is empty for it, so its
+# behavior is byte-for-byte unchanged.  TH8_TEST_NOTFILE is consumed by the
+# test harness (lib/Standard1.0/test.tcl) to skip matching files.
+# --------------------------------------------------------------------
+VALGRIND_SMOKE_EXCLUDE = benchmark.tcl security/sandbox_resource.tcl \
+	coverage/coverage_wrong_args.tcl
+
+valgrind:       VG_NOTFILE =
+valgrind-smoke: VG_NOTFILE = $(VALGRIND_SMOKE_EXCLUDE)
+
+valgrind valgrind-smoke:
 	#
 	# Build mimalloc with Valgrind tracking so Valgrind sees each
 	# mimalloc block (with a backtrace) instead of opaque arenas --
@@ -2838,7 +3062,8 @@ valgrind:
 	# /dev/null makes it return EOF immediately.  Automated runs must
 	# never read interactive stdin.
 	#
-	TH8SH_YES_TESTLIB=1 valgrind --leak-check=full \
+	TH8_TEST_NOTFILE="$(VG_NOTFILE)" TH8SH_YES_TESTLIB=1 valgrind \
+	  --leak-check=full \
 	  --show-leak-kinds=all --track-origins=yes \
 	  --suppressions=tools/data/th8.supp \
 	  --error-exitcode=1 $(SHELL_BIN) tests/all.tcl < /dev/null

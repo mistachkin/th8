@@ -375,7 +375,14 @@ Th8_EvalFileAsData(
      * the evaluated script has access to the full TH8 language.
      */
 
-    Th8_RegisterLanguage(pChild);
+    if (Th8_RegisterLanguage(pChild) != TH8_OK) {
+	Th8_SetResult(
+	    interp, "Th8_EvalFileAsData: cannot register language",
+	    TH8_NOLEN);
+	Th8_DeleteInterp(pChild);
+	Th8_FreePlatform(pChildPlat);
+	return TH8_ERROR;
+    }
 
     /*
      * Step 3: If the parent has signed-only policy enabled,

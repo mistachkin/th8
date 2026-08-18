@@ -40,7 +40,6 @@
 
 typedef struct Th8_Callback Th8_Callback;
 typedef struct Th8_Frame Th8_Frame;
-typedef struct Th8_PendingDelete Th8_PendingDelete;
 typedef struct Th8_Variable Th8_Variable;
 typedef struct Th8_Command Th8_Command;
 typedef struct Th8_Event Th8_Event;
@@ -234,35 +233,28 @@ struct Th8_Callback {
 /*
  *----------------------------------------------------------------------
  *
- * Th8_PendingDelete --
+ * Deferred deletion --
  *
- *	Deferred-deletion entry.  When a command or namespace is deleted
- *	while script is evaluating (nEvalDepth > 0), the hash removal
- *	happens immediately (so the name can't be resolved again) but
- *	the xDel callback and memory free are deferred until the eval
- *	stack fully unwinds.  This prevents use-after-free when a
- *	command deletes itself during dispatch (e.g. coroutine
- *	auto-delete) or when a namespace is deleted from inside one of
- *	its own commands.
+ *	When a command or namespace is deleted while script is
+ *	evaluating (nEvalDepth > 0), the hash removal happens
+ *	immediately (so the name can't be resolved again) but the xDel
+ *	callback and memory free are deferred until the eval stack fully
+ *	unwinds.  This prevents use-after-free when a command deletes
+ *	itself during dispatch (e.g. coroutine auto-delete) or when a
+ *	namespace is deleted from inside one of its own commands.
+ *
+ *	The queue is INTRUSIVE (TH8K-007): the pending object is already
+ *	unlinked from every hash/index when it is queued, so it is
+ *	threaded onto a per-interpreter FIFO through its own pPendingNext
+ *	field (Th8_Command / Th8_Namespace).  Queuing therefore allocates
+ *	nothing and cannot fail -- eliminating the former "risk a
+ *	use-after-free rather than leak" OOM fallback.  Commands and
+ *	namespaces use separate lists; on drain, commands are freed
+ *	before namespaces so a command destructor may still reference a
+ *	namespace that is also pending.
  *
  *----------------------------------------------------------------------
  */
-
-#define TH8_PENDING_CMD 1 /* Deferred command deletion. */
-#define TH8_PENDING_NS  2 /* Deferred namespace deletion. */
-
-struct Th8_PendingDelete {
-    int eType;   /* TH8_PENDING_CMD or TH8_PENDING_NS. */
-    union {
-	struct {
-	    Th8_Command *pCmd; /* Command struct to free. */
-	} cmd;
-	struct {
-	    void *pNs;  /* Th8_Namespace* (opaque here). */
-	} ns;
-    } u;
-    Th8_PendingDelete *pNext; /* Next entry in the FIFO queue. */
-};
 
 /*
  *----------------------------------------------------------------------
@@ -322,17 +314,53 @@ struct Th8_Variable {
  *----------------------------------------------------------------------
  */
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * Th8_SubCmd --
+ *
+ *	One sub-command of an ensemble command.  Stored as the pData of a
+ *	Th8_HashEntry in the parent Th8_Command's paSubCommands hash, keyed
+ *	by the sub-command name.  A sub-command is a mini-command: it has its
+ *	own handler, context, destructor, and token, so it can be unregistered
+ *	by token (Th8_DeleteSubCommand) exactly like a top-level command --
+ *	interp->paSubToken maps the token back to this record for O(1) delete.
+ *
+ *----------------------------------------------------------------------
+ */
+
+typedef struct Th8_SubCmd {
+    Th8_CommandProc xProc; /* Sub-command implementation function. */
+    void *pContext;  /* Opaque context passed to xProc. */
+    void (
+        *xDel)(Th8_Interp *, void *); /* Destructor for pContext, or NULL. */
+    th8_uint64_t nToken; /* Unique token (for Th8_DeleteSubCommand). */
+    char *zName; /* Owned copy of the sub-command name (for ordered
+			 * listing / introspection, like Th8_Command.zQualName). */
+    size_t nName; /* Byte length of zName. */
+    struct Th8_Command *pParent; /* Owning command, so a token lookup can
+                                  * remove this sub-command from the right
+                                  * paSubCommands hash. */
+} Th8_SubCmd;
+
 struct Th8_Command {
     Th8_CommandProc xProc; /* Command implementation function. */
-    void *pContext;  /* Opaque context passed to xProc. */
+    void *pContext; /* Opaque context passed to xProc. */
     void (*xDel)(Th8_Interp *, void *);
-                                /* Destructor for pContext, or NULL. */
+    /* Destructor for pContext, or NULL. */
     void *(*xCopy)(Th8_Interp *, void *);
-                                /* Deep-copy for namespace import. */
+    /* Deep-copy for namespace import. */
     Th8_Namespace *pDefNs; /* Defining namespace. */
     th8_uint64_t nToken; /* Unique command token. */
-    char *zQualName;  /* Fully qualified name. */
-    size_t nQualName;  /* Byte length of zQualName. */
+    char *zQualName; /* Fully qualified name. */
+    size_t nQualName; /* Byte length of zQualName. */
+    Th8_Command *pPendingNext; /* Intrusive deferred-delete FIFO link
+				 * (TH8K-007); NULL unless queued. */
+    Th8_Hash *paSubCommands; /* Sub-command overlay (name -> Th8_SubCmd), or
+				 * NULL if none.  When set, a matching sub-command
+				 * wins; an unmatched invocation falls back to
+				 * xProc (if any), else the ensemble error.  A
+				 * pure ensemble has xProc == NULL. */
 };
 
 /*
@@ -384,9 +412,9 @@ struct Th8_Interp {
      */
 
     Th8_DebugProc xDebug; /* Debug callback (NULL = no debugging). */
-    void *pDebugCtx;  /* Debug callback client data. */
-    int nStepMode;  /* TH8_STEP_* mode. */
-    int nStepDepth;  /* Frame depth when stepping began. */
+    void *pDebugCtx; /* Debug callback client data. */
+    int nStepMode; /* TH8_STEP_* mode. */
+    int nStepDepth; /* Frame depth when stepping began. */
     Th8_Hash *paBreakpoints; /* Breakpoint table (lazy). */
     int nNextBreakpointId; /* Auto-incrementing breakpoint ID. */
 
@@ -406,6 +434,14 @@ struct Th8_Interp {
                      * sensitive 0x20000000); sensitivity is derived from
                      * TH8_SENSITIVE(nResult), not a separate flag. */
     int bResultBorrowed; /* zResult is borrowed (cache-owned). */
+    int bResultBuildFailed; /* a result-building allocation (Th8_SetResult /
+                             * Th8_ListAppend / Th8_StringAppend) failed since
+                             * the current command was invoked; th8InvokeCommand
+                             * clears this before each command and, if it is set
+                             * when the command returns TH8_OK, promotes the
+                             * result to an out-of-memory error so a
+                             * truncated/empty result is never reported as
+                             * success (TH8K-030). */
 
     /*
      * Finally block state.  Updated by the [try] command after
@@ -415,7 +451,7 @@ struct Th8_Interp {
 
     char *zFinallyResult;
     size_t nFinallyResult;
-    int nFinallyRc;  /* TH8_OK if finally succeeded. */
+    int nFinallyRc; /* TH8_OK if finally succeeded. */
 
     /*
      * Namespace tree.
@@ -445,8 +481,10 @@ struct Th8_Interp {
      * when nEvalDepth drops to 0 (th8DrainPendingDeletes).
      */
 
-    Th8_PendingDelete *pPendingHead;
-    Th8_PendingDelete *pPendingTail;
+    Th8_Command *pPendingCmdHead; /* Intrusive deferred-delete FIFOs */
+    Th8_Command *pPendingCmdTail; /* (TH8K-007): objects are threaded */
+    Th8_Namespace *pPendingNsHead; /* through their own pPendingNext, so */
+    Th8_Namespace *pPendingNsTail; /* queuing never allocates. */
 
     /*
      * Parser state.
@@ -454,6 +492,7 @@ struct Th8_Interp {
 
     int isListMode;
     int nEvalDepth;
+    int nExprDepth; /* Expression-tree recursion depth (TH8K-019). */
     int nLine;
     int nErrorLine;
 
@@ -461,13 +500,48 @@ struct Th8_Interp {
      * Cancellation.
      */
 
-    volatile int bCanceled;
+    /*
+     * TH8K-008 lock-free cross-thread cancellation.
+     *
+     * nCancelReq is the SINGLE atomic word that carries a cancellation request
+     * coherently across threads: TH8_CR_CANCELED plus the request's flag bits
+     * (TH8_CANCEL_UNWIND, TH8_CANCEL_SIGNAL).  ANY thread -- the owner, a
+     * foreign worker, or a signal handler -- requests cancellation by
+     * atomically OR-ing (TH8_CR_CANCELED | flags) into it.  Because the canceled
+     * bit and the flags live in ONE word, a cancel and its flags can never be
+     * torn or partially lost (the payload-loss race the audit flagged).  The
+     * evaluator polls it (th8CheckCancel); [catch]/unwind read the flag bits;
+     * the owner clears it (atomic store 0) on reset.  There is NO spinlock.
+     */
+    volatile int nCancelReq;
     volatile int bSuspended;
+    /*
+     * Owner-only cancel MESSAGE state (only the owning thread touches these).
+     * cancelFlags mirrors nCancelReq's flag bits; the owner refreshes it from
+     * nCancelReq at each poll so the owner-only [catch]/save/restore readers
+     * need no synchronization.
+     */
     volatile int cancelFlags;
     volatile int bCancelMsgOwned;
-    char *volatile zSavedCancelMsg; /* pending-free */
     char *volatile zCancelMsg;
     volatile size_t nCancelMsg;
+    /*
+     * TH8K-008 cross-thread cancel MESSAGE buffer.  A foreign NON-signal
+     * canceller (which MAY allocate -- it must be Th8_ThreadInit'd, like
+     * Th8_QueueEvent) copies the caller's message into a self-describing buffer
+     * laid out as [size_t length][bytes...][NUL] and atomic-EXCHANGEs the
+     * pointer in here.  Whoever swaps a non-NULL pointer OUT (a later publisher
+     * overwriting, the owner adopting, or a reset) owns it exclusively and frees
+     * it, so every buffer is freed exactly once -- no leak, double-free, or
+     * use-after-free, and no lock.  The owner reads the EXACT length from the
+     * prefix, copies it into its owned message, and frees the buffer.  A signal
+     * handler never touches this (it cannot allocate/free); a signal cancel
+     * carries no message and the owner reports a fixed static text.
+     *
+     * Stored as a pointer-holding 64-bit integer (portably 32/64-bit) so the
+     * exchange is a single Th8_Int64CmpXchg with no aliasing pun; 0 == empty.
+     */
+    volatile th8_uint64_t nCancelReqMsg;
     volatile int bExit;
 
     /*
@@ -548,6 +622,9 @@ struct Th8_Interp {
 
     th8_int64_t nStepCount;
     th8_int64_t nStepLimit;
+    th8_int64_t nDeadlineUs; /* Absolute monotonic-microsecond wall-clock
+			      * deadline (0 = none); checked periodically
+			      * in th8Step (TH8K-010). */
     size_t nResultLimit;
 
     /*
@@ -608,6 +685,7 @@ struct Th8_Interp {
 
     size_t nAllocBytes;
     size_t nAllocLimit;
+    size_t nAllocPeak; /* High-water mark of nAllocBytes (TH8K-021). */
 
     /*
      * Signed-only gate.
@@ -671,6 +749,9 @@ struct Th8_Interp {
     void *pPlugins;
     th8_uint64_t nNextCmdToken;
     Th8_Hash *paCmdToken;
+    Th8_Hash *paSubToken; /* token -> Th8_SubCmd* index for O(1)
+			   * Th8_DeleteSubCommand; lazily created with the
+			   * first sub-command, freed at teardown. */
 
     /*
      * Channel registry: maps channel names (e.g., "./tmp/foo.tmp")

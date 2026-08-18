@@ -156,6 +156,16 @@ typedef struct Th8_KeyStore {
  *	8 known magic bytes at slot 0 against a compile-time
  *	constant before every crypto operation.
  *
+ * Results:
+ *	TH8_OK if the canary bytes are intact; TH8_ERROR if `pKS`
+ *	or its page is NULL, or if the bytes differ from the
+ *	compile-time constant (with an interpreter result message
+ *	reporting possible buffer overflow in the corruption case).
+ *
+ * Side effects:
+ *	On detected corruption, sets the interpreter result; the
+ *	NULL and intact-canary cases change nothing.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -225,11 +235,18 @@ th8SlotIsUsed(const Th8_KeyStore *pKS, int i)
  *	is reserved for the canary and indices outside the
  *	bitmap would smash neighbouring fields.
  *
+ * Why / How:
+ *	The bitmap-based allocator keeps all slot bookkeeping
+ *	inside the fixed `pKS->aBitmap` array (no heap
+ *	allocation), so allocation state stays out of pageable
+ *	memory alongside the key store.  Marking a slot is a
+ *	single OR of the `i % 8` bit in byte `i / 8`.
+ *
  * Parameters:
  *	pKS -- key store.
  *	i   -- slot index.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -254,11 +271,18 @@ th8SlotSetUsed(Th8_KeyStore *pKS, int i)
  *	sensitive (slot allocation only manages presence, not
  *	key material lifecycle).
  *
+ * Why / How:
+ *	Release side of the bitmap allocator (companion to
+ *	`th8SlotSetUsed`): clears the slot's presence bit with
+ *	a single AND-NOT of the `i % 8` bit in byte `i / 8`,
+ *	keeping slot bookkeeping heap-free and out of pageable
+ *	memory.
+ *
  * Parameters:
  *	pKS -- key store.
  *	i   -- slot index.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -290,11 +314,18 @@ th8SlotClearUsed(Th8_KeyStore *pKS, int i)
  *	sensitive material and avoid reading/writing past
  *	`TH8_SECURE_KEY_SIZE` bytes.
  *
+ * Why / How:
+ *	Slots are laid out contiguously in the locked page, so
+ *	the address is simply `pKS->pPage + i *
+ *	TH8_SECURE_KEY_SIZE`.  Returning a direct pointer (no
+ *	copy) lets callers encrypt/decrypt straight from the
+ *	locked page, keeping key bytes off the pageable heap.
+ *
  * Parameters:
  *	pKS -- key store.
  *	i   -- slot index.
  *
- * Returns:
+ * Results:
  *	Pointer into the locked data page.  Never NULL when
  *	`pKS` is initialised.
  *
@@ -328,9 +359,13 @@ th8SlotKey(Th8_KeyStore *pKS, int i)
  *	configuration-dependent and the data is still
  *	functionally correct in unlocked form).
  *
+ * Why / How:
  *	Key material must never reach swap or core dumps;
  *	guard pages with no access permissions create a
- *	hardware trap on overflow / underflow.  The mirror
+ *	hardware trap on overflow / underflow.  A single
+ *	`VirtualAlloc` reserves three contiguous pages, the
+ *	outer two are flipped to `PAGE_NOACCESS`, and the
+ *	middle data page is `VirtualLock`ed.  The mirror
  *	POSIX implementation lives below.
  *
  * Parameters:
@@ -338,7 +373,7 @@ th8SlotKey(Th8_KeyStore *pKS, int i)
  *		`pKS->nAlloc`, `pKS->pPage`, and
  *		`pKS->nPageSize` are populated.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success; `TH8_ERROR` if `VirtualAlloc`
  *	fails.
  *
@@ -392,12 +427,20 @@ th8SecureAllocPages(Th8_KeyStore *pKS)
  *	Safe to call against a partially-initialised store --
  *	each NULL guard skips its block independently.
  *
+ * Why / How:
+ *	Key bytes must be wiped while the page is still locked
+ *	(pinned in RAM) so the zeroing itself cannot be paged
+ *	to swap, hence the ordered `Th8_SecureZero` ->
+ *	`VirtualUnlock` -> `VirtualFree(MEM_RELEASE)`.  The
+ *	NULL guards make it the safe inverse of a possibly-
+ *	partial `th8SecureAllocPages`.
+ *
  * Parameters:
  *	interp -- live interpreter (forwarded to
  *		`Th8_SecureZero`).
  *	pKS    -- key store.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -472,12 +515,21 @@ th8SecureGetPageSize(void)
  *
  *	Mirror of the Win32 implementation above.
  *
+ * Why / How:
+ *	Key material must never reach swap or core dumps.  A
+ *	single `mmap` gives three contiguous, page-aligned
+ *	pages; the outer two become `PROT_NONE` guard pages
+ *	whose access traps in hardware, and the middle data
+ *	page is `mlock`ed (best-effort) so its bytes stay
+ *	resident.  Linux `madvise` hardening further excludes
+ *	the page from core dumps and wipes it on fork.
+ *
  * Parameters:
  *	pKS -- key store; on success `pKS->pRegion`,
  *		`pKS->nRegion`, `pKS->pPage`, and
  *		`pKS->nPageSize` are populated.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success; `TH8_ERROR` if `mmap` fails.
  *
  * Side effects:
@@ -551,12 +603,19 @@ th8SecureAllocPages(Th8_KeyStore *pKS)
  *	Safe to call against a partially-initialised store --
  *	each NULL guard skips its block independently.
  *
+ * Why / How:
+ *	Key bytes are wiped while the page is still `mlock`ed
+ *	(pinned in RAM) so the zeroing cannot be paged to swap,
+ *	hence the ordered `Th8_SecureZero` -> `munlock` ->
+ *	`munmap`.  The NULL guards make it the safe inverse of
+ *	a possibly-partial `th8SecureAllocPages`.
+ *
  * Parameters:
  *	interp -- live interpreter (forwarded to
  *		`Th8_SecureZero`).
  *	pKS    -- key store.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -596,6 +655,14 @@ th8SecureFreePages(Th8_Interp *interp, Th8_KeyStore *pKS)
  *	the key is rotated on every write, the counter could safely
  *	restart at 0; we keep incrementing for defense in depth.
  *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Writes all TH8_SECURE_NONCE_SIZE (12) bytes of the
+ *	caller-provided `aNonce` buffer: the counter little-endian
+ *	in bytes 0..7 and zero in bytes 8..11.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -631,6 +698,16 @@ th8SecureDeriveNonce(
  *	an attacker from distinguishing between e.g., a 3-char and
  *	a 4-char password based on ciphertext size alone.
  *
+ * Results:
+ *	The padded length: `nPlain` rounded up to the next
+ *	TH8_SECURE_PAD_BLOCK (64) boundary, always strictly
+ *	greater than `nPlain` (a full block is added when
+ *	`nPlain` is already a multiple, reserving room for the
+ *	mandatory pad-count byte).
+ *
+ * Side effects:
+ *	None.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -660,6 +737,20 @@ th8SecurePadSize(size_t nPlain)
  *	before touching key material.  On success, ownership of
  *	the ciphertext buffer is transferred to pData; the padded
  *	plaintext is securely zeroed regardless of outcome.
+ *
+ * Results:
+ *	TH8_OK on success; TH8_ERROR on canary corruption, a
+ *	failed allocation, or any OpenSSL EVP failure.
+ *
+ * Side effects:
+ *	On success, frees any previous `pData->zCipher` and stores
+ *	the freshly-allocated ciphertext in `pData->zCipher` /
+ *	`pData->nCipher`, writes the GCM tag into `pData->aTag`,
+ *	and increments the nonce counter `pData->nNonce` (the
+ *	counter is bumped once encryption is attempted, even on a
+ *	later failure).  Allocates a temporary padded-plaintext
+ *	buffer that is securely zeroed and freed on every path.
+ *	On canary corruption, sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -805,6 +896,24 @@ done:
  *	Capacity check: the region's usable area (page size minus
  *	canary) MUST be at least pData->nCipher + 1 bytes.  If not,
  *	the function returns TH8_ERROR with a descriptive result.
+ *
+ * Results:
+ *	TH8_OK on success, with `*pzPlain` set to a pointer into
+ *	`pDest`'s data area (just past the canary) and `*pnPlain`
+ *	to the unpadded plaintext length; an empty stored value
+ *	yields TH8_OK with `*pnPlain` == 0.  TH8_ERROR on a NULL
+ *	destination region, canary corruption (key page or
+ *	region), an undersized/over-capacity region, a missing
+ *	region data pointer, or any EVP failure including
+ *	GCM authentication-tag mismatch -- each with an
+ *	interpreter result message.  `*pzPlain` / `*pnPlain` are
+ *	initialised to NULL / 0 at entry and left so on failure.
+ *
+ * Side effects:
+ *	Writes decrypted, padding-stripped, NUL-terminated
+ *	plaintext into `pDest`'s data area (no heap allocation).
+ *	On any failure path, securely zeros that data area.  Sets
+ *	the interpreter result on error.
  *
  *----------------------------------------------------------------------
  */
@@ -1038,6 +1147,18 @@ done:
  *	0 is reserved for the canary; slots 1..127 are available
  *	for secure variables.
  *
+ * Results:
+ *	TH8_OK on success; TH8_ERROR on a NULL interpreter, a
+ *	failed key-store allocation, or a failed locked-page
+ *	allocation.
+ *
+ * Side effects:
+ *	Allocates and zeroes a Th8_KeyStore, allocates the
+ *	guard-paged locked key page, installs the canary in slot 0
+ *	and marks that slot used, and attaches the key store to
+ *	the interpreter (th8SetSecureKeyStore).  Frees the key
+ *	store on the page-allocation failure path.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1084,6 +1205,15 @@ th8SecureInit(Th8_Interp *interp)
  *	hash.  Each entry's ciphertext is zeroed before freeing to
  *	minimize forensic exposure in freed heap memory.
  *
+ * Results:
+ *	Always TH8_OK (the iteration callback never aborts the
+ *	walk).
+ *
+ * Side effects:
+ *	For a non-NULL entry payload: securely zeros then frees the
+ *	ciphertext, securely zeros then frees the
+ *	Th8_SecureVarData, and clears `pEntry->pData` to NULL.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1121,6 +1251,16 @@ th8SecureCleanupEntry(Th8_HashEntry *pEntry, void *pCtx)
  *	zeroed, unlocked, and unmapped.  The order matters: key
  *	material is zeroed while the page is still locked (pinned
  *	in RAM) to prevent the zeroing from being paged to swap.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Iterates and frees every secure-variable hash entry
+ *	(th8SecureCleanupEntry), deletes the hash and detaches it
+ *	from the interpreter; securely zeros, unlocks, unmaps, and
+ *	frees the locked key store and detaches it.  A NULL
+ *	interpreter, absent hash, or absent key store is a no-op.
  *
  *----------------------------------------------------------------------
  */
@@ -1167,6 +1307,24 @@ th8SecureFinish(Th8_Interp *interp)
  *	actual data lives in the encrypted metadata hash.  If any
  *	step fails, all partially-allocated resources (key slot,
  *	metadata, ciphertext) are cleaned up before returning.
+ *
+ * Results:
+ *	TH8_OK on success; TH8_ERROR (with an interpreter result
+ *	message) on a NULL interpreter, uninitialised secure
+ *	subsystem, a name that already exists, array-element
+ *	syntax in the name, no free key slot / maximum reached, or
+ *	a key-generation, encryption, variable-set, or hash
+ *	allocation failure.
+ *
+ * Side effects:
+ *	On success: consumes one key slot (random key written into
+ *	the locked page, bitmap bit set, `pKS->nUsed` incremented),
+ *	allocates the Th8_SecureVarData metadata and its
+ *	ciphertext, creates the Tcl variable with an empty
+ *	sentinel value, and registers the entry in the per-interp
+ *	secure hash (creating the hash on first use).  Every
+ *	failure path unwinds whatever it had already allocated
+ *	(zeroing key material and freeing metadata/ciphertext).
  *
  *----------------------------------------------------------------------
  */
@@ -1325,6 +1483,18 @@ th8SecureVarCreate(
  *	still contains valid key bytes.  The ciphertext is also
  *	zeroed before freeing to minimize forensic exposure.
  *
+ * Results:
+ *	TH8_OK on success; TH8_ERROR (with an interpreter result
+ *	message) on a NULL interpreter, no secure-var hash, or a
+ *	variable that is not secure.
+ *
+ * Side effects:
+ *	Securely zeros and releases the variable's key slot (bitmap
+ *	bit cleared, `pKS->nUsed` decremented), securely zeros and
+ *	frees its ciphertext and metadata, removes the entry from
+ *	the secure-var hash, and unsets the underlying Tcl
+ *	variable.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1393,6 +1563,21 @@ th8SecureVarDelete(Th8_Interp *interp, const char *zVar, size_t nVar)
  *	Test whether a variable is a secure (encrypted) variable.
  *	Returns 1 if the variable has secure metadata, 0 otherwise.
  *
+ * Why / How:
+ *	Looks the name up in the per-interpreter secure-var hash;
+ *	a variable is secure iff a live entry with a non-NULL
+ *	payload exists.  The `ALWAYS(pEntry->pData)` guard encodes
+ *	the invariant that present entries always carry metadata
+ *	(th8SecureVarDelete removes entries outright rather than
+ *	leaving NULL-payload tombstones).
+ *
+ * Results:
+ *	1 if the variable is a secure variable; 0 otherwise
+ *	(including a NULL interpreter or no secure-var hash).
+ *
+ * Side effects:
+ *	None.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1428,6 +1613,19 @@ th8IsSecureVar(Th8_Interp *interp, const char *zVar, size_t nVar)
  *	zeroed immediately after copying to the result.  The result
  *	itself is marked "sensitive" so Th8_SetResult will zero it
  *	on the next result change.
+ *
+ * Results:
+ *	TH8_OK with the decrypted value installed as the sensitive
+ *	interpreter result; TH8_ERROR on a NULL interpreter, no
+ *	secure-var hash / entry, missing key store or protected
+ *	result region, or a decryption/authentication failure
+ *	(th8SecureDecrypt sets the message).
+ *
+ * Side effects:
+ *	Clears the prior interpreter result, decrypts the value
+ *	directly into the interpreter's protected result region,
+ *	and finalizes it as the sensitive result
+ *	(th8FinalizeSensitiveResult).
  *
  *----------------------------------------------------------------------
  */
@@ -1509,6 +1707,19 @@ th8SecureGetVar(Th8_Interp *interp, const char *zVar, size_t nVar)
  *	in time reveals nothing about the relationship between the
  *	two values (forward secrecy at the variable level).
  *
+ * Results:
+ *	TH8_OK on success or when the variable is not a secure
+ *	variable (a no-op); TH8_ERROR on a NULL interpreter, a
+ *	missing key store, a corrupt slot index (NEVER guard), or
+ *	a key-generation or encryption failure.
+ *
+ * Side effects:
+ *	For a secure variable, rotates the slot key in place (old
+ *	key securely zeroed, fresh random key written into the same
+ *	slot) and re-encrypts the new value into the variable's
+ *	metadata (ciphertext, tag, nonce updated).  Non-secure
+ *	variables are left untouched.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1587,6 +1798,18 @@ th8SecureSetVar(
  *	and frees the metadata.  This ensures that deleting a
  *	variable via [unset] properly cleans up all crypto state.
  *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	For a variable with secure metadata: securely zeros and
+ *	releases its key slot (bitmap bit cleared, `pKS->nUsed`
+ *	decremented), securely zeros and frees its ciphertext and
+ *	metadata, and clears `pEntry->pData` to NULL (the hash
+ *	entry itself is left in place, since the caller is already
+ *	tearing down the variable).  A NULL interpreter, absent
+ *	hash, or non-secure variable is a no-op.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1646,6 +1869,7 @@ th8SecureVarCleanup(Th8_Interp *interp, const char *zVar, size_t nVar)
  *	  * `bEnable = 0` -- zero both fields.  Persistence
  *	    is denied.
  *
+ * Why / How:
  *	Scripts cannot self-enable persistence because the
  *	token is unguessable and a single write through the
  *	script-visible API only affects one of the two
@@ -1663,7 +1887,7 @@ th8SecureVarCleanup(Th8_Interp *interp, const char *zVar, size_t nVar)
  *	interp  -- live interpreter.
  *	bEnable -- 1 to open the gate; 0 to close it.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success; `TH8_ERROR` on NULL `interp` or
  *	on RNG exhaustion (rare: 100 retries; interpreter
  *	result: "unable to generate persistence token").
@@ -1724,15 +1948,17 @@ Th8_EnableSecurePersist(Th8_Interp *interp, int bEnable)
  *	  Gate open iff `nSecurePersistOk != 0` **AND**
  *	  `nSecurePersistOk == nSecurePersistToken`.
  *
+ * Why / How:
  *	The two-field check is the security property: a
  *	script that manages to overwrite one field through any
  *	mechanism still cannot match the random token in the
- *	other.
+ *	other.  Both conditions must hold, so a partial write
+ *	(or a zeroed pair) leaves the gate closed.
  *
  * Parameters:
  *	interp -- live interpreter (or NULL).
  *
- * Returns:
+ * Results:
  *	1 if the gate is open; 0 otherwise (including NULL
  *	interp).
  *
@@ -1762,6 +1988,16 @@ Th8_IsSecurePersistEnabled(Th8_Interp *interp)
  *	The master key gets the same mlock/guard-page protection as
  *	per-variable keys.  Slot 1 is special-cased (not tracked in
  *	the bitmap).  The key is validated to be exactly 32 bytes.
+ *
+ * Results:
+ *	TH8_OK on success; TH8_ERROR (with an interpreter result
+ *	message) on a NULL interpreter, a key length other than 32
+ *	bytes, a NULL key pointer, an uninitialised secure
+ *	subsystem, or a failed canary check.
+ *
+ * Side effects:
+ *	Copies the 32 key bytes into slot 1 of the locked key page.
+ *	On the error paths, sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -1818,6 +2054,14 @@ Th8_SecureSetMasterKey(
  *	until a new master key is set.  The key is zeroed in-place
  *	while the page is still locked (pinned in RAM).
  *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Securely zeros the 32 key bytes of slot 1 in the locked
+ *	key page.  A NULL interpreter or absent/uninitialised key
+ *	store is a no-op.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1841,6 +2085,21 @@ Th8_SecureClearMasterKey(Th8_Interp *interp)
  * th8SecureHasMasterKey --
  *
  *	Check if a master key has been set (slot 1 is non-zero).
+ *
+ * Why / How:
+ *	There is no separate "master key present" flag; presence
+ *	is inferred by scanning the 32 bytes of slot 1 for any
+ *	non-zero byte.  An all-zero slot means "no key" -- valid
+ *	because a real 256-bit key is overwhelmingly unlikely to
+ *	be all zeros and Th8_SecureClearMasterKey zeros the slot.
+ *
+ * Results:
+ *	1 if any byte of slot 1 is non-zero (a master key is set);
+ *	0 otherwise, including a NULL interpreter or an
+ *	absent/uninitialised key store.
+ *
+ * Side effects:
+ *	None.
  *
  *----------------------------------------------------------------------
  */
@@ -1901,6 +2160,15 @@ th8SecureHasMasterKey(Th8_Interp *interp)
  *	persistence.  Called by the public `secure persist`
  *	command path; not exported in the public API.
  *
+ * Why / How:
+ *	Persistence needs a wire format that survives outside the
+ *	locked key page, so the value is re-encrypted under the
+ *	embedder's master key (never the ephemeral per-variable
+ *	key) and framed with the variable name as AAD so a blob
+ *	cannot be replayed under a different name.  The plaintext
+ *	is staged only in the locked protected region, never the
+ *	pageable heap.
+ *
  *	Pipeline (security-critical, order matters):
  *
  *	  1. Gate checks: persistence enabled
@@ -1939,7 +2207,7 @@ th8SecureHasMasterKey(Th8_Interp *interp)
  *	zVar   -- variable name (not necessarily NUL-terminated).
  *	nVar   -- variable-name length.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on successful persist; `TH8_ERROR` on any
  *	gate / lookup / crypto / KV failure (interpreter
  *	result: diagnostic from the failing stage).
@@ -2163,6 +2431,26 @@ done:
  *	6. Strip PKCS#7 padding
  *	7. Create new secure variable with decrypted value
  *	8. Securely zero temporary buffers
+ *
+ * Results:
+ *	TH8_OK when the blob is retrieved, authenticated, and a
+ *	fresh in-memory secure variable is created; TH8_ERROR
+ *	(with an interpreter result message) on a NULL interpreter,
+ *	a closed persistence gate, an unset master key, a missing
+ *	KV entry, a too-short/bad-magic/bad-version/corrupted blob,
+ *	an over-capacity protected region, a GCM authentication
+ *	failure, a plaintext-length mismatch, or a failure creating
+ *	the variable.
+ *
+ * Side effects:
+ *	Builds a "th8:secure:<name>" KV key and reads the blob via
+ *	Th8_KeyValue; copies it to a private heap buffer and clears
+ *	the interpreter result; master-key-decrypts into the
+ *	interpreter's protected region; on success creates a new
+ *	secure variable (th8SecureVarCreate).  Securely zeros and
+ *	frees the blob buffer and KV key, securely zeros the
+ *	protected region's data area, and clears the interpreter
+ *	result on success.
  *
  *----------------------------------------------------------------------
  */

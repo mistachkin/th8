@@ -55,6 +55,22 @@ const Th8StubsTable *th8StubsPtr = 0;
  *	This is an opaque void* that the stubs library casts
  *	to Th8StubsTable*.
  *
+ * Why / How:
+ *	The stubs mechanism lets a separately compiled extension call
+ *	core Th8_* functions through a table of pointers instead of
+ *	direct symbols, so the extension stays ABI-compatible across
+ *	core rebuilds.  The table is stashed on the interpreter as an
+ *	opaque void* (to keep Th8StubsTable out of the public header);
+ *	this accessor simply hands that pointer back for Th8_InitStubs
+ *	to validate and cast.
+ *
+ * Results:
+ *	The interpreter's opaque stubs-table pointer (may be NULL if
+ *	the core was built without stubs support).
+ *
+ * Side effects:
+ *	None.  Returns a borrowed pointer owned by the interpreter.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -80,6 +96,16 @@ Th8_GetStubs(Th8_Interp *interp)  /* Interpreter. */
  *
  *	The version and exact parameters are reserved for future
  *	use (version negotiation).  Currently they are ignored.
+ *
+ * Why / How:
+ *	An extension compiled against the stubs ABI has no direct
+ *	link to the core's functions; it must obtain the dispatch
+ *	table before making any Th8_* call.  This fetches that table
+ *	via Th8_GetStubs and gates on the magic number and a minimum
+ *	version so a mismatched or corrupt table is rejected (fail
+ *	closed) rather than dispatched through.  On success it caches
+ *	the table in the process-global th8StubsPtr that the
+ *	th8Decls.h macros read.
  *
  * Results:
  *	Pointer to the stubs table on success; NULL on failure

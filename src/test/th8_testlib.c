@@ -1008,9 +1008,15 @@ th8test_taint_cmd(
  *
  *	Implements "th8testlib::result_tainted VALUE": store VALUE as a
  *	tainted result, then report whether the STORED result carries
- *	taint.  Isolates Th8_SetResult()'s taint handling from the
- *	substitution and variable-storage paths: Th8_GetResult() returns
- *	interp->nResult, whose high bit is the stored taint.
+ *	taint.
+ *
+ * Why / How:
+ *	Isolates Th8_SetResult()'s taint handling from the substitution
+ *	and variable-storage paths: it forces the taint bit onto the
+ *	length passed to Th8_SetResult, then reads it back with
+ *	Th8_GetResult(), which returns interp->nResult whose high bit is
+ *	the stored taint.  Confirms Th8_SetResult preserves taint across
+ *	the result copy.
  *
  * Results:
  *	TH8_OK; result is 1 if the stored result is tainted, else 0.
@@ -1110,9 +1116,13 @@ th8test_result_sensitive_tainted_cmd(
  *
  *	Implements "th8testlib::arg_tainted VALUE": report whether the
  *	argument the command received is tainted (TH8_TAINTED(argl[1])).
- *	Drives the substitution / variable-read propagation paths -- the
- *	taint bit is present only if the value that produced this
- *	argument carried it through command or variable substitution.
+ *
+ * Why / How:
+ *	Drives the substitution / variable-read propagation paths: the
+ *	taint bit is present on argl[1] only if the value that produced
+ *	this argument carried it through command or variable
+ *	substitution, so the command reads back what the word builder
+ *	tagged.
  *
  * Results:
  *	TH8_OK; result is 1 if the argument is tainted, else 0.
@@ -1147,9 +1157,14 @@ th8test_arg_tainted_cmd(
  * th8test_eval_tainted_cmd --
  *
  *	Implements "th8testlib::eval_tainted SCRIPT": evaluate SCRIPT
- *	with the taint bit forced on the length passed to Th8_Eval,
- *	isolating the evaluation security gate from the substitution
- *	paths.
+ *	with the taint bit forced on the length passed to Th8_Eval.
+ *
+ * Why / How:
+ *	Isolates the evaluation security gate from the substitution
+ *	paths: it forces the taint bit onto the script length so
+ *	Th8_Eval sees a tainted script directly, then reports whether the
+ *	gate rejected it.  Th8_ClearResult discards whatever the script
+ *	left so only the pass/fail of the gate is reported.
  *
  * Results:
  *	TH8_OK; result is 1 if the tainted script EXECUTED (the gate
@@ -1195,6 +1210,18 @@ th8test_eval_tainted_cmd(
  *	separated 0/1 for TH8_TAINTED(argl[i]) of every argument after
  *	the command name, revealing the per-position taint the word
  *	builder produced.
+ *
+ * Why / How:
+ *	Lets a test inspect the taint tag of each individual argument in
+ *	one call, so a single command word can carry a mix of tainted and
+ *	untainted arguments and each position's tag be asserted.  Bounds
+ *	the scan to the local buffer.
+ *
+ * Results:
+ *	TH8_OK; result is the space-separated 0/1 string.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -1640,6 +1667,14 @@ th8test_expr_features_parse_flags(
  *	                       names parsed by
  *	                       `th8test_expr_features_parse_flags`.
  *
+ * Why / How:
+ *	Exposes the interpreter's expression-feature flag word
+ *	(`interp->nExprFeatures`) to script so tests can read and toggle
+ *	individual `TH8_EXPR_*` capabilities without a public API,
+ *	verifying that Th8_GetExprFeatures / Th8_SetExprFeatures
+ *	round-trip and that `set` returns the prior value.  Symbolic flag
+ *	names are parsed by th8test_expr_features_parse_flags.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	ctx    -- ignored (command-registration boilerplate).
@@ -1647,7 +1682,7 @@ th8test_expr_features_parse_flags(
  *	argv   -- argument string array.
  *	argl   -- argument lengths.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success (interpreter result holds the value
  *	per subcommand).
  *	`TH8_ERROR` on wrong-arg-count, unknown subcommand, or
@@ -1954,13 +1989,21 @@ th8testlib_format_size(char *zOut, size_t nOut, size_t v)
  *	Anything else is parsed as a decimal via `Th8_ToWideInt`;
  *	negative values are rejected.
  *
+ * Why / How:
+ *	The safe-arithmetic boundary tests need to name the exact
+ *	`size_t` values where Th8_SafeMul / Th8_SafeAdd tip into
+ *	overflow, but those values are unwritable as script literals on
+ *	arbitrary word sizes.  This helper maps portable symbolic tokens
+ *	to the computed boundary constants so a single test works on any
+ *	target, falling back to plain decimal for ordinary values.
+ *
  * Parameters:
  *	z    -- argument bytes.
  *	nZ   -- length of `z`.
  *	pOut -- output: resolved `size_t` value.  Set only on
  *	        successful return.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on a recognised symbol or a non-negative decimal.
  *	`TH8_ERROR` on a malformed decimal or a negative decimal.
  *	Does not set an interpreter result (helper is interp-less).
@@ -2016,6 +2059,20 @@ th8test_parse_size(const char *z, size_t nZ, size_t *pOut)
  *	described in th8test_parse_size (max, max-1, half, halfp1,
  *	halfdiv2) for boundary testing.
  *
+ * Why / How:
+ *	Th8_SafeMul is the internal guard used before size-based
+ *	allocations; this command exposes it to script so the overflow
+ *	and no-overflow arms can be driven directly at the wrap boundary
+ *	rather than inferred from an allocation failure.
+ *
+ * Results:
+ *	TH8_OK.  Interpreter result is "ok N" with the product's decimal
+ *	byte count, or "overflow" if the multiply would wrap; TH8_ERROR
+ *	with "bad size argument" if an argument fails to parse.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -2064,6 +2121,20 @@ th8test_safemul_cmd(
  * th8test_safeadd_cmd --
  *
  *	Implements "th8testlib::safeadd a b".  Companion to safemul.
+ *
+ * Why / How:
+ *	Exposes the internal Th8_SafeAdd guard to script for the same
+ *	reason as safemul: to drive its overflow and no-overflow arms
+ *	directly at the sum's wrap boundary.  Accepts the same symbolic
+ *	size tokens as th8test_parse_size.
+ *
+ * Results:
+ *	TH8_OK.  Interpreter result is "ok N" with the sum's decimal
+ *	byte count, or "overflow" if the add would wrap; TH8_ERROR with
+ *	"bad size argument" if an argument fails to parse.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -2130,6 +2201,23 @@ th8test_safeadd_cmd(
  *	"query" returns "1" if bigint is currently enabled, "0"
  *	otherwise.  "enable" / "disable" return the empty string.
  *
+ * Why / How:
+ *	Wraps Th8_EnableBigint and Th8_IsBigintEnabled so a test can
+ *	temporarily disable bigint promotion in -setup, exercise the
+ *	integer-overflow-error path in -body, and re-enable it in
+ *	-cleanup, turning what would otherwise be a tautological gate
+ *	into a real Boolean test of overflow behavior.  Compiled only
+ *	when TH8_ENABLE_BIGINT is defined.
+ *
+ * Results:
+ *	TH8_OK; interpreter result is "1"/"0" for query, empty for
+ *	enable/disable.  TH8_ERROR (with a message) on a failed toggle
+ *	or an unknown subcommand.
+ *
+ * Side effects:
+ *	Enables or disables arbitrary-precision-integer promotion on the
+ *	interpreter; sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -2194,6 +2282,20 @@ th8test_bigint_cmd(
  *	internal pairs (whitespace skip, leading-comment, brace/
  *	quote scanning, backslash-newline continuation, etc.).
  *
+ * Why / How:
+ *	Reaches th8ParseCommand through the internal stubs table wired
+ *	up by Th8test_Init, zero-initialising a Th8_Parse, parsing the
+ *	script, then freeing the parse with th8FreeParse.  This is the
+ *	only way to exercise the internal parser's decisions from a
+ *	script test.
+ *
+ * Results:
+ *	TH8_OK with the number of parsed words as the interpreter
+ *	result; TH8_ERROR if th8ParseCommand rejects the script.
+ *
+ * Side effects:
+ *	Allocates and frees a Th8_Parse; sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -2249,6 +2351,19 @@ th8test_parse_command_cmd(
  *	Like parse_command, th8ParseExpr has no in-tree callers
  *	(the in-tree expr evaluator builds its AST directly).
  *
+ * Why / How:
+ *	Reaches th8ParseExpr through the internal stubs table, zero-
+ *	initialising a Th8_Parse, parsing the expression text, then
+ *	freeing the parse with th8FreeParse -- the only script-level
+ *	path to the internal expression tokenizer's decisions.
+ *
+ * Results:
+ *	TH8_OK with the parsed word count as the interpreter result;
+ *	TH8_ERROR if th8ParseExpr rejects the text.
+ *
+ * Side effects:
+ *	Allocates and frees a Th8_Parse; sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -2302,6 +2417,19 @@ th8test_parse_expr_cmd(
  *	stubs table.  The function tokenizes a single $name or
  *	$name(idx) form into a Th8_Value.  Returns the parse
  *	return code (0 on success).
+ *
+ * Why / How:
+ *	Reaches th8ParseVarName through the internal stubs table with a
+ *	byte-zeroed Th8_Value token, so the internal variable-name
+ *	tokenizer's decisions (bare name, array index, braced name) can
+ *	be driven from a script test that has no other caller.
+ *
+ * Results:
+ *	TH8_OK; the interpreter result is th8ParseVarName's return code
+ *	(0 on success).
+ *
+ * Side effects:
+ *	Sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -2520,6 +2648,12 @@ static int th8test_bug22NullOpRegressions = 0;
  *	a required operand was missing.  See `docs/internal/incomplete.md`
  *	"Bug 22" for the full history.
  *
+ * Why / How:
+ *	The counter is a static in this translation unit with no script
+ *	visibility; this accessor exposes it so a regression test can
+ *	run the math-proc probe and then assert the count is zero,
+ *	turning a silent internal invariant into a checkable one.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	ctx    -- ignored.
@@ -2527,7 +2661,7 @@ static int th8test_bug22NullOpRegressions = 0;
  *	argv   -- argument string array (unused beyond `argv[0]`).
  *	argl   -- argument lengths (unused).
  *
- * Returns:
+ * Results:
  *	`TH8_OK` with the integer count in the interpreter result.
  *	`TH8_ERROR` if `argc != 1` (interpreter result: usage
  *	message via `Th8_WrongNumArgs`).
@@ -2632,12 +2766,18 @@ th8TestExerciseCharProps(int c)
  *	Results are discarded (the calls are expected to return
  *	`TH8_ERROR` cleanly).
  *
+ * Why / How:
+ *	Lives in the test library so the channel helpers' entry-NULL
+ *	defensive guards can be driven for MC/DC without these
+ *	deliberately-invalid calls counting against src/th8_channel.c's
+ *	own coverage scope.
+ *
  * Parameters:
  *	interp -- live interpreter passed through to each helper.
  *	          Must be non-NULL; the helpers themselves see the
  *	          NULL channel argument, not a NULL interp.
  *
- * Returns:
+ * Results:
  *	Nothing.  All inner errors are absorbed; `Th8_ClearResult`
  *	wipes any error message left on the interp.
  *
@@ -2676,11 +2816,17 @@ th8TestExerciseChannelNullArgs(Th8_Interp *interp)
  *	  3. `(NULL, ...)` -- C1=T (already covered by the first
  *	     call; included for symmetry).
  *
+ * Why / How:
+ *	The entry guard's NULL-interp condition is otherwise unreachable
+ *	from a script (a live command always has an interp), so this
+ *	helper calls the internal store directly with both
+ *	NULL/non-NULL interp values to satisfy both MC/DC pairs.
+ *
  * Parameters:
  *	interp -- live interpreter for the C1=F branch.  Must be
  *	          non-NULL.
  *
- * Returns:
+ * Results:
  *	Nothing.  Inner call results are discarded.
  *
  * Side effects:
@@ -2710,10 +2856,16 @@ th8TestExerciseBigintCacheStore(Th8_Interp *interp)
  *	out-of-range digit endings; trailing dots and spaces; and
  *	all-non-printable edge cases.  Results are discarded.
  *
+ * Why / How:
+ *	The reserved-device-name matcher has a dense per-character
+ *	decision tree that ordinary filesystem tests barely touch; this
+ *	helper enumerates canonical names, per-position near-misses, and
+ *	edge cases so every branch is driven from the test library.
+ *
  * Parameters:
  *	(none) -- the helper operates only on string literals.
  *
- * Returns:
+ * Results:
  *	Nothing.  Each inner call's return value is discarded.
  *
  * Side effects:
@@ -2826,7 +2978,16 @@ th8TestExerciseDeviceName(void)
  *	          registered (the exerciser checks before
  *	          tombstoning).
  *
- * Returns:
+ * Why / How:
+ *	Several hash-entry tombstone states (pEntry non-NULL, pData
+ *	NULL) are unreachable through public commands because deletion
+ *	removes entries outright; this exerciser synthesises them by
+ *	reaching into the command-name, command-token, global-proc,
+ *	and expansion hashes, zeroing pData on a live entry, running
+ *	the consumer, then restoring pData -- covering each tombstone-
+ *	safe guard.
+ *
+ * Results:
  *	Nothing.  All inner errors are absorbed and
  *	`Th8_ClearResult` wipes the result on the
  *	`info procs` sub-test.
@@ -2980,7 +3141,13 @@ th8TestExerciseCmdTokenTombstone(Th8_Interp *interp)
  *	          ignored because the first call returns
  *	          `TH8_BREAK`.
  *
- * Returns:
+ * Why / How:
+ *	When a hash holds exactly one entry whose key bytes are
+ *	runtime-derived, the caller cannot Th8_HashFind it; iterating
+ *	and grabbing the first entry (then breaking) is the only way to
+ *	obtain a live Th8_HashEntry* for tombstone mutation.
+ *
+ * Results:
  *	`TH8_BREAK` always, halting iteration after the first
  *	captured entry.
  *
@@ -3020,7 +3187,15 @@ th8TestCaptureFirstHashEntry(Th8_HashEntry *pEntry, void *pCtx)
  *	          array-search cursor is currently open (the
  *	          exerciser checks before tombstoning).
  *
- * Returns:
+ * Why / How:
+ *	The (pEntry non-NULL, pData NULL) C-pair in th8ArraySearchFind
+ *	is unreachable via [array startsearch]/[nextelement] because
+ *	Th8_HashDelete removes entries fully; the exerciser opens a real
+ *	search, captures its hash entry, zeroes pData, runs
+ *	[array nextelement] through the guard, then restores pData so
+ *	[array donesearch] frees it normally.
+ *
+ * Results:
  *	Nothing.  All inner errors are absorbed.
  *
  * Side effects:
@@ -3137,7 +3312,13 @@ th8TestExerciseArraySearchTombstone(Th8_Interp *interp)
  *	          `test_echo` math function is not registered
  *	          (the exerciser checks before tombstoning).
  *
- * Returns:
+ * Why / How:
+ *	The (pHash non-NULL, pData NULL) C-pair in Th8_FindMathFunc is
+ *	unreachable via normal HashFind because Th8_DeleteMathFunc
+ *	unlinks the entry; the exerciser clears pData on the live
+ *	`test_echo` entry, calls Th8_FindMathFunc, then restores it.
+ *
+ * Results:
  *	Nothing.
  *
  * Side effects:
@@ -3207,7 +3388,13 @@ th8TestExerciseMathFuncTombstone(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter.  No-op if NULL.
  *
- * Returns:
+ * Why / How:
+ *	Calls th8CheckExpansionPrefix directly with six hand-chosen
+ *	input words so every arm of its `k + 1 < nWord && k > 1` guard
+ *	is driven from the test library, rather than depending on a
+ *	third-party script test remaining unchanged to close coverage.
+ *
+ * Results:
  *	Nothing.  Inner errors absorbed; `Th8_ClearResult` wipes
  *	the result after each vector so callers see a clean state.
  *
@@ -3296,11 +3483,19 @@ th8TestExerciseExpansionPrefix(Th8_Interp *interp)
  *	path that checks the token against its expected value --
  *	after the perturbation the two no longer match.
  *
+ * Why / How:
+ *	Corrupts the token via the single th8XorInterpLoadToken accessor
+ *	(no added MC/DC decisions) so a test can then confirm the
+ *	loader's tamper-detection path rejects the mismatched token.
+ *
  * Parameters:
  *	interp -- live interpreter.  No-op if NULL.
  *
- * Returns / Side effects:
- *	No return.  Mutates the interpreter's load-enable token.
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
+ *	Mutates the interpreter's load-enable token.
  *
  *----------------------------------------------------------------------
  */
@@ -3323,11 +3518,19 @@ th8TestPerturbLoadToken(Th8_Interp *interp)
  *	`nBigintToken == nBigintOk` -- after the perturbation
  *	those two fields no longer match.
  *
+ * Why / How:
+ *	Corrupts the token via the single th8XorInterpBigintToken
+ *	accessor (no added MC/DC decisions) so a test can confirm the
+ *	bigint tamper-detection check fires on the mismatch.
+ *
  * Parameters:
  *	interp -- live interpreter.  No-op if NULL.
  *
- * Returns / Side effects:
- *	No return.  Mutates `interp->nBigintToken`.
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
+ *	Mutates `interp->nBigintToken`.
  *
  *----------------------------------------------------------------------
  */
@@ -3349,11 +3552,19 @@ th8TestPerturbBigintToken(Th8_Interp *interp)
  *	loader rejects subsequent signed-script evaluation
  *	attempts.
  *
+ * Why / How:
+ *	Corrupts the token via the single th8XorInterpSignedToken
+ *	accessor (no added MC/DC decisions) so a test can confirm the
+ *	signed-only tamper-detection check rejects the mismatch.
+ *
  * Parameters:
  *	interp -- live interpreter.  No-op if NULL.
  *
- * Returns / Side effects:
- *	No return.  Mutates `interp->nSignedToken`.
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
+ *	Mutates `interp->nSignedToken`.
  *
  *----------------------------------------------------------------------
  */
@@ -3375,11 +3586,19 @@ th8TestPerturbSignedToken(Th8_Interp *interp)
  *	subsequent `[load]` / `[unload]` calls should refuse to
  *	proceed.
  *
+ * Why / How:
+ *	Corrupts the token via the single th8XorInterpUnloadToken
+ *	accessor (no added MC/DC decisions) so a test can confirm
+ *	subsequent [load]/[unload] refuse to proceed on the mismatch.
+ *
  * Parameters:
  *	interp -- live interpreter.  No-op if NULL.
  *
- * Returns / Side effects:
- *	No return.  Mutates `interp->nLoadToken` (via
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
+ *	Mutates `interp->nLoadToken` (via
  *	`th8XorInterpUnloadToken`).
  *
  *----------------------------------------------------------------------
@@ -3402,11 +3621,19 @@ th8TestPerturbUnloadToken(Th8_Interp *interp)
  *	without the runtime asserting on a half-completed
  *	previous unload.
  *
+ * Why / How:
+ *	Delegates to th8ClearInterpUnloadFlags so a test can run
+ *	successive [load]/[unload] cycles without the runtime asserting
+ *	on a half-completed previous unload.
+ *
  * Parameters:
  *	interp -- live interpreter.  No-op if NULL.
  *
- * Returns / Side effects:
- *	No return.  Resets interp's unload-flag state.
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
+ *	Resets interp's unload-flag state.
  *
  *----------------------------------------------------------------------
  */
@@ -3429,6 +3656,200 @@ th8TestClearUnloadFlag(Th8_Interp *interp)
 static int th8test_null_guard_qe_cb(Th8_Interp *interp, void *pCtx);
 
 
+/* OOM / fault-injection malloc stubs -- GENERAL test infrastructure used across
+ * many exercisers (construction, resource, plat-wrappers, ...), NOT
+ * variables-specific, so not gated on TH8_ENABLE_VARIABLES. */
+static void *(*th8test_pRealMalloc)(Th8_Interp *, void *, size_t) = NULL;
+static th8_int64_t
+    th8test_nMallocTrip = -1; /* -1 disarmed; >=0 fires at 0. */
+/* Set to 1 whenever an injector actually RETURNS NULL (a real fired fault),
+ * so a sweep can distinguish "the countdown reached zero" from "an allocation
+ * was actually failed" -- the two differ at the exact trip == alloc-count
+ * boundary.  Shared by both the failafter and one-shot injectors. */
+static int th8test_bOneShotFired = 0;
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_stub_xMalloc_failafter --
+ *
+ *	Construction-time OOM injector for the TH8K-002/003 constructor
+ *	rollback exerciser.  Delegates to the parent's real allocator
+ *	until the trip counter reaches zero, then returns NULL for every
+ *	further request.  This drives Th8_CreateInterp's eager-hash and
+ *	th8InitGlobals OOM guards from a partially-constructed interp, so
+ *	th8FreeNamespace's NULL-safe partial teardown and the reverse-
+ *	order rollback run for real (validated by TH8_HEAP_CHECKS, which
+ *	would abort on a leak or double free).  Not thread-safe: used
+ *	only from the single-threaded exerciser.
+ *
+ * Why / How:
+ *	Installed as the platform xMalloc before Th8_CreateInterp; it
+ *	counts allocations down and, once the trip reaches zero, fails
+ *	that request and every later one, so the OOM lands mid-
+ *	construction and the reverse-order teardown runs for real.
+ *
+ * Results:
+ *	The parent allocator's pointer while the trip counter is above
+ *	zero; NULL once it has reached zero (or if no real allocator is
+ *	installed).
+ *
+ * Side effects:
+ *	Decrements th8test_nMallocTrip; sets th8test_bOneShotFired when
+ *	it first returns NULL.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static void *
+th8test_stub_xMalloc_failafter(
+    Th8_Interp *interp, /* Interpreter under construction (may be partial). */
+    void *pCtx, /* Platform context. */
+    size_t nByte) /* Requested size. */
+{
+    if (th8test_nMallocTrip == 0) {
+	th8test_bOneShotFired = 1;
+	return NULL;
+    }
+    if (th8test_nMallocTrip > 0) {
+	th8test_nMallocTrip--;
+    }
+    return th8test_pRealMalloc ? th8test_pRealMalloc(interp, pCtx, nByte)
+                               : NULL;
+}
+
+static th8_int64_t th8test_nMallocOneShot =
+    -1; /* -1 disarmed; fires ONCE at 0 then resumes. */
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_stub_xMalloc_oneshot --
+ *
+ *	ONE-SHOT construction-time OOM injector for the TH8K-003 probative
+ *	constructor-globals test.  Unlike th8test_stub_xMalloc_failafter
+ *	(which fails the trip allocation AND every later one), this fails
+ *	EXACTLY the trip allocation and then resumes normal service, so it
+ *	reproduces a TRANSIENT one-shot allocation failure -- the case the
+ *	persistent injector masks (with fail-after, a later Th8_SetVar also
+ *	fails and hides an unchecked earlier Th8_ListAppend).  Sets
+ *	th8test_bOneShotFired when it fires so the caller can tell whether
+ *	the fault actually landed during the call under test.  Not
+ *	thread-safe: used only from the single-threaded exerciser.
+ *
+ * Why / How:
+ *	Installed as the platform xMalloc; when the trip reaches zero it
+ *	disarms itself, fails exactly that one allocation, and resumes
+ *	normal service -- reproducing a transient fault that the
+ *	persistent fail-after injector would mask.
+ *
+ * Results:
+ *	NULL for the single trip allocation; otherwise the parent
+ *	allocator's pointer (or NULL if none is installed).
+ *
+ * Side effects:
+ *	Decrements/disarms th8test_nMallocOneShot; sets
+ *	th8test_bOneShotFired when it fires.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static void *
+th8test_stub_xMalloc_oneshot(
+    Th8_Interp *interp, /* Interpreter (may be under construction). */
+    void *pCtx, /* Platform context. */
+    size_t nByte) /* Requested size. */
+{
+    if (th8test_nMallocOneShot == 0) {
+	th8test_nMallocOneShot = -1; /* disarm: fail once, then resume. */
+	th8test_bOneShotFired = 1;
+	return NULL;
+    }
+    if (th8test_nMallocOneShot > 0) {
+	th8test_nMallocOneShot--;
+    }
+    return th8test_pRealMalloc ? th8test_pRealMalloc(interp, pCtx, nByte)
+                               : NULL;
+}
+
+#  if defined(TH8_ENABLE_LOAD)
+static int th8test_nRandCall = 0;
+static int th8test_bRandExhaust = 0;
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_stub_xRandomBytes_sentinel --
+ *
+ *	xRandomBytes sentinel injector for the TH8K-022 load-token loop
+ *	in Th8_CreateInterp.  In sequence mode it emits, in order, the
+ *	three rejected sentinel draws (0, ~0, 1) then a valid token,
+ *	driving each FALSE arm of `tok != 0 && tok != ~0 && tok != 1`
+ *	before the loop accepts and exits.  In exhaust mode it always
+ *	emits 0, so the loop spends all 100 retries and degrades to
+ *	nLoadToken == 0 (token [load] unavailable) with no panic -- the
+ *	TH8K-022 non-fatal path.  Not thread-safe: used only from the
+ *	single-threaded exerciser.
+ *
+ * Why / How:
+ *	Installed as the platform xRandomBytes so the load-token
+ *	rejection loop sees deterministic draws: sequence mode returns
+ *	each rejected sentinel then a valid token to drive every FALSE
+ *	arm, exhaust mode always returns 0 to drive the retry-exhausted
+ *	degrade path.  A call counter selects which draw to emit.
+ *
+ * Results:
+ *	TH8_OK; writes nByte bytes of the selected draw into pBuf.
+ *
+ * Side effects:
+ *	Fills the caller's buffer; increments th8test_nRandCall.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_stub_xRandomBytes_sentinel(
+    Th8_Interp *interp, /* Unused. */
+    void *pCtx, /* Unused. */
+    void *pBuf, /* Output buffer (>= nByte bytes). */
+    size_t nByte) /* Number of bytes requested. */
+{
+    unsigned char *buf = (unsigned char *)pBuf;
+    size_t j;
+
+    (void)interp;
+    (void)pCtx;
+
+    for (j = 0; j < nByte; j++) {
+	buf[j] = 0x00; /* Default little-endian draw == 0 (a sentinel). */
+    }
+    if (!th8test_bRandExhaust) {
+	switch (th8test_nRandCall) {
+	case 0: /* tok == 0: all bytes already zero. */
+	    break;
+	case 1: /* tok == ~0: all bytes 0xFF. */
+	    for (j = 0; j < nByte; j++) {
+		buf[j] = 0xFF;
+	    }
+	    break;
+	case 2: /* tok == 1: low byte 1, rest zero. */
+	    if (nByte > 0) {
+		buf[0] = 0x01;
+	    }
+	    break;
+	default: /* Valid non-sentinel token: loop accepts and exits. */
+	    if (nByte > 0) {
+		buf[0] = 0x02;
+	    }
+	    break;
+	}
+    }
+    th8test_nRandCall++;
+    return TH8_OK;
+}
+#  endif /* TH8_ENABLE_LOAD */
+
+
 /*
  *----------------------------------------------------------------------
  *
@@ -3445,6 +3866,22 @@ static int th8test_null_guard_qe_cb(Th8_Interp *interp, void *pCtx);
  *	Returns a list of probe results so the test can
  *	assert on basic correctness while incidentally
  *	closing the MC/DC pairs.
+ *
+ * Why / How:
+ *	The th8_plat.c wrappers have no production callers, so their
+ *	internal NULL-arg and missing-callback guards are otherwise
+ *	uncoverable; this command calls each wrapper with representative
+ *	inputs and appends the outcome to a result list, giving the test
+ *	both a correctness assertion and MC/DC closure in one call.
+ *
+ * Results:
+ *	TH8_OK with a list of probe results as the interpreter result;
+ *	TH8_ERROR on an internal allocation or list-append failure.
+ *
+ * Side effects:
+ *	Allocates and frees the result list; may install and later
+ *	restore platform-callback overrides; sets the interpreter
+ *	result.
  *
  *----------------------------------------------------------------------
  */
@@ -3475,9 +3912,9 @@ th8test_plat_wrappers_cmd(
 
     /* th8Memmove: copy 5 bytes; also drive n=0 + NULL guards. */
     (void)th8Memmove(interp, sbuf, "abcde", 5);
-    (void)th8Memmove(interp, sbuf, "x", 0);          /* n=0 */
-    (void)th8Memmove(interp, NULL, "x", 1);         /* dst=NULL */
-    (void)th8Memmove(interp, sbuf, NULL, 1);         /* src=NULL */
+    (void)th8Memmove(interp, sbuf, "x", 0); /* n=0 */
+    (void)th8Memmove(interp, NULL, "x", 1); /* dst=NULL */
+    (void)th8Memmove(interp, sbuf, NULL, 1); /* src=NULL */
 
     /* th8Strcmp: drive both-non-NULL, one-NULL, both-NULL. */
     cmpRes = th8Strcmp(interp, "alpha", "beta");
@@ -3507,7 +3944,7 @@ th8test_plat_wrappers_cmd(
     {
 	char sbuf[32];
 	(void)th8Snprintf(interp, sbuf, sizeof(sbuf), "%d-%s", 42, "ok");
-	(void)th8Snprintf(interp, sbuf, 4, "%d", 12345);    /* truncates */
+	(void)th8Snprintf(interp, sbuf, 4, "%d", 12345); /* truncates */
 	/* th8Vsnprintf L724 `!buf || size == 0`:
 	 *   (T, -)  buf=NULL  -> outcome T (return 0)
 	 *   (F, T)  buf!=NULL, size=0 -> outcome T (return 0)
@@ -3532,7 +3969,7 @@ th8test_plat_wrappers_cmd(
 	lbuf[3] = 'b';
 	ln = 4;
 	(void)th8TranslateLineEndings(lbuf, &ln);
-	lbuf[0] = '\n';                     /* invalid: \n at i==0 */
+	lbuf[0] = '\n'; /* invalid: \n at i==0 */
 	ln = 1;
 	tle_rc = th8TranslateLineEndings(lbuf, &ln);
 	(void)tle_rc;
@@ -3554,7 +3991,7 @@ th8test_plat_wrappers_cmd(
     {
 	void *pCh = NULL;
 	(void)Th8_GetInput(interp, &pCh);
-	(void)Th8_GetInput(NULL, &pCh);             /* C1=F */
+	(void)Th8_GetInput(NULL, &pCh); /* C1=F */
 	pCh = NULL;
 	(void)Th8_GetOutput(interp, &pCh);
 	(void)Th8_GetOutput(NULL, &pCh);
@@ -3575,6 +4012,8 @@ th8test_plat_wrappers_cmd(
 	(void)Th8_GetStepLimit(NULL);
 	(void)Th8_GetAllocLimit(interp);
 	(void)Th8_GetAllocLimit(NULL);
+	(void)Th8_GetAllocPeak(interp);
+	(void)Th8_GetAllocPeak(NULL); /* NULL-guard arm (TH8K-021). */
 	Th8_ResetStepCount(interp);
 	Th8_ResetStepCount(NULL);
 	Th8_ResetExit(interp);
@@ -3584,51 +4023,26 @@ th8test_plat_wrappers_cmd(
 	{
 	    const Th8_Platform *pMemP = Th8_GetMemPlatform();
 	    (void)pMemP;
-	    /* Drive th8_mem.c L77 / L89 MC/DC vectors:
-	     *   nByte==0     -> L77 C1=T outcome T
-	     *   huge nByte   -> L77 C1=F C2=T outcome T
-	     *   normal nByte -> L77 (F,F) outcome F, then
-	     *                   L89 (ALWAYS(pPlat)=C, xMalloc=T)
-	     *                   outcome T
-	     * Without these, the standard interp's th8MemPlatform
-	     * is never used as a second-chance allocator (xMalloc
-	     * is the merged libc/mimalloc impl that never returns
-	     * NULL on small allocs) so xNeedMemory's body has 0
-	     * coverage. */
+	    /* Drive th8MemNeedMemory (the built-in xNeedMemory) MC/DC.  After
+	     * the TH8K-023 rework its body is: reject a NULL interp, clear the
+	     * IR cache, then delegate to th8MallocCommon (the one limit-checked,
+	     * zero-filled, accounted core).  Its only decision is the `!interp`
+	     * guard -- drive both arms.  The delegated allocation (and its
+	     * limit/accounting) is covered by the normal alloc path and the
+	     * dedicated ceiling test.  Without this, the standard interp's
+	     * th8MemPlatform is never used as a second-chance allocator (the
+	     * merged xMalloc never returns NULL on small allocs), so
+	     * xNeedMemory's body has 0 coverage.  The old xMalloc==NULL sub-case
+	     * was removed: xMalloc is a validated mandatory callback, and the
+	     * delegated core dereferences it unconditionally (nulling it in a
+	     * live interp is not a reachable production state). */
 	    if (pMemP && pMemP->xNeedMemory) {
 		void *pNeed;
-		pNeed = pMemP->xNeedMemory(interp, 0);
+		pNeed = pMemP->xNeedMemory(interp, 32, 0, __FILE__, __LINE__);
 		if (pNeed) Th8_Free(interp, pNeed);
-		pNeed = pMemP->xNeedMemory(interp, ((size_t)-1) - 1);
+		/* !interp arm: returns NULL without touching the allocator. */
+		pNeed = pMemP->xNeedMemory(NULL, 32, 0, __FILE__, __LINE__);
 		if (pNeed) Th8_Free(interp, pNeed);
-		pNeed = pMemP->xNeedMemory(interp, 32);
-		if (pNeed) Th8_Free(interp, pNeed);
-		pNeed = pMemP->xNeedMemory(NULL, 32);
-		if (pNeed) Th8_Free(interp, pNeed);
-		/* Drive th8_mem.c L89 C2=F (pPlat->xMalloc == NULL):
-		 * create a child interp normally (needs xMalloc),
-		 * then nullify xMalloc on its platform struct in
-		 * place, call xNeedMemory.  L89 sees xMalloc=NULL,
-		 * returns NULL.  Restore xMalloc before delete so
-		 * Th8_DeleteInterp's internal frees still work. */
-		{
-		    const Th8_Platform *pPRefP = Th8_GetPlatform(interp);
-		    if (pPRefP) {
-			Th8_Platform cpRef = *pPRefP;
-			Th8_Interp *pRefChild;
-			cpRef.xPanic = 0;
-			pRefChild = Th8_CreateInterp(&cpRef);
-			if (pRefChild) {
-			    Th8_RegisterLanguage(pRefChild);
-			    cpRef.xMalloc = NULL;
-			    (void)pMemP->xNeedMemory(pRefChild, 32);
-			    /* Restore xMalloc so Th8_DeleteInterp's
-			     * internal frees still work cleanly. */
-			    cpRef.xMalloc = pPRefP->xMalloc;
-			    Th8_DeleteInterp(pRefChild);
-			}
-		    }
-		}
 	    }
 	}
 	/* Th8_EmitTrace L247 `xTrace && zFmt` C2-Pair:
@@ -4136,7 +4550,10 @@ th8test_plat_wrappers_cmd(
 	 * falls through to the real platform RNG (counter exhausted)
 	 * which produces a non-reserved token and the call succeeds.
 	 */
-#  if defined(TH8_ENABLE_LOAD)
+	/* This driver forces the RNG via fault injection to reach Th8_EnableLoad /
+     * Th8_EnableUnload token-collision arms, so it needs BOTH load AND fault
+     * injection; without either it is simply skipped. */
+#  if defined(TH8_ENABLE_LOAD) && defined(TH8_ENABLE_FAULT_INJECTION)
 	{
 	    const Th8_Platform *pPlat = Th8_GetPlatform(interp);
 	    if (pPlat) {
@@ -4184,7 +4601,7 @@ th8test_plat_wrappers_cmd(
 		}
 	    }
 	}
-#  endif /* TH8_ENABLE_LOAD */
+#  endif /* TH8_ENABLE_LOAD && TH8_ENABLE_FAULT_INJECTION */
 
 	/*
 	 * Bug 28 family second-call driver (2026-06-09): the
@@ -4507,6 +4924,7 @@ th8test_plat_wrappers_cmd(
 	     * the C1 independence pair. */
 	    (void)th8AfParseHexKey(" ", 1, &key);
 	}
+#  if defined(TH8_ENABLE_CRYPTOGRAPHY)
 	/*
 	 * th8RsaParseCapi driver: 15 crafted byte arrays that
 	 * progress from earliest-bailout (size, bType, bVersion,
@@ -4787,6 +5205,7 @@ th8test_plat_wrappers_cmd(
 	    blob[16] = 0x03;
 	    (void)th8RsaParseCapi(interp, blob, 20, (void *)buf);
 	}
+#  endif /* TH8_ENABLE_CRYPTOGRAPHY */
 	Th8_ClearResult(interp);
 
 	/*
@@ -4903,6 +5322,7 @@ th8test_plat_wrappers_cmd(
 	 *     to completion with pSlot all-zeros and L1587 falls
 	 *     through.
 	 */
+#  if defined(TH8_ENABLE_CRYPTOGRAPHY) && defined(TH8_ENABLE_VARIABLES)
 	if (th8InternalStubsPtr->th8_SecureHasMasterKey &&
 	    th8InternalStubsPtr->th8_GetSecureKeyStore &&
 	    th8InternalStubsPtr->th8_SetSecureKeyStore) {
@@ -5002,6 +5422,7 @@ th8test_plat_wrappers_cmd(
 		}
 	    }
 	}
+#  endif /* TH8_ENABLE_CRYPTOGRAPHY && TH8_ENABLE_VARIABLES */
 	Th8_ClearResult(interp);
 
 	/*
@@ -5168,6 +5589,243 @@ th8test_plat_wrappers_cmd(
 	    }
 	}
 #  endif /* TH8_ENABLE_VARIABLES */
+
+	/*
+	 * TH8K-002/003 constructor OOM rollback exerciser: sweep the
+	 * allocation trip count so each guarded eager-hash allocation
+	 * (paCmd/paVar/paChild in STEP 3, paPackage in STEP 4) and the
+	 * th8InitGlobals OOM path (STEP 5) fails in turn, forcing
+	 * Th8_CreateInterp to roll back a partially-constructed interp
+	 * and return NULL without a crash or leak.  The failing xMalloc
+	 * delegates to the real allocator until the trip fires, so early
+	 * allocations succeed and a later one fails -- driving
+	 * th8FreeNamespace's NULL-safe partial teardown (TH8K-002) and
+	 * the reverse-order package-registry rollback (TH8K-003).  A
+	 * trip of 1 also covers the pre-existing first-allocation guard.
+	 */
+#  if defined(TH8_ENABLE_VARIABLES)
+	{
+	    const Th8_Platform *pParent = Th8_GetPlatform(interp);
+	    if (pParent && pParent->xMalloc) {
+		int n;
+		th8test_pRealMalloc = pParent->xMalloc;
+		for (n = 1; n <= 40; n++) {
+		    Th8_Platform plat = *pParent;
+		    Th8_Interp *pChild;
+		    plat.xPanic = 0;
+		    plat.xMalloc = th8test_stub_xMalloc_failafter;
+		    th8test_nMallocTrip = n;
+		    pChild = Th8_CreateInterp(&plat);
+		    th8test_nMallocTrip = -1; /* disarm before teardown. */
+		    if (pChild) {
+			Th8_DeleteInterp(pChild);
+		    }
+		}
+		th8test_pRealMalloc = NULL;
+	    }
+	}
+
+	/*
+	 * TH8K-006: language-registration OOM propagation.  Construct a
+	 * child interp with the fault disarmed, then arm the fail-after-N
+	 * xMalloc and call Th8_RegisterLanguage, sweeping the trip count.
+	 * At any trip that hits a registration allocation the function MUST
+	 * return TH8_ERROR (the old code returned TH8_OK with a partial,
+	 * inconsistent language); at higher trips it returns TH8_OK.
+	 * TH8_HEAP_CHECKS validates that a partially-registered child tears
+	 * down cleanly.
+	 */
+	{
+	    const Th8_Platform *pParent = Th8_GetPlatform(interp);
+	    if (pParent && pParent->xMalloc) {
+		int n;
+		th8test_pRealMalloc = pParent->xMalloc;
+		for (n = 1; n <= 200; n++) {
+		    Th8_Platform plat = *pParent;
+		    Th8_Interp *pChild;
+
+		    plat.xPanic = 0;
+		    plat.xMalloc = th8test_stub_xMalloc_failafter;
+		    th8test_nMallocTrip = -1; /* construct without fault. */
+		    pChild = Th8_CreateInterp(&plat);
+		    if (pChild) {
+			th8test_nMallocTrip =
+			    n; /* arm during registration. */
+			(void)Th8_RegisterLanguage(pChild);
+			th8test_nMallocTrip = -1;
+			Th8_DeleteInterp(pChild);
+		    }
+		}
+		th8test_pRealMalloc = NULL;
+	    }
+	}
+#  endif /* TH8_ENABLE_VARIABLES */
+
+#  if defined(TH8_ENABLE_LOAD)
+	/*
+	 * TH8K-022 load-token loop exerciser.  Overriding xRandomBytes
+	 * BEFORE Th8_CreateInterp drives the two compound decisions in
+	 * the load-token generator that a real CSPRNG never reaches:
+	 *   - Sequence mode feeds the three rejected sentinel draws
+	 *     (0, ~0, 1) then a valid token, covering each FALSE arm of
+	 *     `tok != 0 && tok != ~0 && tok != 1` and the retry-continue
+	 *     side of `retries < 100 && nLoadToken == 0`.
+	 *   - Exhaust mode feeds only sentinels, spending all 100 retries
+	 *     so the `retries < 100` guard goes false and the interp is
+	 *     created with token [load] unavailable but with NO panic
+	 *     (xPanic is NULL) -- the TH8K-022 non-fatal degradation path.
+	 * Both children construct fully; TH8_HEAP_CHECKS validates clean
+	 * teardown.
+	 */
+	{
+	    const Th8_Platform *pParent = Th8_GetPlatform(interp);
+	    if (pParent && pParent->xRandomBytes) {
+		Th8_Platform plat;
+		Th8_Interp *pChild;
+
+		/* Sequence: 0, ~0, 1, then a valid token. */
+		th8test_nRandCall = 0;
+		th8test_bRandExhaust = 0;
+		plat = *pParent;
+		plat.xPanic = 0;
+		plat.xRandomBytes = th8test_stub_xRandomBytes_sentinel;
+		pChild = Th8_CreateInterp(&plat);
+		if (pChild) {
+		    Th8_DeleteInterp(pChild);
+		}
+
+		/* Exhaust: only sentinels -> 100 retries -> non-fatal. */
+		th8test_nRandCall = 0;
+		th8test_bRandExhaust = 1;
+		plat = *pParent;
+		plat.xPanic = 0;
+		plat.xRandomBytes = th8test_stub_xRandomBytes_sentinel;
+		pChild = Th8_CreateInterp(&plat);
+		if (pChild) {
+		    Th8_DeleteInterp(pChild);
+		}
+		th8test_bRandExhaust = 0;
+	    }
+	}
+#  endif /* TH8_ENABLE_LOAD */
+
+	/*
+	 * TH8K-001 platform-validation exerciser.  th8ValidatePlatform
+	 * runs at the top of Th8_CreateInterp; feed it a NULL platform, a
+	 * wrong ABI version, and each mandatory callback missing in turn.
+	 * Every variant must fail creation cleanly (NULL) without ever
+	 * dereferencing a callback -- closing the version check and the
+	 * mandatory-callback OR reject arms.
+	 */
+	{
+	    const Th8_Platform *pParent = Th8_GetPlatform(interp);
+	    Th8_Interp *pBad;
+
+	    /* NULL platform. */
+	    pBad = Th8_CreateInterp(NULL);
+	    if (pBad) {
+		Th8_DeleteInterp(pBad);
+	    }
+
+	    if (pParent) {
+		Th8_Platform plat;
+
+		/* Wrong ABI version. */
+		plat = *pParent;
+		plat.nVersion = TH8_PLATFORM_VERSION + 1;
+		pBad = Th8_CreateInterp(&plat);
+		if (pBad) {
+		    Th8_DeleteInterp(pBad);
+		}
+
+		/* Each mandatory callback missing in turn. */
+#  define TH8T_TRY_MISSING(field)                                            \
+      do {                                                                   \
+	  plat = *pParent;                                                   \
+	  plat.field = 0;                                                    \
+	  pBad = Th8_CreateInterp(&plat);                                    \
+	  if (pBad) {                                                        \
+	      Th8_DeleteInterp(pBad);                                        \
+	  }                                                                  \
+      } while (0)
+		TH8T_TRY_MISSING(xMalloc);
+		TH8T_TRY_MISSING(xRealloc);
+		TH8T_TRY_MISSING(xFree);
+		TH8T_TRY_MISSING(xMemorySize);
+		TH8T_TRY_MISSING(xMemcpy);
+		TH8T_TRY_MISSING(xMemmove);
+		TH8T_TRY_MISSING(xMemset);
+		TH8T_TRY_MISSING(xMemcmp);
+#  undef TH8T_TRY_MISSING
+	    }
+	}
+
+	/*
+	 * TH8K-005 Th8_CreateCommand transactional-OOM exerciser.  Build a
+	 * child interp whose xMalloc fails after N allocations, then
+	 * create simple, qualified, and replacement commands under a swept
+	 * trip count so each staged allocation (namespace, qualified name,
+	 * command struct, token hash, command entry, token entry) fails in
+	 * turn.  A new-command failure must leave no residue and a replace
+	 * failure must leave the prior command intact; TH8_HEAP_CHECKS
+	 * validates the teardown.  A create/delete/recreate cycle drives
+	 * the find-only `pEntry && pEntry->pData` arms.
+	 */
+	{
+	    const Th8_Platform *pParent = Th8_GetPlatform(interp);
+	    if (pParent && pParent->xMalloc) {
+		Th8_Platform plat = *pParent;
+		Th8_Interp *pChild;
+
+		plat.xPanic = 0;
+		th8test_pRealMalloc = pParent->xMalloc;
+		th8test_nMallocTrip = -1;
+		plat.xMalloc = th8test_stub_xMalloc_failafter;
+		pChild = Th8_CreateInterp(&plat);
+		if (pChild) {
+		    int n;
+		    th8_uint64_t tok = 0;
+
+		    /* Base command for the replace path (no fault). */
+		    (void)Th8_CreateCommand(
+		        pChild, "th8t_base", th8test_nop_cmd, 0, 0, &tok);
+
+		    /* Delete + recreate to drive the tombstone (T,F) and
+		     * new (F,-) arms of `pEntry && pEntry->pData`. */
+		    (void)Th8_DeleteCommand(pChild, tok);
+		    (void)Th8_CreateCommand(
+		        pChild, "th8t_base", th8test_nop_cmd, 0, 0, &tok);
+
+		    /* Simple new-command + drift-to-replace sweep. */
+		    for (n = 1; n <= 10; n++) {
+			th8test_nMallocTrip = n;
+			(void)Th8_CreateCommand(
+			    pChild, "th8t_probe", th8test_nop_cmd, 0, 0, 0);
+			th8test_nMallocTrip = -1;
+		    }
+
+		    /* Qualified name: drives th8FindNamespace(create) OOM. */
+		    for (n = 1; n <= 14; n++) {
+			th8test_nMallocTrip = n;
+			(void)Th8_CreateCommand(
+			    pChild, "::th8t_ns::probe", th8test_nop_cmd, 0, 0,
+			    0);
+			th8test_nMallocTrip = -1;
+		    }
+
+		    /* Explicit replace of the base command under each trip. */
+		    for (n = 1; n <= 10; n++) {
+			th8test_nMallocTrip = n;
+			(void)Th8_CreateCommand(
+			    pChild, "th8t_base", th8test_nop_cmd, 0, 0, 0);
+			th8test_nMallocTrip = -1;
+		    }
+
+		    th8test_pRealMalloc = NULL;
+		    Th8_DeleteInterp(pChild);
+		}
+	    }
+	}
 
 	/*
 	 * Th8_ToInt parser-edge exerciser (Bug 50 -- 2026-06-09):
@@ -5367,14 +6025,13 @@ th8test_plat_wrappers_cmd(
 	        interp, (th8_uint64_t)0xDEADBEEFCAFEBABEULL);
 	}
 
-	/* Drive Th8_CancelEval cross-call-state transitions
-	 * (th8_core.c L6992 / L7016).  Both decisions need a
-	 * prior non-signal cancel call to have set
-	 * bCancelMsgOwned=1, then a follow-up call observes the
-	 * owned buffer.  Done on a child interp so the parent's
-	 * cancel state is not disturbed.  Per the existing pattern
-	 * for FAULT_INJECTION-only paths, gate on the libc
-	 * platform's availability. */
+	/* Drive the owner-thread Th8_CancelEval message-replace
+	 * branch (TH8K-008): the `if (bCancelMsgOwned && zCancelMsg)`
+	 * decision needs a prior non-signal owner cancel to have set
+	 * bCancelMsgOwned=1, so a follow-up owner cancel observes the
+	 * owned buffer and frees it before installing the new one.
+	 * Done on a child interp so the parent's cancel state is not
+	 * disturbed.  Gate on the libc platform's availability. */
 	{
 	    const Th8_Platform *pLib = Th8_GetLibcPlatform();
 	    if (pLib) {
@@ -5385,18 +6042,17 @@ th8test_plat_wrappers_cmd(
 		pChild = Th8_CreateInterp(&plat);
 		if (pChild) {
 		    Th8_RegisterLanguage(pChild);
-		    /* Step 1: non-signal cancel: sets bCancelMsgOwned=1,
-		     * allocates a copy of "owned1". */
+		    /* Step 1: owner non-signal cancel: bCancelMsgOwned=0
+		     * arm; installs an owned copy of "owned1". */
 		    (void)Th8_CancelEval(pChild, "owned1", 6, 0);
-		    /* Step 2: non-signal cancel again: L7016 sees the
-		     * prior bCancelMsgOwned=1, drives C1=T (and C2=T
-		     * since zCancelMsg is also non-NULL from step 1). */
+		    /* Step 2: owner non-signal cancel again: drives the
+		     * bCancelMsgOwned=1 TRUE arm -- frees "owned1" and
+		     * installs "owned2" (last owner write wins). */
 		    (void)Th8_CancelEval(pChild, "owned2", 6, 0);
-		    /* Step 3: signal-mode cancel: L6992 sees prior state
-		     * (zSavedCancelMsg=NULL because no signal call has
-		     * happened yet, bCancelMsgOwned=1 from step 2,
-		     * zCancelMsg non-NULL), drives the full (T,T,T)
-		     * triple closing C2-Pair and C3-Pair. */
+		    /* Step 3: signal-mode cancel: routes through the
+		     * cross-thread path (owner-only message state
+		     * untouched), so the custom "owned2" still wins over
+		     * the signal flag when reported. */
 		    (void)Th8_CancelEval(
 		        pChild, "static1", 7, TH8_CANCEL_SIGNAL);
 		    Th8_DeleteInterp(pChild);
@@ -5694,7 +6350,9 @@ th8test_plat_wrappers_cmd(
 	 * Th8_SetResultStatic (no allocation) and the Th8_Free
 	 * ALWAYS-wrap on interp->pPlatform was converted to a
 	 * plain check (Bug 26 family). */
+#  if defined(TH8_ENABLE_LOAD)
 	(void)Th8_Load(interp, "test_path", 9, "fakeProc", 8);
+#  endif
 	/* th8MathOp `!interp->pPlatform || !xMathFunc` (T,-)
 	 * vector: pPlatform NULL.  Error path now uses
 	 * Th8_SetResultStatic (promoted 2026-06-09), so the
@@ -6801,6 +7459,21 @@ th8test_plat_wrappers_cmd(
  *	enabled, "0" otherwise.  "enable" / "disable" return the
  *	empty string.
  *
+ * Why / How:
+ *	Wraps Th8_SetOverflowCheck / Th8_GetOverflowCheck so a test can
+ *	disable [expr] overflow checking in -setup, exercise the
+ *	wrapping (no-error) path in -body, and re-enable in -cleanup --
+ *	the only script-side way to drive the interp->bOverflowCheck
+ *	predicates.
+ *
+ * Results:
+ *	TH8_OK; interpreter result is "1"/"0" for query, empty for
+ *	enable/disable.  TH8_ERROR (with a message) on an unknown
+ *	subcommand.
+ *
+ * Side effects:
+ *	Toggles interp->bOverflowCheck; sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -6904,9 +7577,16 @@ th8test_null_guard_qe_cb(Th8_Interp *interp, void *pCtx)
  *	the success-path C-pair of any guard that takes a callback
  *	pointer.
  *
- * Parameters / Returns / Side effects:
- *	Three opaque arguments (interp, pCtx1, pCtx2) are
- *	discarded; always returns `TH8_OK`; no side effects.
+ * Why / How:
+ *	Supplies a valid, non-NULL callback so a `!xCallback` guard can
+ *	be driven on its false (success) side.
+ *
+ * Results:
+ *	`TH8_OK` always.
+ *
+ * Side effects:
+ *	None.  The three opaque arguments (interp, pCtx1, pCtx2) are
+ *	discarded.
  *
  *----------------------------------------------------------------------
  */
@@ -6930,9 +7610,15 @@ th8test_inframe_noop_cb(Th8_Interp *interp, void *pCtx1, void *pCtx2)
  *	guard pair needs a non-NULL `xCb` to cover the success
  *	C-pair.
  *
- * Parameters / Returns / Side effects:
- *	`pEntry` and `pCtx` discarded; always returns `TH8_OK`;
- *	no side effects.
+ * Why / How:
+ *	Supplies a valid, non-NULL Th8_HashIterate callback so a
+ *	`(xCb, pCtx)` guard's success C-pair can be driven.
+ *
+ * Results:
+ *	`TH8_OK` always.
+ *
+ * Side effects:
+ *	None.  `pEntry` and `pCtx` are discarded.
  *
  *----------------------------------------------------------------------
  */
@@ -6965,7 +7651,13 @@ th8test_hash_iter_noop_cb(Th8_HashEntry *pEntry, void *pCtx)
  *	interp -- live interpreter used to allocate the async
  *	          state for tests 2 and 3.
  *
- * Returns:
+ * Why / How:
+ *	The (pState non-NULL, xCb NULL) and success C-pairs of
+ *	Th8_QueueEvent's entry guard are not reached by ordinary event
+ *	tests; this drives all three input combinations in order and
+ *	checks the return codes against the expected pattern.
+ *
+ * Results:
  *	`TH8_OK` if all three sub-tests returned the expected
  *	code (interpreter result: `"ok"`).
  *	`TH8_ERROR` on any deviation or if `Th8_CreateAsyncState`
@@ -7032,9 +7724,16 @@ th8test_null_guard_queue_event(Th8_Interp *interp)
  *	!xCallback` exercises both C-pairs).  Ignores all five
  *	arguments and returns `TH8_OK`.
  *
- * Parameters / Returns / Side effects:
- *	Five opaque arguments discarded; always returns `TH8_OK`;
- *	no side effects.
+ * Why / How:
+ *	Supplies a valid, non-NULL Th8_IterateArraySearches callback so
+ *	the `!interp || !xCallback` guard's success C-pair can be
+ *	driven.
+ *
+ * Results:
+ *	`TH8_OK` always.
+ *
+ * Side effects:
+ *	None.  All five arguments are discarded.
  *
  *----------------------------------------------------------------------
  */
@@ -7065,7 +7764,14 @@ th8test_null_guard_ias_cb(
  *	`Th8_SetPlatformContext` / `Th8_GetPlatformContext` calls
  *	in the null-guard drives below.  Does nothing.
  *
- * Parameters / Returns / Side effects:
+ * Why / How:
+ *	Supplies a valid, non-NULL function pointer so the platform-
+ *	context guards can be driven on their non-NULL-callback side.
+ *
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
  *	None.  Pure stub.
  *
  *----------------------------------------------------------------------
@@ -7093,7 +7799,13 @@ th8test_null_guard_platfunc_stub(void)
  * Parameters:
  *	interp -- live interpreter used for tests 2 and 3.
  *
- * Returns:
+ * Why / How:
+ *	The (interp non-NULL, xCallback NULL) and success C-pairs of
+ *	Th8_SetPlatformContext's guard are not reached by ordinary
+ *	tests; this drives all three input combinations and checks the
+ *	return codes against the expected pattern.
+ *
+ * Results:
  *	`TH8_OK` if every vector returned the expected code
  *	(interpreter result: `"ok"`).
  *	`TH8_ERROR` on any deviation (interpreter result is a
@@ -7161,7 +7873,13 @@ th8test_null_guard_set_platform_ctx(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter used for tests 2 and 3.
  *
- * Returns:
+ * Why / How:
+ *	Drives the asymmetric `!interp || !ppCtx` guard of
+ *	Th8_GetPlatformContext (xCallback may legitimately be NULL);
+ *	the success vector's return is accepted either way since only
+ *	the guard, not the lookup result, is under test.
+ *
+ * Results:
  *	`TH8_OK` if rc1 and rc2 are `TH8_ERROR` and rc3 is either
  *	`TH8_OK` or `TH8_ERROR` (interpreter result: `"ok"`).
  *	`TH8_ERROR` on any other pattern (diagnostic in result).
@@ -7229,7 +7947,13 @@ th8test_null_guard_get_platform_ctx(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter used for tests 2 and 3.
  *
- * Returns:
+ * Why / How:
+ *	The (interp non-NULL, xCallback NULL) and success C-pairs of
+ *	Th8_IterateArraySearches's guard are not reached by ordinary
+ *	tests; this drives all three input combinations and checks the
+ *	return codes against the expected pattern.
+ *
+ * Results:
  *	`TH8_OK` on full pass (interpreter result: `"ok"`).
  *	`TH8_ERROR` otherwise (interpreter result: diagnostic).
  *
@@ -7430,7 +8154,14 @@ th8test_null_guard_check3_alloc(
  *	          installed (test 1 requires the policy callback
  *	          context).
  *
- * Returns:
+ * Why / How:
+ *	The (pCtx non-NULL, pKey NULL) and success C-pairs of
+ *	Th8_PolicyPreloadKey's guard are unreachable through normal
+ *	signed-load flow; this acquires a real policy context and test
+ *	RSA key, then drives all three input combinations, transferring
+ *	key ownership to the policy on the success vector.
+ *
+ * Results:
  *	`TH8_OK` on full pass (interpreter result: `"ok"`).
  *	`TH8_ERROR` on prerequisite failure or any unexpected
  *	vector outcome (interpreter result: diagnostic).
@@ -7545,7 +8276,14 @@ th8test_null_guard_policy_preload(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Why / How:
+ *	Each RSA getter's second guard operand (has-private / has-blob)
+ *	needs a public-only key to drive its true side and a private
+ *	key for the success side; this sweeps every getter across NULL,
+ *	the public-only key0 fixture, and a loaded test key, checking
+ *	each outcome.
+ *
+ * Results:
  *	`TH8_OK` on full sweep success (interpreter result:
  *	`"ok"`).
  *	`TH8_ERROR` on fixture failure or unexpected vector
@@ -7806,7 +8544,14 @@ th8test_null_guard_rsa_getters(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Why / How:
+ *	Th8_HarpySigLoad's entry OR-guard and several deeper Harpy
+ *	parser branches (header-line, whitespace-skip, base64 filter,
+ *	trailing-trim) are not reached by the real-signature tests;
+ *	this feeds hand-crafted malformed headers/bodies to drive each
+ *	one, freeing every buffer it allocates.
+ *
+ * Results:
  *	`TH8_OK` if all three primary guard vectors returned
  *	`TH8_ERROR` (interpreter result: `"ok"`).
  *	`TH8_ERROR` otherwise (interpreter result: diagnostic
@@ -8005,7 +8750,14 @@ th8test_null_guard_harpy_sig_load(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Why / How:
+ *	The NULL-operand short-circuits of Th8_FaultInstall /
+ *	Th8_FaultUninstall are unreachable through normal use; this
+ *	drives each operand with a NULL, then a valid install and its
+ *	matching uninstall so the interpreter's platform is restored
+ *	before later tests.
+ *
+ * Results:
  *	`TH8_OK` if every vector returned the expected code
  *	(rc1=rc2=rc3=ERROR, rc4=OK, rc5=rc6=ERROR; interpreter
  *	result `"ok"`).
@@ -8105,6 +8857,10 @@ th8test_null_guard_fault(Th8_Interp *interp)
  * Results:
  *	TH8_OK on success; an explanatory string on Th8_FaultInstall
  *	failure.
+ *
+ * Side effects:
+ *	Briefly installs and then uninstalls the fault layer on the
+ *	interpreter; sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -8304,6 +9060,12 @@ th8test_plugin_dummy_cmd(
  *	name from the `_ok_b` probe (so the registry can hold
  *	multiple plugins simultaneously without name collisions).
  *
+ * Why / How:
+ *	Follows the two-phase xGetCommands contract: a discovery call
+ *	(pCommand == NULL) reports the count, a fill call writes the
+ *	entries.  Supplies the success input for the plugin-registration
+ *	MC/DC drives.
+ *
  * Parameters:
  *	pCommand  -- output array for command entries; NULL on
  *	             the discovery call (when the caller is just
@@ -8311,7 +9073,7 @@ th8test_plugin_dummy_cmd(
  *	pnCommand -- discovery call: receives the count (always
  *	             1).  Fill call: ignored.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` always.
  *
  * Side effects:
@@ -8346,6 +9108,12 @@ th8test_plugin_get_ok_a(Th8_CommandEntry *pCommand, int *pnCommand)
  *	name from the `_ok_a` probe (so the registry can hold
  *	multiple plugins simultaneously without name collisions).
  *
+ * Why / How:
+ *	Follows the two-phase xGetCommands contract: a discovery call
+ *	(pCommand == NULL) reports the count, a fill call writes the
+ *	entries.  Supplies a second distinct success input for the
+ *	plugin-registration MC/DC drives.
+ *
  * Parameters:
  *	pCommand  -- output array for command entries; NULL on
  *	             the discovery call (when the caller is just
@@ -8353,7 +9121,7 @@ th8test_plugin_get_ok_a(Th8_CommandEntry *pCommand, int *pnCommand)
  *	pnCommand -- discovery call: receives the count (always
  *	             1).  Fill call: ignored.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` always.
  *
  * Side effects:
@@ -8387,9 +9155,17 @@ th8test_plugin_get_ok_b(Th8_CommandEntry *pCommand, int *pnCommand)
  *	carry three plugins concurrently in the multi-plugin MC/DC
  *	drives.
  *
- * Parameters / Returns / Side effects:
- *	See `th8test_plugin_get_ok_b`; the only difference is the
- *	emitted command name.
+ * Why / How:
+ *	Follows the same two-phase xGetCommands contract as
+ *	th8test_plugin_get_ok_b, supplying a third distinct success
+ *	input.
+ *
+ * Results:
+ *	`TH8_OK` always.
+ *
+ * Side effects:
+ *	On the fill call, writes a single `Th8_CommandEntry`
+ *	(command `th8test_plugin_cmd_c`) into `pCommand[0]`.
  *
  *----------------------------------------------------------------------
  */
@@ -8417,11 +9193,16 @@ th8test_plugin_get_ok_c(Th8_CommandEntry *pCommand, int *pnCommand)
  *	`src/th8_plugin.c:135-136`, which a non-degenerate plugin
  *	cannot reach.
  *
+ * Why / How:
+ *	A well-formed plugin never reports zero commands, so the
+ *	`nCommand <= 0` operand of the registration compound is only
+ *	reachable via this degenerate probe.
+ *
  * Parameters:
  *	pCommand  -- ignored.
  *	pnCommand -- receives 0 on the discovery call.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` always.
  *
  * Side effects:
@@ -8446,11 +9227,16 @@ th8test_plugin_get_zero(Th8_CommandEntry *pCommand, int *pnCommand)
  *	first-call-error vector (C1=T) of the compound at
  *	`src/th8_plugin.c:135-136`.
  *
+ * Why / How:
+ *	Supplies the first-call-failure input so the registration
+ *	compound's probe-error operand can be driven; a real plugin's
+ *	discovery call would succeed.
+ *
  * Parameters:
  *	pCommand  -- ignored.
  *	pnCommand -- ignored.
  *
- * Returns:
+ * Results:
  *	`TH8_ERROR` always.
  *
  * Side effects:
@@ -8487,7 +9273,13 @@ th8test_plugin_get_fail(Th8_CommandEntry *pCommand, int *pnCommand)
  *	pnCommand -- receives 1 on the discovery call.  Ignored
  *	             on the fill call.
  *
- * Returns:
+ * Why / How:
+ *	The registration second-call-failure branch is unreachable with
+ *	a consistent probe, so this one succeeds on discovery and fails
+ *	on fill, counting its calls so the caller can confirm both
+ *	phases ran.
+ *
+ * Results:
  *	`TH8_OK` on the discovery call, `TH8_ERROR` on the fill
  *	call.
  *
@@ -8538,6 +9330,22 @@ th8test_plugin_get_fail_second(Th8_CommandEntry *pCommand, int *pnCommand)
  *	because the script-level test verifies behaviour via
  *	user-visible side effects (whether the cleanup unregisters
  *	succeed).
+ *
+ * Why / How:
+ *	Runs the whole plugin argument-validation and search sweep on a
+ *	private, I/O-less child interpreter so the parent's registry is
+ *	untouched; the child registers the mock probes above in an order
+ *	that drives each NULL-guard, duplicate, and find-loop C-pair,
+ *	then unregisters them.
+ *
+ * Results:
+ *	TH8_OK with "ok" as the interpreter result once the sweep runs;
+ *	TH8_ERROR if the libc platform or child interpreter is
+ *	unavailable (interpreter result: diagnostic).
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter; sets the interpreter
+ *	result.
  *
  *----------------------------------------------------------------------
  */
@@ -8646,13 +9454,18 @@ th8test_null_guard_plugin(Th8_Interp *interp)
  *	returning non-OK (F), `th8InitGlobals` falls through to
  *	the empty-username path.
  *
+ * Why / How:
+ *	The real platform xGetUserName either succeeds or is absent, so
+ *	the callback-installed-but-failed C-pair of th8InitGlobals is
+ *	unreachable without a stub that is present yet always fails.
+ *
  * Parameters:
  *	interp -- ignored.
  *	pCtx   -- ignored.
  *	zBuf   -- ignored (would receive the username on success).
  *	nBuf   -- ignored.
  *
- * Returns:
+ * Results:
  *	`TH8_ERROR` unconditionally.
  *
  * Side effects:
@@ -8687,13 +9500,18 @@ th8test_stub_xGetUserName_fail(
  *	returning non-OK (F), `th8InitGlobals` falls through to
  *	the empty-hostname path.
  *
+ * Why / How:
+ *	The real platform xGetHostName either succeeds or is absent, so
+ *	the callback-installed-but-failed C-pair of th8InitGlobals is
+ *	unreachable without a stub that is present yet always fails.
+ *
  * Parameters:
  *	interp -- ignored.
  *	pCtx   -- ignored.
  *	zBuf   -- ignored (would receive the hostname on success).
  *	nBuf   -- ignored.
  *
- * Returns:
+ * Results:
  *	`TH8_ERROR` unconditionally.
  *
  * Side effects:
@@ -8716,6 +9534,8 @@ th8test_stub_xGetHostName_fail(
 }
 
 /*
+ *----------------------------------------------------------------------
+ *
  * th8test_stub_xGetUserHostName_err --
  *
  *	Bug 18 driver: xGetUserName / xGetHostName stub that returns
@@ -8727,6 +9547,19 @@ th8test_stub_xGetHostName_fail(
  *
  *	The signature is identical for both callback slots so a single
  *	stub serves both.
+ *
+ * Why / How:
+ *	One stub covers both name callbacks because their signatures
+ *	match; installing it present-but-failing forces the fallback
+ *	branch the real platform never reaches.
+ *
+ * Results:
+ *	TH8_ERROR unconditionally.
+ *
+ * Side effects:
+ *	None.  All arguments are ignored.
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -8744,6 +9577,8 @@ th8test_stub_xGetUserHostName_err(
 }
 
 /*
+ *----------------------------------------------------------------------
+ *
  * th8test_assrch_iter_noop_cb --
  *
  *	No-op callback for Th8_IterateArraySearches used by the
@@ -8753,6 +9588,18 @@ th8test_stub_xGetUserHostName_err(
  *	(F,T) and never dispatches to this callback.  Returns TH8_OK
  *	to satisfy the API contract in case any other code path
  *	reaches it.
+ *
+ * Why / How:
+ *	Supplies a valid, non-NULL callback for the tombstone driver;
+ *	it is normally short-circuited, so its body is a safe no-op.
+ *
+ * Results:
+ *	TH8_OK always.
+ *
+ * Side effects:
+ *	None.  All five arguments are ignored.
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -8793,7 +9640,12 @@ th8test_assrch_iter_noop_cb(
  *	ppCh   -- receives a non-NULL placeholder so the third
  *		operand of the guard is structurally true.
  *
- * Returns:
+ * Why / How:
+ *	The real temp-data path never returns OK with a NULL path, so
+ *	this stub manufactures that operand combination to drive the
+ *	channel-open guard's middle condition.
+ *
+ * Results:
  *	`TH8_OK`.
  *
  * Side effects:
@@ -8839,7 +9691,12 @@ th8test_stub_xGetTempData_ok_null_path(
  *	pnOut  -- receives the path length.
  *	ppCh   -- receives NULL.
  *
- * Returns:
+ * Why / How:
+ *	The real temp-data path never returns OK with a NULL channel,
+ *	so this stub manufactures that operand combination to drive the
+ *	channel-open guard's third condition.
+ *
+ * Results:
  *	`TH8_OK`.
  *
  * Side effects:
@@ -8886,7 +9743,11 @@ th8test_stub_xGetTempData_ok_null_chan(
  *	pnOut  -- receives 0.
  *	ppCh   -- receives NULL.
  *
- * Returns:
+ * Why / How:
+ *	Drives the short-circuiting first operand of the channel-open
+ *	guard by failing the temp-data call outright.
+ *
+ * Results:
  *	`TH8_ERROR`.
  *
  * Side effects:
@@ -8913,6 +9774,8 @@ th8test_stub_xGetTempData_fail(
 }
 
 /*
+ *----------------------------------------------------------------------
+ *
  * th8test_stub_xInput_empty --
  *
  *	Custom xInput that returns OK with a zero-length zLine
@@ -8922,6 +9785,20 @@ th8test_stub_xGetTempData_fail(
  *	POSIX xInput never produces (it returns TH8_ERROR when
  *	read() yields zero bytes).  The Th8_GetData family will
  *	free the buffer via Th8_Free.
+ *
+ * Why / How:
+ *	The real POSIX xInput cannot yield a zero-length successful
+ *	read, so this stub fabricates one to drive the nLine == 0 arm
+ *	of the trailing-EOL strip checks.
+ *
+ * Results:
+ *	TH8_OK with an empty line; TH8_ERROR if the 1-byte buffer
+ *	cannot be allocated.
+ *
+ * Side effects:
+ *	Allocates a 1-byte buffer (freed by the caller via Th8_Free).
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -8944,6 +9821,8 @@ th8test_stub_xInput_empty(
 }
 
 /*
+ *----------------------------------------------------------------------
+ *
  * th8test_stub_xGetData_empty_ok --
  *
  *	Custom xGetData that returns TH8_OK with *pzData
@@ -8953,6 +9832,20 @@ th8test_stub_xInput_empty(
  *	but the returned data has zero bytes -- the translator
  *	must not be invoked.  No in-tree xGetData callback
  *	naturally produces a zero-byte successful return.
+ *
+ * Why / How:
+ *	Fabricates a zero-byte successful read so the EOL-translation
+ *	guard's "flag set but no data" arm can be driven; a real
+ *	xGetData never returns OK with zero bytes.
+ *
+ * Results:
+ *	TH8_OK with empty data; TH8_ERROR if the 1-byte buffer cannot
+ *	be allocated.
+ *
+ * Side effects:
+ *	Allocates a 1-byte buffer (freed by the caller via Th8_Free).
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -8977,12 +9870,28 @@ th8test_stub_xGetData_empty_ok(
 }
 
 /*
+ *----------------------------------------------------------------------
+ *
  * th8test_stub_xInput_crlf --
  *
  *	Custom xInput that returns a 5-byte "ab\r\nc" buffer with
  *	pnOut=5.  Used to drive the (T, T, T, T) vector at
  *	th8_plat.c L949 (Th8_Input EOL-translation path) where
  *	all four conditions must be true at the same call.
+ *
+ * Why / How:
+ *	Supplies input containing an embedded CRLF so all four
+ *	conditions of the EOL-translation guard are simultaneously
+ *	true -- a combination in-tree inputs do not reliably produce.
+ *
+ * Results:
+ *	TH8_OK with the 5-byte "ab\r\nc" line; TH8_ERROR if the buffer
+ *	cannot be allocated.
+ *
+ * Side effects:
+ *	Allocates a 6-byte buffer (freed by the caller via Th8_Free).
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -9010,11 +9919,26 @@ th8test_stub_xInput_crlf(
 }
 
 /*
+ *----------------------------------------------------------------------
+ *
  * th8test_stub_xInput_null_buf --
  *
  *	Custom xInput that returns OK with *pzOut = NULL.
  *	Drives the C2=T vector at th8_io.c L774 (`rc != OK ||
  *	!zLine || nLine == 0`) which no real platform produces.
+ *
+ * Why / How:
+ *	Returns success with a NULL line pointer so the middle operand
+ *	of the read guard can be driven; a real xInput never reports OK
+ *	with a NULL buffer.
+ *
+ * Results:
+ *	TH8_OK with *pzOut set to NULL.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -9035,6 +9959,8 @@ th8test_stub_xInput_null_buf(
 
 #  if defined(TH8_ENABLE_LIBCURL) && defined(TH8_ENABLE_UNBOUND)
 /*
+ *----------------------------------------------------------------------
+ *
  * th8test_stub_xDnsResolve --
  *
  *	Mock DNS resolver used by plat_wrappers to drive the
@@ -9044,6 +9970,23 @@ th8test_stub_xInput_null_buf(
  *	field of the caller-supplied th8test_dns_ctx.  The
  *	context owns all referenced storage; the matching
  *	Free callback is a no-op.
+ *
+ * Why / How:
+ *	Real DNS results cannot be shaped on demand, so the caller's
+ *	th8test_dns_ctx.mode selects which record/length/bogus
+ *	combination the mock returns, driving each operand of
+ *	th8CurlGetData's validation compounds.
+ *
+ * Results:
+ *	TH8_ERROR on a NULL context/output or mode 4; TH8_OK otherwise,
+ *	with *ppResult set to the synthetic result (left NULL for mode
+ *	5).
+ *
+ * Side effects:
+ *	Fills the caller-owned context's record/length/result fields;
+ *	no allocation.
+ *
+ *----------------------------------------------------------------------
  */
 static int
 th8test_stub_xDnsResolve(
@@ -9081,11 +10024,26 @@ th8test_stub_xDnsResolve(
 }
 
 /*
+ *----------------------------------------------------------------------
+ *
  * th8test_stub_xDnsResolveFree --
  *
  *	No-op free callback for the DNS mock; the result lives
  *	inside the caller-owned th8test_dns_ctx and has nothing
  *	to release.
+ *
+ * Why / How:
+ *	The mock's result storage is owned by the caller's context, so
+ *	the free callback required by the resolver contract has nothing
+ *	to do.
+ *
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
  */
 static void
 th8test_stub_xDnsResolveFree(
@@ -9138,7 +10096,13 @@ int (*th8test_real_xChanCtl)(
  *	pnResult -- output result location (forced to 0 on READ).
  *	pBuf     -- in/out buffer pointer.
  *
- * Returns:
+ * Why / How:
+ *	The real POSIX layer's xInput always returns bytes or an error,
+ *	so the read-returned-zero-with-failure fallback is unreachable;
+ *	this stub fails only READ ops (and forwards the rest) to drive
+ *	that path.
+ *
+ * Results:
  *	`TH8_ERROR` for `TH8_CHANCTL_READ`, the delegate's
  *	return code for every other op, or `TH8_ERROR` if no
  *	real callback was captured.
@@ -9190,6 +10154,21 @@ th8test_stub_xChannelControl_read_fail(
  *
  *	All work happens on a private child interpreter built from
  *	the libc platform; the parent interp is never touched.
+ *
+ * Why / How:
+ *	Installs a fault-injected platform that NULLs specific callback
+ *	slots on a child interpreter, then calls the public plat-layer
+ *	APIs directly so each callback compound's slot-NULL C2=F arm is
+ *	driven -- unreachable through higher-level call sites that check
+ *	the slot first.
+ *
+ * Results:
+ *	TH8_OK with "ok" once the sweep runs; TH8_ERROR (with a
+ *	diagnostic) on setup failure or an unexpected vector outcome.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter; installs and removes
+ *	a fault layer; sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -9480,6 +10459,21 @@ th8test_null_guard_plat(Th8_Interp *interp)
  *	The success vectors are exercised by ordinary suite traffic.
  *	Each NULL/zero combination is invoked exactly once to drive
  *	the missing T branch on each operand.
+ *
+ * Why / How:
+ *	Calls the guarded public APIs directly with NULL/zero arguments
+ *	that no script produces; memory-only APIs run on the parent,
+ *	while namespace- and state-mutating APIs (and several dead
+ *	internal wrappers) run on a private child interpreter so parent
+ *	state is untouched.
+ *
+ * Results:
+ *	TH8_OK once the sweep completes; the individual guard return
+ *	codes are not asserted here.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter; sets the interpreter
+ *	result.
  *
  *----------------------------------------------------------------------
  */
@@ -9800,19 +10794,31 @@ th8test_null_guard_core(Th8_Interp *interp)
 		/* Drive th8_hash.c Th8_HashIterateOrdered TH8_API
 		 * helper (no in-tree callers).  Build a small hash
 		 * with a few entries, then iterate via the ordered
-		 * callback.  Also drive the empty-hash early-return. */
+		 * callback.  Also drive the empty-hash early-return
+		 * and (TH8K-016) assert that the ordered iteration
+		 * reports its status truthfully. */
 		{
 		    extern int
 		    th8test_hash_iter_noop_cb(Th8_HashEntry *, void *);
 		    Th8_Hash *pH = Th8_HashNew(pChild);
 		    if (pH) {
 			Th8_HashEntry *pE;
+			int iOrd;
 
-			/* Empty hash: early-return on nNextOrder==0. */
-			Th8_HashIterateOrdered(
+			/* Empty hash: early-return TH8_OK on zero live. */
+			iOrd = Th8_HashIterateOrdered(
 			    pChild, pH, th8test_hash_iter_noop_cb, NULL);
+			if (iOrd != TH8_OK) {
+			    Th8_HashDelete(pChild, pH);
+			    Th8_SetResultStatic(
+			        interp,
+			        "th8k016: empty ordered iterate != TH8_OK",
+			        TH8_NOLEN);
+			    return TH8_ERROR;
+			}
 
-			/* Insert a few entries then iterate. */
+			/* Insert a few entries then iterate: success case
+			 * must report TH8_OK. */
 			pE = Th8_HashFind(pChild, pH, "a", 1, 1);
 			if (pE) pE->pData = (void *)(size_t)1;
 			pE = Th8_HashFind(pChild, pH, "b", 1, 1);
@@ -9820,11 +10826,142 @@ th8test_null_guard_core(Th8_Interp *interp)
 			pE = Th8_HashFind(pChild, pH, "c", 1, 1);
 			if (pE) pE->pData = (void *)(size_t)3;
 
-			Th8_HashIterateOrdered(
+			iOrd = Th8_HashIterateOrdered(
 			    pChild, pH, th8test_hash_iter_noop_cb, NULL);
+			if (iOrd != TH8_OK) {
+			    Th8_HashDelete(pChild, pH);
+			    Th8_SetResultStatic(
+			        interp,
+			        "th8k016: populated ordered iterate != TH8_OK",
+			        TH8_NOLEN);
+			    return TH8_ERROR;
+			}
 
 			Th8_HashDelete(pChild, pH);
 		    }
+		}
+
+		/*
+		 * TH8K-016: an out-of-memory event while building the
+		 * temporary sort array MUST surface as TH8_ERROR, never a
+		 * silent unordered TH8_OK (the pre-fix behaviour).  Build a
+		 * dedicated child on a fault-injecting platform, populate a
+		 * hash with the fault disarmed, then arm the very next
+		 * xMalloc to fail and require TH8_ERROR from the ordered
+		 * walk.  TH8_HEAP_CHECKS confirms no array leak on the error
+		 * path.
+		 */
+		{
+		    extern int
+		    th8test_hash_iter_noop_cb(Th8_HashEntry *, void *);
+		    const Th8_Platform *pParent = Th8_GetPlatform(interp);
+		    if (pParent && pParent->xMalloc) {
+			Th8_Platform plat = *pParent;
+			Th8_Interp *pFaultChild;
+
+			plat.xPanic = 0;
+			plat.xMalloc = th8test_stub_xMalloc_failafter;
+			th8test_pRealMalloc = pParent->xMalloc;
+			th8test_nMallocTrip = -1; /* construct clean. */
+			pFaultChild = Th8_CreateInterp(&plat);
+			if (pFaultChild) {
+			    Th8_Hash *pHF = Th8_HashNew(pFaultChild);
+			    if (pHF) {
+				int iOrd;
+				(void)
+				    Th8_HashFind(pFaultChild, pHF, "a", 1, 1);
+				(void)
+				    Th8_HashFind(pFaultChild, pHF, "b", 1, 1);
+
+				th8test_nMallocTrip =
+				    0; /* fail next alloc. */
+				iOrd = Th8_HashIterateOrdered(
+				    pFaultChild, pHF,
+				    th8test_hash_iter_noop_cb, NULL);
+				th8test_nMallocTrip = -1; /* disarm. */
+
+				Th8_HashDelete(pFaultChild, pHF);
+				if (iOrd != TH8_ERROR) {
+				    Th8_DeleteInterp(pFaultChild);
+				    th8test_pRealMalloc = NULL;
+				    Th8_SetResultStatic(
+				        interp,
+				        "th8k016: OOM ordered iterate masked "
+				        "as success",
+				        TH8_NOLEN);
+				    return TH8_ERROR;
+				}
+			    }
+			    Th8_DeleteInterp(pFaultChild);
+			}
+			th8test_pRealMalloc = NULL;
+		    }
+		}
+	    }
+
+	    {
+		int bBad = 0;
+
+		/*
+		 * TH8K-018: Th8_SetSafeLimits applies the documented hardened
+		 * resource profile in one call; verify the getters report
+		 * exactly the public constants (single-condition checks so no
+		 * compound MC/DC decision is added), and exercise the NULL-arg
+		 * guard.
+		 */
+		Th8_SetSafeLimits(NULL);
+		Th8_SetSafeLimits(pChild);
+		if (Th8_GetAllocLimit(pChild) !=
+		    (size_t)TH8_SAFE_ALLOC_LIMIT) {
+		    bBad = 1;
+		}
+		if (Th8_GetStepLimit(pChild) !=
+		    (th8_int64_t)TH8_SAFE_STEP_LIMIT) {
+		    bBad = 1;
+		}
+		if (Th8_GetResultLimit(pChild) !=
+		    (size_t)TH8_SAFE_RESULT_LIMIT) {
+		    bBad = 1;
+		}
+		if (bBad) {
+		    Th8_SetResultStatic(
+		        interp, "th8k018: safe limits not applied",
+		        TH8_NOLEN);
+		    Th8_DeleteInterp(pChild);
+		    return TH8_ERROR;
+		}
+	    }
+
+	    {
+		/*
+	    	 * TH8K-010: Th8_SetDeadline / Th8_GetDeadline / Th8_SetTimeLimitMs
+	    	 * NULL-arg guards and a set/get/clear roundtrip.
+	    	 */
+		Th8_SetDeadline(NULL, 1);
+		(void)Th8_GetDeadline(NULL);
+		(void)Th8_SetTimeLimitMs(NULL, 1);
+		Th8_SetDeadline(pChild, 123456);
+		if (Th8_GetDeadline(pChild) != 123456) {
+		    Th8_DeleteInterp(pChild);
+		    Th8_SetResultStatic(
+		        interp, "th8k010: deadline not set", TH8_NOLEN);
+		    return TH8_ERROR;
+		}
+		(void)Th8_SetTimeLimitMs(pChild, 0); /* nMs<=0 clears */
+		if (Th8_GetDeadline(pChild) != 0) {
+		    Th8_DeleteInterp(pChild);
+		    Th8_SetResultStatic(
+		        interp, "th8k010: deadline not cleared", TH8_NOLEN);
+		    return TH8_ERROR;
+		}
+		(void)Th8_SetTimeLimitMs(
+		    pChild, 2000000000000000LL); /* absurd */
+		if (Th8_GetDeadline(pChild) != 0) {
+		    Th8_DeleteInterp(pChild);
+		    Th8_SetResultStatic(
+		        interp, "th8k010: absurd deadline not cleared",
+		        TH8_NOLEN);
+		    return TH8_ERROR;
 		}
 	    }
 
@@ -9940,7 +11077,13 @@ th8test_null_guard_core(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Why / How:
+ *	The `!interp` arm of each single-argument API's guard is not
+ *	reached by ordinary script use (a live command always has an
+ *	interp); one NULL call per API bumps that arm, batched here to
+ *	avoid a helper per API.
+ *
+ * Results:
  *	`TH8_OK` if every int-returning API reported
  *	`TH8_ERROR` (interpreter result: `"ok"`).
  *	`TH8_ERROR` otherwise (interpreter result: diagnostic
@@ -10004,7 +11147,13 @@ th8test_null_guard_misc_singlearg(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Why / How:
+ *	Drives each operand of Th8_EvalFileAsData's 4-operand OR guard
+ *	with a NULL, plus a TH8_NOLEN call on a missing file so the
+ *	inline name-length branch also executes -- none of which the
+ *	suite reaches through [source]-style use.
+ *
+ * Results:
  *	`TH8_OK` if all four guard vectors returned `TH8_ERROR`
  *	(interpreter result: `"ok"`).
  *	`TH8_ERROR` otherwise (interpreter result: diagnostic
@@ -10088,7 +11237,13 @@ th8test_null_guard_eval_file_as_data(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Why / How:
+ *	Acquires the live policy context, then drives the inner guard's
+ *	NULL-context and NULL-token operands (plus a valid lookup) --
+ *	combinations the suite never issues since the prologue always
+ *	preloads a key.
+ *
+ * Results:
  *	`TH8_OK` if the two guard-fire calls returned NULL
  *	(interpreter result: `"ok"`).
  *	`TH8_ERROR` otherwise (interpreter result: diagnostic
@@ -10164,7 +11319,12 @@ th8test_null_guard_policy_find_key(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Why / How:
+ *	Drives both operands of Th8_EvalFile's NULL-OR guard with a
+ *	NULL interp and a NULL name; the success path is covered by
+ *	every [source] in the suite.
+ *
+ * Results:
  *	`TH8_OK` if both guard vectors returned `TH8_ERROR`
  *	(interpreter result: `"ok"`).
  *	`TH8_ERROR` otherwise (interpreter result: diagnostic).
@@ -10226,7 +11386,12 @@ th8test_null_guard_eval_file(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Why / How:
+ *	Drives both operands of Th8_FindInCache's NULL-OR guard plus a
+ *	valid lookup; since guard-fire and cache-miss both return NULL,
+ *	only the two guard-fire calls are asserted.
+ *
+ * Results:
  *	`TH8_OK` if the two guard-fire vectors returned NULL
  *	(interpreter result: `"ok"`).
  *	`TH8_ERROR` otherwise (interpreter result: diagnostic
@@ -10373,10 +11538,15 @@ th8test_cache_lifecycle_cmd(
  *	  * (F, T) X, NULL     -- expected return  1.
  *	  * (F, F) X, X (equal)-- expected return  0.
  *
+ * Why / How:
+ *	Drives both operands of Th8_Memcmp's NULL-OR guard plus the
+ *	equal-data path, asserting the sentinel each arm returns; the
+ *	suite only ever calls Memcmp with valid pointers.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` if every vector returned the expected sentinel
  *	(interpreter result: `"ok"`).
  *	`TH8_ERROR` otherwise (interpreter result: diagnostic).
@@ -10429,10 +11599,15 @@ th8test_null_guard_memcmp(Th8_Interp *interp)
  *	  * n=4, valid dst, NULL src -- (F, F, T) returns dst untouched.
  *	  * n=4, valid dst/src       -- (F, F, F) success path.
  *
+ * Why / How:
+ *	Drives each operand of Th8_Memcpy's 3-operand OR guard plus the
+ *	success copy, asserting the pointer each arm returns; the suite
+ *	only calls Memcpy with valid, non-zero arguments.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` if every vector returned the expected pointer
  *	(interpreter result: `"ok"`).
  *	`TH8_ERROR` otherwise (interpreter result: diagnostic).
@@ -10490,10 +11665,15 @@ th8test_null_guard_memcpy(Th8_Interp *interp)
  *	  * n=4, NULL dst   -- (F, T) returns NULL.
  *	  * n=4, valid dst  -- (F, F) success path returns dst.
  *
+ * Why / How:
+ *	Drives both operands of Th8_Memset's NULL-OR guard plus the
+ *	success fill, asserting the pointer each arm returns; the suite
+ *	only calls Memset with valid, non-zero arguments.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` if every vector returned the expected pointer
  *	(interpreter result: `"ok"`).
  *	`TH8_ERROR` otherwise (interpreter result: diagnostic).
@@ -10550,10 +11730,15 @@ th8test_null_guard_memset(Th8_Interp *interp)
  *	`th8test_null_guard_check3_alloc`, which sets the
  *	interpreter result.
  *
+ * Why / How:
+ *	The zero-size and over-limit arms of Th8_SafeAlloc's bounds
+ *	guard are not reached by ordinary allocations; this drives both
+ *	plus a valid allocation and classifies the results.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` if vectors 1 & 2 were NULL and vector 3 was
  *	non-NULL.  `TH8_ERROR` otherwise.
  *
@@ -10585,10 +11770,15 @@ th8test_null_guard_alloc_safe(Th8_Interp *interp)
  *	NULL keeps the helper from leaking an allocation on
  *	failure.
  *
+ * Why / How:
+ *	Reuses the p=NULL realloc-as-malloc form to drive the same
+ *	zero-size and over-limit bounds arms of Th8_SafeRealloc without
+ *	risking a leak on the failure vectors.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` if vectors 1 & 2 were NULL and vector 3 was
  *	non-NULL.  `TH8_ERROR` otherwise.
  *
@@ -10622,10 +11812,15 @@ th8test_null_guard_realloc_safe(Th8_Interp *interp)
  *	NULL (instead of triggering Panic) on allocation
  *	failure -- the guard itself is identical.
  *
+ * Why / How:
+ *	Drives the same zero-size and over-limit bounds arms on the
+ *	attempt variant, whose failure returns NULL rather than
+ *	panicking, so the success/failure classification is uniform.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` if vectors 1 & 2 were NULL and vector 3 was
  *	non-NULL.  `TH8_ERROR` otherwise.
  *
@@ -10668,11 +11863,17 @@ th8test_null_guard_realloc_safe_attempt(Th8_Interp *interp)
  *	`th8test_null_guard_set_breakpoint` to preserve the
  *	invariant.
  *
+ * Why / How:
+ *	The paBreakpoints-NULL operand is only reachable before any
+ *	breakpoint is ever registered (the hash then persists), so this
+ *	must run first; it drives NULL interp, the fresh-interp operand,
+ *	and a register-then-clear success path.
+ *
  * Parameters:
  *	interp -- live interpreter (must have no breakpoints
  *		set yet).
  *
- * Returns:
+ * Results:
  *	`TH8_OK` if rc1=rc2=ERROR and rc3=OK (interpreter
  *	result: `"ok"`).
  *	`TH8_ERROR` otherwise (interpreter result: diagnostic).
@@ -10763,10 +11964,16 @@ th8test_null_guard_clear_breakpoint(Th8_Interp *interp)
  *	exercises every past-the-guard code path inside the
  *	merge.
  *
+ * Why / How:
+ *	Drives both operands of Th8_MergePlatformInterp's NULL-OR guard
+ *	plus a success vector using the interp's own platform as source
+ *	(an idempotent self-merge that still runs the past-the-guard
+ *	code).
+ *
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` if rc1=rc2=ERROR and rc3=OK (interpreter
  *	result: `"ok"`).
  *	`TH8_ERROR` otherwise (interpreter result: diagnostic).
@@ -10844,7 +12051,12 @@ th8test_null_guard_merge_platform(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Why / How:
+ *	Drives each operand of Th8_SetBreakpoint's 3-operand OR guard
+ *	(NULL interp, NULL script, nLine<1) plus a success registration,
+ *	clearing the breakpoint afterward so no residual state leaks.
+ *
+ * Results:
  *	`TH8_OK` if rc1=rc2=rc3=ERROR and rc4=OK (delegates
  *	classification to `th8test_null_guard_check4`).
  *	`TH8_ERROR` otherwise.
@@ -10898,7 +12110,13 @@ th8test_null_guard_set_breakpoint(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Why / How:
+ *	Th8_ListAppendBreakpoints returns void, so the guard is observed
+ *	indirectly: each NULL-operand vector must leave the output
+ *	pointer/length pair untouched, while the success vector must
+ *	complete without crashing.
+ *
+ * Results:
  *	`TH8_OK` if the three guard-fire vectors left their
  *	outputs untouched and the success vector returned
  *	without crashing (delegated to
@@ -10968,7 +12186,12 @@ th8test_null_guard_list_append_breakpoints(Th8_Interp *interp)
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
+ * Why / How:
+ *	Same void-return observation strategy as the breakpoints
+ *	variant: each NULL-operand vector must leave the output pair
+ *	untouched; zPat is left NULL since it is not part of the guard.
+ *
+ * Results:
  *	`TH8_OK` if the three guard-fire vectors left their
  *	outputs untouched (delegated to
  *	`th8test_null_guard_check4`).
@@ -11046,7 +12269,13 @@ th8test_null_guard_list_append_expansions(Th8_Interp *interp)
  *	argl   -- argument byte-lengths (consulted for
  *		SUBCMD-name matching).
  *
- * Returns:
+ * Why / How:
+ *	A single script command fronts the whole null-guard MC/DC
+ *	sweep: it length-matches argv[1] against each SUBCMD name and
+ *	calls the matching helper, with build-feature-gated entries
+ *	excluded (and thus reported unknown) when their feature is off.
+ *
+ * Results:
  *	The selected helper's return code, or `TH8_ERROR`
  *	on argument-count error / unknown SUBCMD.
  *
@@ -11178,6 +12407,20 @@ th8test_null_guard_cmd(
  *	successful allocation of huge size.  Overflow paths return
  *	"overflow" without ever calling the allocator.
  *
+ * Why / How:
+ *	Exposes the TH8_ALLOC_STR_ADD size-checked macro so its overflow
+ *	arm can be driven at the wrap boundary via th8test_parse_size
+ *	tokens, without a huge real allocation.
+ *
+ * Results:
+ *	TH8_OK; interpreter result "ok" (block allocated then freed) or
+ *	"overflow"; TH8_ERROR with "bad size argument" on a parse
+ *	failure.
+ *
+ * Side effects:
+ *	May allocate and immediately free a block; sets the interpreter
+ *	result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -11221,6 +12464,20 @@ th8test_safeallocstradd_cmd(
  *	Implements "th8testlib::safeallocstrmul n sz".  Calls
  *	TH8_ALLOC_STR_MUL and reports "ok" or "overflow".
  *
+ * Why / How:
+ *	Exposes the TH8_ALLOC_STR_MUL size-checked macro so its overflow
+ *	arm can be driven at the wrap boundary via th8test_parse_size
+ *	tokens, without a huge real allocation.
+ *
+ * Results:
+ *	TH8_OK; interpreter result "ok" (block allocated then freed) or
+ *	"overflow"; TH8_ERROR with "bad size argument" on a parse
+ *	failure.
+ *
+ * Side effects:
+ *	May allocate and immediately free a block; sets the interpreter
+ *	result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -11263,6 +12520,20 @@ th8test_safeallocstrmul_cmd(
  *
  *	Implements "th8testlib::safeallocmuladd2 a b c d e".  Calls
  *	TH8_ALLOC_MUL_ADD2 and reports "ok" or "overflow".
+ *
+ * Why / How:
+ *	Exposes the five-operand TH8_ALLOC_MUL_ADD2 size-checked macro so
+ *	its overflow arms can be driven at the wrap boundary via
+ *	th8test_parse_size tokens, without a huge real allocation.
+ *
+ * Results:
+ *	TH8_OK; interpreter result "ok" (block allocated then freed) or
+ *	"overflow"; TH8_ERROR with "bad size argument" on a parse
+ *	failure.
+ *
+ * Side effects:
+ *	May allocate and immediately free a block; sets the interpreter
+ *	result.
  *
  *----------------------------------------------------------------------
  */
@@ -11312,6 +12583,20 @@ th8test_safeallocmuladd2_cmd(
  *	current value of Th8_IsResultSensitive(interp) as "0" or "1".
  *	Used by sensitive-result tests to assert the flag transitions
  *	correctly across reads, overwrites, and clears.
+ *
+ * Why / How:
+ *	Reporting the flag via Th8_SetResult would itself clear the
+ *	sensitive tag through the standard release path, so the command
+ *	re-marks the result sensitive after replying, letting a test
+ *	read the flag without disturbing it.
+ *
+ * Results:
+ *	TH8_OK; interpreter result "1" if the current result is
+ *	sensitive, else "0".
+ *
+ * Side effects:
+ *	Rewrites the interpreter result (re-marking it sensitive when it
+ *	was).
  *
  *----------------------------------------------------------------------
  */
@@ -11377,6 +12662,14 @@ th8test_is_result_sensitive_cmd(
  *	way to drive the vector is via a C helper that does all
  *	three steps in one call.
  *
+ * Results:
+ *	TH8_OK; interpreter result "ok" (or "ok-empty" in empty mode).
+ *	TH8_ERROR on wrong argument count or a failed Th8_SetResult.
+ *
+ * Side effects:
+ *	Allocates, marks sensitive, then releases the interpreter
+ *	result (secure-zeroing the heap copy on the sensitive path).
+ *
  *----------------------------------------------------------------------
  */
 
@@ -11441,6 +12734,21 @@ th8test_mark_sensitive_release_cmd(
  *	(typically "invalid or disallowed URI scheme" on
  *	rejection).  No network traffic occurs because the
  *	validator rejects before any fetch attempt.
+ *
+ * Why / How:
+ *	Calls the libcurl platform's xGetData directly, bypassing the
+ *	http-only shell wrapper, so non-http URIs reach
+ *	th8CurlIsValidUri and drive its scheme-rejection arms; the
+ *	validator rejects before any network fetch.
+ *
+ * Results:
+ *	TH8_OK with "rc=N msg=M" (xGetData's code and message);
+ *	TH8_ERROR if the libcurl platform is unavailable or the reply
+ *	would overflow the local buffer.
+ *
+ * Side effects:
+ *	Frees any data buffer xGetData returned; sets the interpreter
+ *	result.  No network traffic on rejected URIs.
  *
  *----------------------------------------------------------------------
  */
@@ -11516,6 +12824,17 @@ th8test_curl_xgetdata_cmd(
  *	-- which no normal script path can reach because all
  *	script-level glob calls pass the current interp.
  *
+ * Why / How:
+ *	Passes a NULL interp (the documented no-cancellation form) so
+ *	the `if (interp && ...)` C1=F arm fires -- unreachable from
+ *	script, where every glob call supplies the current interp.
+ *
+ * Results:
+ *	TH8_OK; interpreter result "1" if the pattern matched, else "0".
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -11559,6 +12878,20 @@ th8test_glob_match_null_cmd(
  *
  *	Cancellation is reset before returning so the test
  *	infrastructure remains usable.
+ *
+ * Why / How:
+ *	Arms cancellation on the current interp so Th8_Ready fails
+ *	during the glob call, driving the (interp!=NULL, Ready!=OK)
+ *	arm; cancellation is reset before returning so the harness
+ *	stays usable.
+ *
+ * Results:
+ *	TH8_OK; interpreter result "0" (glob short-circuits when Ready
+ *	fails).
+ *
+ * Side effects:
+ *	Momentarily cancels and then resets the interpreter's cancel
+ *	state; sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -11613,6 +12946,18 @@ th8test_glob_match_cancelled_cmd(
  *
  *	Used by sensitive-result tests to assert that detaching is
  *	refused when the result is sensitive.
+ *
+ * Why / How:
+ *	Exercises Th8_TakeResult's detach contract from script,
+ *	distinguishing a sensitive refusal from an empty result by
+ *	inspecting the message Th8_TakeResult leaves behind.
+ *
+ * Results:
+ *	TH8_OK; interpreter result "refused", "empty", or
+ *	"taken: <bytes>".
+ *
+ * Side effects:
+ *	Frees the taken buffer on success; sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -11693,6 +13038,21 @@ th8test_take_result_cmd(
  *	with one expression.  Doing all five steps inside one C
  *	function avoids the script-level result-replacement that
  *	would otherwise mask the sensitive transition.
+ *
+ * Why / How:
+ *	Runs the read / is-sensitive / take / re-check sequence inside a
+ *	single C call so the script-level result replacement that would
+ *	otherwise clear the sensitive tag cannot intervene; only the
+ *	length (never the plaintext) leaves the protected region.
+ *
+ * Results:
+ *	TH8_OK with "ok <flagBefore> <length> <takeRefused>
+ *	<flagAfter>"; propagates Th8_GetVar's error code if the
+ *	variable read fails.
+ *
+ * Side effects:
+ *	Reads the named variable; frees any taken buffer; sets the
+ *	interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -13369,6 +14729,11 @@ th8test_fpclassify_raw(double d)
  *	  * `check` -- set the result to 1 iff the value is
  *	    sub-normal at the C level, 0 otherwise.
  *
+ * Why / How:
+ *	Builds the smallest positive double from its raw bit pattern
+ *	(0x1) so tests can exercise subnormal handling without any
+ *	decimal-string parse, which would round the value away.
+ *
  * Parameters:
  *	interp -- live interpreter (receives the result).
  *	ctx    -- unused command context.
@@ -13376,7 +14741,7 @@ th8test_fpclassify_raw(double d)
  *	argv   -- argv[0]=command name; argv[1]=optional SUBCMD.
  *	argl   -- argument byte-lengths (used for SUBCMD matching).
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success, with the interpreter result set
  *	per the SUBCMD.  Wrong-argument errors flow through
  *	`Th8_WrongNumArgs`.
@@ -14265,7 +15630,7 @@ th8test_policy_depth_cmd(
         interp, &zOut, &nOut, rc == TH8_OK ? "ok" : "FAIL", TH8_NOLEN);
 
 #    if defined(TH8_ENABLE_VARIABLES)
-    Th8_ResetSecurityArray(interp);
+    (void)Th8_ResetSecurityArray(interp);
 #    endif
 
     Th8_SetResult(interp, zOut, nOut);
@@ -14475,7 +15840,7 @@ th8test_signed_inherit_cmd(
     Th8_RestoreSignedOnly(interp, outerSaved);
 
 #    if defined(TH8_ENABLE_VARIABLES)
-    Th8_ResetSecurityArray(interp);
+    (void)Th8_ResetSecurityArray(interp);
 #    endif
 
     Th8_SetResult(interp, zOut, nOut);
@@ -14607,6 +15972,18 @@ static size_t th8test_trace_capture_len;
  *	th8test_trace_capture_buf.  Installed on a child interpreter's
  *	cloned platform by th8test_verify_trace_cmd.
  *
+ * Why / How:
+ *	Redirects the child interpreter's diagnostic traces into a
+ *	static buffer so the test can inspect what Th8_EmitTrace emitted;
+ *	bounded to the buffer size and single-threaded use only.
+ *
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
+ *	Appends the message (NUL-terminated) to th8test_trace_capture_buf
+ *	and advances th8test_trace_capture_len.
+ *
  *----------------------------------------------------------------------
  */
 static void
@@ -14627,6 +16004,11 @@ th8test_trace_capture_cb(Th8_Interp *interp, void *pCtx, const char *zMsg)
     }
 }
 
+/* th8test_contains is a GENERAL helper (also used outside crypto, e.g. the
+ * file-tempname veto check), so it is defined OUTSIDE the surrounding
+ * TH8_ENABLE_CRYPTOGRAPHY block; the block re-opens after it. */
+#  endif /* TH8_ENABLE_CRYPTOGRAPHY */
+
 
 /*
  *----------------------------------------------------------------------
@@ -14637,6 +16019,18 @@ th8test_trace_capture_cb(Th8_Interp *interp, void *pCtx, const char *zMsg)
  *	CRT-free substring search (Th8_Strlen + Th8_Memcmp) used by
  *	th8test_verify_trace_cmd in place of strstr, which would add a
  *	disallowed CRT dependency to the test library.
+ *
+ * Why / How:
+ *	The test library may not depend on the CRT, so this open-codes a
+ *	naive O(n*m) substring scan over the TH8 string primitives
+ *	instead of calling strstr.
+ *
+ * Results:
+ *	Non-zero if zNeedle occurs in zHay (empty needle always matches),
+ *	else 0.
+ *
+ * Side effects:
+ *	None.
  *
  *----------------------------------------------------------------------
  */
@@ -14656,6 +16050,8 @@ th8test_contains(Th8_Interp *interp, const char *zHay, const char *zNeedle)
     }
     return 0;
 }
+
+#  if defined(TH8_ENABLE_CRYPTOGRAPHY)
 
 
 /*
@@ -15189,7 +16585,7 @@ th8test_signed_only_cmd(
 	    interp, &zOut, &nOut, rc == TH8_OK ? "ok" : "FAIL", TH8_NOLEN);
 
 #    if defined(TH8_ENABLE_VARIABLES)
-	Th8_ResetSecurityArray(interp);
+	(void)Th8_ResetSecurityArray(interp);
 #    endif
 
 	Th8_ListAppend(interp, &zOut, &nOut, evalRc == TH8_OK ? "0" : "1", 1);
@@ -15312,7 +16708,7 @@ th8test_signed_only_cmd(
 	/* Bug 41 fix (2026-06-07): Th8_ResetSecurityArray now
 	 * resets all seven elements including `flags`, so no
 	 * explicit unset of the flags element is needed here. */
-	Th8_ResetSecurityArray(interp);
+	(void)Th8_ResetSecurityArray(interp);
 #    endif
 
 	Th8_ListAppend(interp, &zOut, &nOut, evalRc == TH8_OK ? "0" : "1", 1);
@@ -15475,10 +16871,19 @@ th8test_load_snk_cmd(
  *	hidden-visibility barrier does not block the testlib
  *	binary.
  *
+ * Why / How:
+ *	The production allocator never yields a region with a NULL
+ *	pPage, so the only-live-condition `!pRegion->pPage` arm (once
+ *	OMIT folds the NEVER guard away) is reachable only by handing
+ *	the checkers a hand-built region with pPage == NULL.
+ *
  * Results:
- *	"ok" if both calls returned the expected
+ *	TH8_OK with "ok" if both calls returned the expected
  *	failure indicators (TH8_ERROR / NULL); otherwise an
  *	error.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -15634,7 +17039,7 @@ th8test_preload_key_cmd(
     Th8_RestoreSignedOnly(interp, outerSaved);
 
 #    if defined(TH8_ENABLE_VARIABLES)
-    Th8_ResetSecurityArray(interp);
+    (void)Th8_ResetSecurityArray(interp);
 #    endif
 
     Th8_SetResult(interp, zOut, nOut);
@@ -15750,6 +17155,17 @@ static void *th8test_oe_channel;
  *	th8test_output_error_channel_cmd: reports &th8test_oe_sentinel as
  *	the current error channel.
  *
+ * Why / How:
+ *	Hands back a known sentinel address as the error channel so the
+ *	paired xOutputError stub can confirm Th8_OutputError threaded the
+ *	same channel through.
+ *
+ * Results:
+ *	TH8_OK; writes &th8test_oe_sentinel to *pChannel when non-NULL.
+ *
+ * Side effects:
+ *	None beyond writing the caller's out-parameter.
+ *
  *----------------------------------------------------------------------
  */
 static int
@@ -15769,6 +17185,18 @@ th8test_geterroroutput_cb(Th8_Interp *interp, void *pCtx, void **pChannel)
  *	xOutputError platform callback for
  *	th8test_output_error_channel_cmd: records the pChannel it is
  *	handed so the test can confirm it matches xGetErrorOutput's.
+ *
+ * Why / How:
+ *	Captures the channel argument into a static so the test can
+ *	compare it against the sentinel that xGetErrorOutput reported,
+ *	verifying the two are threaded together.
+ *
+ * Results:
+ *	TH8_OK always.
+ *
+ * Side effects:
+ *	Stores pChannel into th8test_oe_channel; ignores the message
+ *	bytes.
  *
  *----------------------------------------------------------------------
  */
@@ -15878,6 +17306,17 @@ th8test_output_error_channel_cmd(
  *
  *	xCloseTemporaryData platform callback for th8test_close_veto_cmd:
  *	always returns TH8_ERROR to veto the close.
+ *
+ * Why / How:
+ *	Forces the close-temporary-data path to fail so the caller's
+ *	handling of a vetoed close can be exercised; a real platform
+ *	rarely fails here.
+ *
+ * Results:
+ *	TH8_ERROR always.
+ *
+ * Side effects:
+ *	None.  All arguments are ignored.
  *
  *----------------------------------------------------------------------
  */
@@ -16186,6 +17625,12 @@ th8test_chan_close(int idx)
  *	close + state cleanup invoked by `reset` and by
  *	`set` when replacing an existing redirection.
  *
+ * Why / How:
+ *	Lets tests capture or supply standard-channel I/O by routing a
+ *	channel to a file at the platform layer, without a TTY; the
+ *	file-static tracking array records each redirection so it can be
+ *	replaced or reset cleanly.
+ *
  * Parameters:
  *	interp -- live interpreter (receives diagnostic).
  *	ctx    -- unused command context.
@@ -16194,7 +17639,7 @@ th8test_chan_close(int idx)
  *		argv[2]=CHANNEL; argv[3]=FILE (set only).
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success with the interpreter result set
  *	per the SUBCMD; `TH8_ERROR` on unknown CHANNEL or
  *	platform-callback failure.
@@ -16899,7 +18344,7 @@ th8test_glob_cmd(
  *	  - Has NO variables or procedures from the parent
  *
  *	Returns a Tcl list:
- *	  {returnCode result stepCount allocBytes}
+ *	  {returnCode result stepCount allocBytes allocPeak}
  *
  * Why / How:
  *	Tests resource limiting and isolation by running untrusted
@@ -16909,7 +18354,7 @@ th8test_glob_cmd(
  *	lets tests assert on resource consumption.
  *
  * Results:
- *	TH8_OK with {returnCode result stepCount allocBytes} list.
+ *	TH8_OK with {returnCode result stepCount allocBytes allocPeak} list.
  *
  * Side effects:
  *	Creates and destroys a child interpreter; evaluates
@@ -16918,9 +18363,12 @@ th8test_glob_cmd(
  *----------------------------------------------------------------------
  */
 
-#  define TH8_SANDBOX_ALLOC_LIMIT  (16 * 1024 * 1024) /* 16 MB */
-#  define TH8_SANDBOX_STEP_LIMIT   1000000 /* 1M steps */
-#  define TH8_SANDBOX_RESULT_LIMIT (1 * 1024 * 1024) /* 1 MB */
+/*
+ * The sandbox applies the public hardened resource profile via
+ * Th8_SetSafeLimits (TH8_SAFE_ALLOC_LIMIT / _STEP_LIMIT / _RESULT_LIMIT,
+ * th8.h, TH8K-018), so these red-team tests exercise the same profile an
+ * embedder gets from one call rather than a testlib-private copy.
+ */
 
 /*
  *----------------------------------------------------------------------
@@ -16985,7 +18433,7 @@ th8test_i64toa(th8_int64_t v, char *buf, size_t n)
  *
  *	  * Return code of the evaluation (`OK`, `ERROR`, etc.).
  *	  * The child interpreter's final result, length-capped
- *	    by `TH8_SANDBOX_RESULT_LIMIT` (1 MiB) to keep a
+ *	    by `TH8_SAFE_RESULT_LIMIT` (1 MiB) to keep a
  *	    runaway script from blowing the parent's memory.
  *	  * Step count and allocation totals consumed by the
  *	    child (formatted via `th8test_i64toa` so the
@@ -17000,6 +18448,13 @@ th8test_i64toa(th8_int64_t v, char *buf, size_t n)
  *	need to exercise post-failure / interpreter-tear-down
  *	paths without disturbing the parent's state.
  *
+ * Why / How:
+ *	Runs SCRIPT in a throwaway child interpreter so coverage tests
+ *	can exercise post-failure and teardown paths without disturbing
+ *	the parent; the child's result is length-capped so a runaway
+ *	script cannot exhaust the parent's memory.  Not a security
+ *	sandbox -- OS callbacks are shared.
+ *
  * Parameters:
  *	interp -- live interpreter (receives the report).
  *	ctx    -- unused command context.
@@ -17007,7 +18462,7 @@ th8test_i64toa(th8_int64_t v, char *buf, size_t n)
  *	argv   -- argv[0]=command name; argv[1]=SCRIPT body.
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success with the report in the
  *	interpreter result.  `TH8_ERROR` on argument-count or
  *	child-interpreter-creation failure (interpreter result:
@@ -17036,14 +18491,16 @@ th8test_sandbox_cmd(
     size_t nResult;
     th8_int64_t nSteps;
     size_t nAlloc;
+    size_t nPeak;
     char *zOut = NULL;
     size_t nOut = 0;
     char zBuf[32];
 
     (void)ctx;
 
-    if (argc != 2) {
-	return Th8_WrongNumArgs(interp, "th8testlib::sandbox script");
+    if (argc != 2 && argc != 3) {
+	return Th8_WrongNumArgs(
+	    interp, "th8testlib::sandbox script ?stepLimit?");
     }
 
     /*
@@ -17098,9 +18555,27 @@ th8test_sandbox_cmd(
      * Set resource limits to prevent runaway scripts.
      */
 
-    Th8_SetAllocLimit(pChild, TH8_SANDBOX_ALLOC_LIMIT);
-    Th8_SetStepLimit(pChild, TH8_SANDBOX_STEP_LIMIT);
-    Th8_SetResultLimit(pChild, TH8_SANDBOX_RESULT_LIMIT);
+    /*
+     * Apply the public hardened resource profile in one call
+     * (allocation + step + result limits, TH8K-018).
+     */
+    Th8_SetSafeLimits(pChild);
+    /*
+     * Optional explicit step limit (TH8K-009 loop-poll tests): a low
+     * limit lets a test trip a command's in-loop Th8_Ready poll cheaply,
+     * without building a million-element input to reach the default
+     * TH8_SAFE_STEP_LIMIT.  Override it after the safe profile is applied.
+     */
+    if (argc == 3) {
+	th8_int64_t iLimit = 0;
+	if (Th8_ToWideInt(pChild, argv[2], argl[2], &iLimit) != TH8_OK ||
+	    iLimit < 0) {
+	    Th8_DeleteInterp(pChild);
+	    Th8_SetResultStatic(interp, "sandbox: bad stepLimit", TH8_NOLEN);
+	    return TH8_ERROR;
+	}
+	Th8_SetStepLimit(pChild, iLimit);
+    }
 
     /*
      * Step 5: Evaluate the script in the child.
@@ -17117,10 +18592,11 @@ th8test_sandbox_cmd(
     zResult = Th8_GetResult(pChild, &nResult);
     nSteps = Th8_GetStepCount(pChild);
     nAlloc = Th8_GetAllocBytes(pChild);
+    nPeak = Th8_GetAllocPeak(pChild);
 
     /*
      * Step 7: Build the result list in the PARENT interpreter.
-     * Format: {returnCode result stepCount allocBytes}
+     * Format: {returnCode result stepCount allocBytes allocPeak}
      */
 
     {
@@ -17140,6 +18616,10 @@ th8test_sandbox_cmd(
 	/* allocBytes */
 	z = th8test_i64toa((th8_int64_t)nAlloc, zBuf, sizeof(zBuf));
 	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+
+	/* allocPeak (high-water mark; TH8K-021) */
+	z = th8test_i64toa((th8_int64_t)nPeak, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
     }
 
     /*
@@ -17158,6 +18638,2879 @@ th8test_sandbox_cmd(
 	Th8_Free(interp, zOut);
     } else {
 	Th8_ClearResult(interp);
+    }
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_timelimit_cmd --
+ *
+ *	Implements `::th8testlib::timelimit MS SCRIPT` (TH8K-010).
+ *
+ * Why / How:
+ *	Evaluates SCRIPT in a fresh child interpreter that has a
+ *	wall-clock deadline of MS milliseconds (via Th8_SetTimeLimitMs)
+ *	and NO step limit, so a compute-bound loop is stopped by the
+ *	TIME limit rather than the step counter.  The child's xPanic is
+ *	NULL so a limit hit returns an error instead of aborting the
+ *	host.  Returns a two-element list {rc result}.
+ *
+ * Parameters:
+ *	argv[1] -- MS (non-negative wall-clock budget); argv[2] -- SCRIPT.
+ *
+ * Results:
+ *	TH8_OK with {rc result} in the interpreter result, or TH8_ERROR
+ *	on bad arguments / child-creation failure.
+ *
+ * Side effects:
+ *	Creates and destroys one child interpreter; sets the result.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_timelimit_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    Th8_Interp *pChild = NULL;
+    Th8_Platform childPlat;
+    const Th8_Platform *pParentPlat;
+    th8_int64_t nMs = 0;
+    int evalRc;
+    const char *zResult;
+    size_t nResult;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    char zBuf[32];
+
+    (void)ctx;
+
+    if (argc != 3) {
+	return Th8_WrongNumArgs(interp, "th8testlib::timelimit ms script");
+    }
+    if (Th8_ToWideInt(interp, argv[1], argl[1], &nMs) != TH8_OK || nMs < 0) {
+	Th8_SetResultStatic(interp, "timelimit: bad ms", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    pParentPlat = Th8_GetPlatform(interp);
+    if (!pParentPlat) {
+	Th8_SetResultStatic(
+	    interp, "timelimit: cannot access parent platform", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    childPlat = *pParentPlat;
+    childPlat.xPanic = NULL;
+
+    pChild = Th8_CreateInterp(&childPlat);
+    if (!pChild) {
+	Th8_SetResultStatic(
+	    interp, "timelimit: cannot create child interpreter", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    if (Th8_RegisterLanguage(pChild) != TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(
+	    interp, "timelimit: cannot register language", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    if (Th8_SetTimeLimitMs(pChild, nMs) != TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(
+	    interp, "timelimit: cannot arm deadline", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    evalRc = Th8_Eval(pChild, 0, argv[2], argl[2], NULL, 0);
+    zResult = Th8_GetResult(pChild, &nResult);
+
+    {
+	const char
+	    *z = th8test_i64toa((th8_int64_t)evalRc, zBuf, sizeof(zBuf));
+
+	if (Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN) != TH8_OK ||
+	    Th8_ListAppend(
+	        interp, &zOut, &nOut, zResult ? zResult : "", nResult) !=
+	        TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_DeleteInterp(pChild);
+	    Th8_SetResultStatic(
+	        interp, "timelimit: out of memory", TH8_NOLEN);
+	    return TH8_ERROR;
+	}
+    }
+    Th8_SetResult(interp, zOut, nOut);
+    Th8_Free(interp, zOut);
+    Th8_DeleteInterp(pChild);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_deadline_overshoot_cmd --
+ *
+ *	Implements `::th8testlib::deadline_overshoot MS`: a MEASURED
+ *	worst-case cancellation/deadline-latency test (TH8K-009/TH8K-010).
+ *
+ * Why / How:
+ *	Runs a compute-bound infinite loop in a child interpreter under an
+ *	MS-millisecond cooperative deadline and measures the ACTUAL wall-clock
+ *	elapsed time via the platform clock (Th8_GetTimeUs).  This quantifies
+ *	the overshoot the earlier `timelimit` test only asserted the final
+ *	result of: an adversarial loop must STOP (not run unbounded) shortly
+ *	past the deadline.  Returns the elapsed milliseconds, or
+ *	"skip:no-clock" when the platform has no monotonic clock.
+ *
+ * Results:
+ *	TH8_OK with the elapsed-ms integer (or a skip token) in the result.
+ *
+ * Side effects:
+ *	Creates and destroys one child interpreter.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_deadline_overshoot_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    static const char zLoop[] = "while {1} { set x 1 }";
+    const Th8_Platform *pParent;
+    Th8_Platform childPlat;
+    Th8_Interp *pChild;
+    th8_int64_t nMs = 0, t0 = 0, t1 = 0;
+    char zBuf[32];
+
+    (void)ctx;
+
+    if (argc != 2) {
+	return Th8_WrongNumArgs(interp, "th8testlib::deadline_overshoot ms");
+    }
+    if (Th8_ToWideInt(interp, argv[1], argl[1], &nMs) != TH8_OK || nMs <= 0) {
+	Th8_SetResultStatic(interp, "deadline_overshoot: bad ms", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent) {
+	Th8_SetResultStatic(
+	    interp, "deadline_overshoot: no platform", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    childPlat = *pParent;
+    childPlat.xPanic = NULL;
+    pChild = Th8_CreateInterp(&childPlat);
+    if (!pChild) {
+	Th8_SetResultStatic(
+	    interp, "deadline_overshoot: no child", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    if (Th8_RegisterLanguage(pChild) != TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(interp, "deadline_overshoot: no lang", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    if (Th8_GetTimeUs(pChild, &t0) != TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(interp, "skip:no-clock", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (Th8_SetTimeLimitMs(pChild, nMs) != TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(interp, "skip:no-clock", TH8_NOLEN);
+	return TH8_OK;
+    }
+    (void)Th8_Eval(pChild, 0, zLoop, TH8_NOLEN, NULL, 0); /* until deadline */
+    (void)Th8_GetTimeUs(pChild, &t1);
+    Th8_DeleteInterp(pChild);
+    {
+	const char *z = th8test_i64toa((t1 - t0) / 1000, zBuf, sizeof(zBuf));
+
+	Th8_SetResult(interp, z, TH8_NOLEN);
+    }
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_alloc_account_overflow_cmd --
+ *
+ *	Implements `::th8testlib::alloc_account_overflow`: drives the
+ *	POST-allocation usable-size accounting overflow guard (TH8K-023).
+ *
+ * Why / How:
+ *	The per-interpreter allocation counter is incremented by the allocator's
+ *	reported usable size after every successful allocation.  A plain `+=`
+ *	could wrap size_t, after which the memory-cap check sees a falsely small
+ *	total and the ceiling collapses; th8AccountAlloc must SATURATE at
+ *	(size_t)-1 instead.  This drives that arm the only way an in-tree test
+ *	can without a hostile allocator: it primes a child's counter to a few
+ *	bytes below the size_t ceiling (no alloc limit is armed, so the preflight
+ *	does not reject), then performs a normal allocation whose usable size
+ *	overflows the add.  A correct implementation leaves the counter pinned at
+ *	(size_t)-1 ("saturated"); a wrapping one would leave it far below the
+ *	primed baseline ("wrapped").
+ *
+ * Results:
+ *	TH8_OK with "saturated" (correct), "wrapped" (defect), or a skip token.
+ *
+ * Side effects:
+ *	Creates and destroys one child interpreter.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_alloc_account_overflow_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParent;
+    Th8_Platform childPlat;
+    Th8_Interp *pChild;
+    void *p;
+    size_t nAfter;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::alloc_account_overflow");
+    }
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent) {
+	Th8_SetResultStatic(
+	    interp, "alloc_account_overflow: no platform", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    childPlat = *pParent;
+    childPlat.xPanic = NULL;
+    pChild = Th8_CreateInterp(&childPlat);
+    if (!pChild) {
+	Th8_SetResultStatic(
+	    interp, "alloc_account_overflow: no child", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    /* No alloc limit armed => the preflight does not reject; prime the counter
+     * within 8 bytes of the size_t ceiling so a normal allocation's usable-size
+     * add overflows and must saturate. */
+    th8SetAllocBytes(pChild, ((size_t)-1) - 8);
+    p = Th8_AttemptMalloc(pChild, 64);
+    nAfter = Th8_GetAllocBytes(pChild);
+    if (p) Th8_Free(pChild, p);
+    Th8_DeleteInterp(pChild);
+    if (!p) {
+	/* A healthy allocator should return 64 bytes; report rather than
+	 * misattribute an allocator failure to the accounting outcome. */
+	Th8_SetResultStatic(interp, "skip:alloc-failed", TH8_NOLEN);
+	return TH8_OK;
+    }
+    Th8_SetResultStatic(
+        interp, (nAfter == (size_t)-1) ? "saturated" : "wrapped", TH8_NOLEN);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_hash_order_saturation_cmd --
+ *
+ *	Implements `::th8testlib::hash_order_saturation`: drives the
+ *	insertion-order stamp saturation guard at the 64-bit ceiling (TH8K-016).
+ *
+ * Why / How:
+ *	Ordered hash iteration (dict for / dict keys / dict values) sorts entries
+ *	by a per-entry insertion stamp drawn from a monotonic lifetime counter.
+ *	That counter is now 64-bit, so real workloads never reach its ceiling;
+ *	the saturation guard that keeps the stamp defined at the ceiling is
+ *	therefore unreachable in practice.  This command reaches it deliberately
+ *	by priming a throwaway hash's counter to one below TH8_INT64_MAX, then
+ *	inserting three keys: "a" takes the last distinct stamp
+ *	(TH8_INT64_MAX - 1) and the counter advances to TH8_INT64_MAX; "b" and
+ *	"c" then SATURATE (each gets TH8_INT64_MAX, no further increment, no
+ *	signed overflow).  It verifies that "a" still orders before the saturated
+ *	entries, that "b"/"c" tie at the ceiling, and that the counter does not
+ *	advance past it -- making the documented ceiling semantics explicit and
+ *	covering the guard's saturating arm.
+ *
+ * Results:
+ *	TH8_OK with "ok" (correct) or "wrong" (defect) in the result.
+ *
+ * Side effects:
+ *	Creates and destroys one throwaway hash table.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_hash_order_saturation_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    Th8_Hash *pHash;
+    Th8_HashEntry *pa, *pb, *pc;
+    const char *zResult;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::hash_order_saturation");
+    }
+    pHash = Th8_HashNew(interp);
+    if (!pHash) {
+	Th8_SetResultStatic(
+	    interp, "hash_order_saturation: no hash", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    pHash->nNextOrder = TH8_INT64_MAX - 1;
+    pa = Th8_HashFind(interp, pHash, "a", 1, 1);
+    pb = Th8_HashFind(interp, pHash, "b", 1, 1);
+    pc = Th8_HashFind(interp, pHash, "c", 1, 1);
+    if (!pa || !pb || !pc) {
+	Th8_HashDelete(interp, pHash);
+	Th8_SetResultStatic(
+	    interp, "hash_order_saturation: insert failed", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    if (pa->nInsertOrder == TH8_INT64_MAX - 1 &&
+        pb->nInsertOrder == TH8_INT64_MAX &&
+        pc->nInsertOrder == TH8_INT64_MAX &&
+        pa->nInsertOrder < pb->nInsertOrder &&
+        pHash->nNextOrder == TH8_INT64_MAX) {
+	zResult = "ok";
+    } else {
+	zResult = "wrong";
+    }
+    Th8_HashDelete(interp, pHash);
+    Th8_SetResultStatic(interp, zResult, TH8_NOLEN);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_same_interp_post_limit_cmd --
+ *
+ *	Implements `::th8testlib::same_interp_post_limit`: exercises the SAME
+ *	interpreter's documented state AFTER a step-limit termination (TH8K-021).
+ *
+ * Why / How:
+ *	The `sandbox` resource tests prove the HOST survives a limit trip by
+ *	running the next script in a FRESH child.  This command instead reuses the
+ *	SAME child to pin its post-termination contract: a step-limited interpreter
+ *	is not permanently poisoned, but it stays bounded until the step counter is
+ *	reset.  It creates one child with a small step limit, runs a compute-bound
+ *	bomb (which trips), then in the SAME child (a) runs a trivial script with
+ *	NO reset -- which must STILL fail, because the counter is still past the
+ *	limit -- and (b) runs it again after Th8_ResetStepCount, which must now
+ *	succeed with the correct result.  Returns a 4-element list
+ *	{bombTripped stuckWithoutReset reusableAfterReset reusedResult} so the test
+ *	asserts the exact contract {1 1 1 42}.
+ *
+ * Results:
+ *	TH8_OK with the 4-element status list in the result.
+ *
+ * Side effects:
+ *	Creates and destroys one child interpreter.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_same_interp_post_limit_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParent;
+    Th8_Platform childPlat;
+    Th8_Interp *pChild;
+    int bombRc, stuckRc, reuseRc;
+    const char *zReused;
+    size_t nReused;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    char zBuf[32];
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::same_interp_post_limit");
+    }
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent) {
+	Th8_SetResultStatic(
+	    interp, "same_interp_post_limit: no platform", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    childPlat = *pParent;
+    childPlat.xPanic = NULL;
+    pChild = Th8_CreateInterp(&childPlat);
+    if (!pChild) {
+	Th8_SetResultStatic(
+	    interp, "same_interp_post_limit: no child", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    if (Th8_RegisterLanguage(pChild) != TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(
+	    interp, "same_interp_post_limit: no lang", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    Th8_SetStepLimit(pChild, 1000);
+
+    /* (1) Trip the step limit with a compute-bound bomb. */
+    bombRc =
+        (Th8_Eval(pChild, 0, "while {1} { set x 1 }", TH8_NOLEN, NULL, 0) !=
+         TH8_OK);
+
+    /* (2) SAME child, no reset: the counter is still past the limit, so even a
+     * trivial script must still fail (the interpreter is bounded, not usable
+     * again yet). */
+    stuckRc =
+        (Th8_Eval(pChild, 0, "expr {6 * 7}", TH8_NOLEN, NULL, 0) != TH8_OK);
+
+    /* (3) Reset the step counter: the SAME child is reusable and produces the
+     * correct result -- proving it was bounded, not permanently poisoned. */
+    Th8_ResetStepCount(pChild);
+    reuseRc =
+        (Th8_Eval(pChild, 0, "expr {6 * 7}", TH8_NOLEN, NULL, 0) == TH8_OK);
+    zReused = Th8_GetResult(pChild, &nReused);
+
+    /* Build {bombTripped stuckWithoutReset reusableAfterReset reusedResult}. */
+    zBuf[0] = (char)('0' + (bombRc ? 1 : 0));
+    zBuf[1] = 0;
+    Th8_ListAppend(interp, &zOut, &nOut, zBuf, TH8_NOLEN);
+    zBuf[0] = (char)('0' + (stuckRc ? 1 : 0));
+    Th8_ListAppend(interp, &zOut, &nOut, zBuf, TH8_NOLEN);
+    zBuf[0] = (char)('0' + (reuseRc ? 1 : 0));
+    Th8_ListAppend(interp, &zOut, &nOut, zBuf, TH8_NOLEN);
+    Th8_ListAppend(interp, &zOut, &nOut, zReused ? zReused : "", nReused);
+
+    Th8_DeleteInterp(pChild);
+    if (zOut) {
+	Th8_SetResult(interp, zOut, nOut);
+	Th8_Free(interp, zOut);
+    } else {
+	Th8_ClearResult(interp);
+    }
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_create_cmd_noop --
+ *
+ *	A do-nothing command procedure used as the body of the probe command
+ *	registered by th8test_create_command_oom_cmd.
+ *
+ * Why / How:
+ *	Th8_CreateCommand needs a valid Th8_CommandProc; the transactional
+ *	OOM sweep only cares whether registration succeeded or was cleanly
+ *	rolled back, never invokes the command, so the body is empty.
+ *
+ * Results:
+ *	Always TH8_OK.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_create_cmd_noop(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    (void)interp;
+    (void)ctx;
+    (void)argc;
+    (void)argv;
+    (void)argl;
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_create_command_oom_cmd --
+ *
+ *	Implements `::th8testlib::create_command_oom`: proves Th8_CreateCommand
+ *	is 100% transactional for a QUALIFIED new name under allocation
+ *	failure (TH8K-005 / the project-wide transactional rule).
+ *
+ * Why / How:
+ *	Registering `::txa::txb::txc::probe` creates the intermediate
+ *	namespaces `txa`/`txb`/`txc` and then performs five further staged
+ *	allocations.  If any fails, the whole operation must roll back --
+ *	including the namespaces -- leaving state exactly as before.  Two
+ *	sweeps over a child interpreter whose xMalloc is fault-injected: a
+ *	PERSISTENT fail-after-trip-t sweep asserts that whenever the fault
+ *	fired the call returned TH8_ERROR (a success is a violation) AND left
+ *	ZERO residue -- specifically the top namespace `::txa` must NOT exist
+ *	afterwards (a leftover empty namespace is the TH8K-005 defect this
+ *	test reproduces); and a ONE-SHOT sweep for crash/leak detection of a
+ *	single transient failure (validated by TH8_HEAP_CHECKS at teardown).
+ *	The fault is disarmed before every introspection and teardown.
+ *
+ * Results:
+ *	TH8_OK with the 6-tuple {persFired persErr persViol osFired osErr
+ *	osViol}; the driver asserts persViol == 0 and non-vacuity.
+ *
+ * Side effects:
+ *	Creates and destroys many child interpreters.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_create_command_oom_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParent;
+    Th8_Platform plat;
+    int persFired = 0, persErr = 0, persViol = 0;
+    int osFired = 0, osErr = 0, osViol = 0;
+    int t;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    char zBuf[32];
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::create_command_oom");
+    }
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent) {
+	Th8_SetResultStatic(
+	    interp, "create_command_oom: no platform", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /* PERSISTENT sweep: fail trip t and every later allocation. */
+    for (t = 1; t <= 60; t++) {
+	Th8_Interp *pChild;
+	th8_uint64_t tok = 0;
+	int rc;
+
+	plat = *pParent;
+	plat.xPanic = 0;
+	plat.xMalloc = th8test_stub_xMalloc_failafter;
+	th8test_pRealMalloc = pParent->xMalloc;
+	th8test_nMallocTrip = -1; /* construct the child without the fault. */
+	th8test_bOneShotFired = 0;
+	pChild = Th8_CreateInterp(&plat);
+	if (!pChild) continue;
+
+	th8test_nMallocTrip = t; /* arm at trip t. */
+	th8test_bOneShotFired = 0;
+	rc = Th8_CreateCommand(
+	    pChild, "::txa::txb::txc::probe", th8test_create_cmd_noop, 0, 0,
+	    &tok);
+	th8test_nMallocTrip = -1; /* disarm before introspection/teardown. */
+
+	if (th8test_bOneShotFired) {
+	    persFired++;
+	    if (rc == TH8_OK) {
+		persViol++; /* fired yet "succeeded" -- not all-or-nothing. */
+	    } else {
+		persErr++;
+		/* Zero-residue: a failed qualified create must NOT leave the
+		 * namespace hierarchy it began to build.  ::txa lingering is
+		 * the TH8K-005 defect. */
+		if (Th8_FindNamespace(pChild, "::txa", TH8_NOLEN, 0)) {
+		    persViol++;
+		}
+	    }
+	}
+	Th8_DeleteInterp(pChild);
+    }
+
+    /* ONE-SHOT sweep: fail exactly one allocation, then resume (crash/leak
+     * detection for a transient fault the persistent sweep short-circuits). */
+    for (t = 1; t <= 60; t++) {
+	Th8_Interp *pChild;
+	th8_uint64_t tok = 0;
+	int rc;
+
+	plat = *pParent;
+	plat.xPanic = 0;
+	plat.xMalloc = th8test_stub_xMalloc_oneshot;
+	th8test_pRealMalloc = pParent->xMalloc;
+	th8test_nMallocOneShot = -1;
+	th8test_bOneShotFired = 0;
+	pChild = Th8_CreateInterp(&plat);
+	if (!pChild) continue;
+
+	th8test_nMallocOneShot = t;
+	th8test_bOneShotFired = 0;
+	rc = Th8_CreateCommand(
+	    pChild, "::txa::txb::txc::probe", th8test_create_cmd_noop, 0, 0,
+	    &tok);
+	th8test_nMallocOneShot = -1;
+
+	if (th8test_bOneShotFired) {
+	    osFired++;
+	    if (rc == TH8_OK) {
+		osViol++;
+	    } else {
+		osErr++;
+		if (Th8_FindNamespace(pChild, "::txa", TH8_NOLEN, 0)) {
+		    osViol++;
+		}
+	    }
+	}
+	Th8_DeleteInterp(pChild);
+    }
+
+    {
+	const char *z;
+
+	z = th8test_i64toa((th8_int64_t)persFired, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+	z = th8test_i64toa((th8_int64_t)persErr, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+	z = th8test_i64toa((th8_int64_t)persViol, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+	z = th8test_i64toa((th8_int64_t)osFired, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+	z = th8test_i64toa((th8_int64_t)osErr, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+	z = th8test_i64toa((th8_int64_t)osViol, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+    }
+    if (zOut) {
+	Th8_SetResult(interp, zOut, nOut);
+	Th8_Free(interp, zOut);
+    } else {
+	Th8_ClearResult(interp);
+    }
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_invalid_platform_rejected_cmd --
+ *
+ *	Implements `::th8testlib::invalid_platform_rejected`: proves
+ *	Th8_CreateInterp REJECTS (returns NULL for) every invalid platform
+ *	table, rather than merely surviving one (TH8K-001).
+ *
+ * Why / How:
+ *	th8ValidatePlatform rejects a NULL platform, a wrong nVersion, and any
+ *	NULL mandatory callback (the alloc quartet xMalloc/xRealloc/xFree/
+ *	xMemorySize and the byte-op quartet xMemcpy/xMemmove/xMemset/xMemcmp),
+ *	and Th8_CreateInterp returns NULL before dereferencing any callback.
+ *	The existing plat_wrappers coverage drive constructs these cases but
+ *	only deletes any non-NULL child; this command instead ASSERTS
+ *	rejection -- it constructs each of the ten invalid platforms and counts
+ *	how many correctly returned NULL, so a regression that admitted a live
+ *	interpreter for an invalid platform is caught.
+ *
+ * Results:
+ *	TH8_OK with the 2-tuple {nTested nRejected}; the driver asserts
+ *	nTested == nRejected == 10.
+ *
+ * Side effects:
+ *	None persist (any wrongly-created child is immediately deleted).
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_invalid_platform_rejected_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParent;
+    Th8_Platform plat;
+    Th8_Interp *pBad;
+    int nTested = 0, nRejected = 0;
+    char zBuf[32];
+    char *zOut = NULL;
+    size_t nOut = 0;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(
+	    interp, "th8testlib::invalid_platform_rejected");
+    }
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent) {
+	Th8_SetResultStatic(
+	    interp, "invalid_platform_rejected: no platform", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /* NULL platform. */
+    nTested++;
+    pBad = Th8_CreateInterp(0);
+    if (!pBad) {
+	nRejected++;
+    } else {
+	Th8_DeleteInterp(pBad);
+    }
+
+    /* Wrong ABI version. */
+    plat = *pParent;
+    plat.nVersion = TH8_PLATFORM_VERSION + 1;
+    nTested++;
+    pBad = Th8_CreateInterp(&plat);
+    if (!pBad) {
+	nRejected++;
+    } else {
+	Th8_DeleteInterp(pBad);
+    }
+
+    /* Each mandatory callback NULL in turn. */
+#  define TH8T_TRY_NULL(field)                                               \
+      do {                                                                   \
+	  plat = *pParent;                                                   \
+	  plat.field = 0;                                                    \
+	  nTested++;                                                         \
+	  pBad = Th8_CreateInterp(&plat);                                    \
+	  if (!pBad) {                                                       \
+	      nRejected++;                                                   \
+	  } else {                                                           \
+	      Th8_DeleteInterp(pBad);                                        \
+	  }                                                                  \
+      } while (0)
+    TH8T_TRY_NULL(xMalloc);
+    TH8T_TRY_NULL(xRealloc);
+    TH8T_TRY_NULL(xFree);
+    TH8T_TRY_NULL(xMemorySize);
+    TH8T_TRY_NULL(xMemcpy);
+    TH8T_TRY_NULL(xMemmove);
+    TH8T_TRY_NULL(xMemset);
+    TH8T_TRY_NULL(xMemcmp);
+#  undef TH8T_TRY_NULL
+
+    {
+	const char *z;
+
+	z = th8test_i64toa((th8_int64_t)nTested, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+	z = th8test_i64toa((th8_int64_t)nRejected, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+    }
+    if (zOut) {
+	Th8_SetResult(interp, zOut, nOut);
+	Th8_Free(interp, zOut);
+    } else {
+	Th8_ClearResult(interp);
+    }
+    return TH8_OK;
+}
+
+
+#  if defined(TH8_ENABLE_VARIABLES)
+/* Forward declaration: the completeness predicate is defined after this
+ * command (it is shared with ctor_globals_oneshot); the constructor
+ * complete-or-nothing sweep below uses it to validate every survived interp. */
+static int th8test_globals_complete(Th8_Interp *, int, int);
+#  endif
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_ctor_alloc_transactional_cmd --
+ *
+ *	Implements `::th8testlib::ctor_alloc_transactional`: proves interpreter
+ *	construction is COMPLETE-OR-NOTHING at EVERY allocation trip point --
+ *	the constructor half of the project-wide transactional rule (TH8K-002).
+ *
+ * Why / How:
+ *	Th8_CreateInterp allocates a contiguous sequence (the interp+frame
+ *	block, the frame variable hash, the global namespace struct/name and
+ *	its eager paCmd/paVar/paChild hashes, the package hash, the standard
+ *	globals, and STEP 6-7 secure/cache init).  Every ESSENTIAL failure arm
+ *	frees what it built and returns NULL.  The correct transactional
+ *	invariant is complete-or-nothing (NOT the stricter "fired => NULL"):
+ *	when a fault fires, the constructor MUST return either NULL or a FULLY
+ *	COMPLETE interpreter -- never one with truncated PUBLISHED state.  A
+ *	survived-with-fault interp is legitimate ONLY when the failed
+ *	allocation was an OPTIONAL internal-rep cache-warming or transient
+ *	scratch buffer (Th8_FindInCache / Th8_StringAppend / Eagle_JoinList,
+ *	reached while th8InitGlobals builds the source/compileOptions lists),
+ *	whose miss leaves the correct value and a cold cache -- a valid
+ *	complete state, not an incomplete state change.
+ *
+ *	This sweeps a ONE-SHOT xMalloc fault across the construction trips.
+ *	On every trip where the fault fired AND a live interp was published,
+ *	it asserts the interp is fully complete: (a) both constructor-built
+ *	list globals have their exact element counts (th8test_globals_complete)
+ *	and (b) the eager per-namespace hashes are functional -- a global can
+ *	be set and read back (paVar) and a command registered (paCmd + lazy
+ *	paCmdToken).  A survived-but-incomplete interp (truncated published
+ *	state) is the violation.  Leak-freedom of every rolled-back partial
+ *	construction is validated by TH8_HEAP_CHECKS at teardown.  This
+ *	complements ctor_globals_oneshot (which checks the two list globals for
+ *	the th8InitGlobals stage) by exercising the WHOLE constructor and by
+ *	additionally proving the eager hashes are usable, not merely present.
+ *
+ * Results:
+ *	TH8_OK with the 3-tuple {fired viol survived}; the driver asserts
+ *	viol == 0 (no survived interp had truncated published state), fired > 0
+ *	(the sweep reached real allocations), and survived > 0 (at least one
+ *	optional-allocation fault was tolerated -- non-vacuity of the
+ *	completeness check itself).
+ *
+ * Side effects:
+ *	Repeatedly creates child interpreters under a one-shot OOM injector
+ *	and, on the survived trips, sets a probe variable / registers a probe
+ *	command in the child before destroying it; sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_ctor_alloc_transactional_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParent;
+    Th8_Platform plat;
+    int fired = 0, viol = 0, survived = 0, t;
+    int nOpt = 0;
+    char zBuf[32];
+    char *zOut = NULL;
+    size_t nOut = 0;
+    enum {
+	KMAX = 200
+    };
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(
+	    interp, "th8testlib::ctor_alloc_transactional");
+    }
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent) {
+	Th8_SetResultStatic(
+	    interp, "ctor_alloc_transactional: no platform", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /* Expected ::tcl_platform(compileOptions) element count. */
+#  if defined(TH8_ENABLE_VARIABLES)
+    {
+	const char **azOpt = Th8_GetCompileOptions();
+	while (azOpt[nOpt])
+	    nOpt++;
+    }
+#  else
+    (void)nOpt;
+#  endif
+
+    for (t = 1; t <= KMAX; t++) {
+	Th8_Interp *pChild;
+
+	plat = *pParent;
+	plat.xPanic = 0;
+	plat.xMalloc = th8test_stub_xMalloc_oneshot;
+	th8test_pRealMalloc = pParent->xMalloc;
+	th8test_nMallocOneShot = t;
+	th8test_bOneShotFired = 0;
+	pChild = Th8_CreateInterp(&plat);
+	th8test_nMallocOneShot =
+	    -1; /* disarm before introspection/teardown. */
+
+	if (th8test_bOneShotFired && pChild) {
+	    /*
+	     * Complete-or-nothing invariant (TH8K-002, project transactional
+	     * rule): a fault fired mid-construction, yet Th8_CreateInterp
+	     * PUBLISHED a live interpreter.  That is legitimate ONLY when the
+	     * failed allocation was an optional internal-rep cache-warming or
+	     * transient scratch buffer (Th8_FindInCache / Th8_StringAppend /
+	     * Eagle_JoinList) whose miss leaves the correct value -- never
+	     * published interpreter STATE.  Prove the published interp is fully
+	     * complete: (a) both constructor-built list globals have their exact
+	     * element counts (th8test_globals_complete), and (b) the eager
+	     * per-namespace hashes are functional -- a global variable can be
+	     * set and read back (paVar) and a command can be registered (paCmd
+	     * + lazy paCmdToken).  Any survived-but-incomplete interp is a real
+	     * transactionality violation (truncated published state).
+	     */
+
+	    survived++;
+	    {
+		int ok = 1;
+
+#  if defined(TH8_ENABLE_VARIABLES)
+		/* Published list globals must have their exact element counts
+		 * and the global variable hash (paVar) must be usable. */
+		if (ok && !th8test_globals_complete(pChild, 3, nOpt)) {
+		    ok = 0;
+		}
+		if (ok && Th8_SetVar(
+		              pChild, "::th8k002_probe", TH8_NOLEN, "1", 1) !=
+		              TH8_OK) {
+		    ok = 0;
+		}
+		if (ok && Th8_GetVar(pChild, "::th8k002_probe", TH8_NOLEN) !=
+		              TH8_OK) {
+		    ok = 0;
+		}
+#  endif
+		/* The eager command hash (paCmd) + lazy paCmdToken must be
+		 * usable -- available in every build configuration. */
+		if (ok) {
+		    th8_uint64_t tok = 0;
+
+		    if (Th8_CreateCommand(
+		            pChild, "::th8k002_cmd", th8test_create_cmd_noop,
+		            0, 0, &tok) != TH8_OK) {
+			ok = 0;
+		    }
+		}
+		if (!ok) viol++;
+	    }
+	}
+	if (th8test_bOneShotFired) fired++;
+	if (pChild) Th8_DeleteInterp(pChild);
+    }
+
+    {
+	const char *z;
+
+	z = th8test_i64toa((th8_int64_t)fired, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+	z = th8test_i64toa((th8_int64_t)viol, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+	z = th8test_i64toa((th8_int64_t)survived, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+    }
+    if (zOut) {
+	Th8_SetResult(interp, zOut, nOut);
+	Th8_Free(interp, zOut);
+    } else {
+	Th8_ClearResult(interp);
+    }
+    return TH8_OK;
+}
+
+
+#  if defined(TH8_ENABLE_VARIABLES)
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_globals_complete --
+ *
+ *	Return 1 if the interpreter's constructor-built list globals are
+ *	COMPLETE: ::tcl_platform(source) has exactly nSrc elements and
+ *	::tcl_platform(compileOptions) has exactly nOpt elements; 0 if
+ *	either variable is missing or has the wrong element count.
+ *
+ * Why / How:
+ *	Used by the TH8K-003 one-shot OOM test.  A truncating Th8_ListAppend
+ *	drops an ELEMENT (fewer elements), whereas an OOM inside
+ *	Eagle_JoinList's temporary falls back to a brace-wrapped element
+ *	that still parses to the same count -- so element COUNT, not a string
+ *	compare, is the correct discriminator for the truncation defect.
+ *	The value is read via Th8_GetVar (which sets the interpreter result)
+ *	and counted via Th8_SplitList with NULL output arrays.
+ *
+ * Results:
+ *	1 if both constructor-built list globals have exactly the
+ *	expected element counts; 0 if either is missing or miscounted.
+ *
+ * Side effects:
+ *	Reads the two variables via Th8_GetVar, leaving one of them in
+ *	the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_globals_complete(
+    Th8_Interp *interp, /* Interpreter to inspect. */
+    int nSrc, /* Expected ::tcl_platform(source) element count. */
+    int nOpt) /* Expected ::tcl_platform(compileOptions) count. */
+{
+    static const char *const azVar[2] =
+        {"::tcl_platform(source)", "::tcl_platform(compileOptions)"};
+    int aExpect[2];
+    int i;
+
+    aExpect[0] = nSrc;
+    aExpect[1] = nOpt;
+    for (i = 0; i < 2; i++) {
+	const char *zVal;
+	size_t nVal = 0;
+	int nCount = 0;
+
+	if (Th8_GetVar(interp, azVar[i], TH8_NOLEN) != TH8_OK) {
+	    return 0;
+	}
+	zVal = Th8_GetResult(interp, &nVal);
+	if (Th8_SplitList(
+	        interp, zVal, nVal, NULL, NULL, &nCount, TH8_LIST_NONE) !=
+	    TH8_OK) {
+	    return 0;
+	}
+	if (nCount != aExpect[i]) {
+	    return 0;
+	}
+    }
+    return 1;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_ctor_globals_oneshot_cmd --
+ *
+ *	Implements `::th8testlib::ctor_globals_oneshot` (TH8K-003): a
+ *	PROBATIVE one-shot-OOM test for the constructor's all-or-nothing
+ *	global-variable initialization (th8InitGlobals).
+ *
+ * Why / How:
+ *	th8InitGlobals builds ::tcl_platform(source) and (compileOptions)
+ *	with Th8_ListAppend, whose OOM path returns TH8_ERROR.  The bug was
+ *	that those returns were ignored, so a TRANSIENT one-shot allocation
+ *	failure could truncate a list and then a later Th8_SetVar succeed,
+ *	publishing a short list with a success return.  The persistent
+ *	fail-after injector cannot expose this (the later Th8_SetVar also
+ *	fails); the one-shot injector can.
+ *
+ *	Two sweeps walk the one-shot trip across the whole allocation
+ *	sequence:
+ *	  RESTORE: Th8_RestoreInterp(child, TH8_RESTORE_VARIABLES) re-runs
+ *	    th8InitGlobals and NOTHING else that allocates, so every fault
+ *	    lands on a constructor-global allocation.  Whenever the fault
+ *	    fired and restore returned TH8_OK, the globals MUST be complete.
+ *	  CREATE: Th8_CreateInterp under a one-shot fault; whenever the
+ *	    fault fired and a non-NULL interp was published, its globals
+ *	    MUST be complete (an essential failure must instead yield NULL).
+ *
+ *	Invariant: no success/non-NULL result ever exposes a truncated
+ *	global.  Pre-fix this fails (createViol/restoreViol > 0); post-fix
+ *	both are zero.
+ *
+ * Results:
+ *	TH8_OK with a 6-element list
+ *	{createFired createErr createViol restoreFired restoreErr restoreViol}
+ *	so the .tcl driver can assert createViol==0 && restoreViol==0 and
+ *	that the sweep was non-vacuous (fired/err counts > 0).
+ *
+ * Side effects:
+ *	Repeatedly creates/restores child interpreters under a one-shot
+ *	OOM injector; sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_ctor_globals_oneshot_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParent;
+    int nOpt = 0;
+    int createFired = 0, createErr = 0, createViol = 0;
+    int restoreFired = 0, restoreErr = 0, restoreViol = 0;
+    int t, noFire;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    char zBuf[32];
+    int aStat[6];
+    int i;
+    enum {
+	KMAX = 220
+    };
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::ctor_globals_oneshot");
+    }
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent || !pParent->xMalloc) {
+	Th8_SetResultStatic(
+	    interp, "ctor_globals_oneshot: no parent allocator", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /* Expected compileOptions element count. */
+    {
+	const char **azOpt = Th8_GetCompileOptions();
+	while (azOpt[nOpt])
+	    nOpt++;
+    }
+
+    th8test_pRealMalloc = pParent->xMalloc;
+
+    /* CREATE sweep: fault one allocation per construction, across the ctor. */
+    noFire = 0;
+    for (t = 0; t < KMAX; t++) {
+	Th8_Platform plat = *pParent;
+	Th8_Interp *pChild;
+
+	plat.xPanic = 0;
+	plat.xMalloc = th8test_stub_xMalloc_oneshot;
+	th8test_bOneShotFired = 0;
+	th8test_nMallocOneShot = t;
+	pChild = Th8_CreateInterp(&plat);
+	th8test_nMallocOneShot = -1;
+	if (th8test_bOneShotFired) {
+	    noFire = 0;
+	    createFired++;
+	    if (pChild == NULL) {
+		createErr++;
+	    } else if (!th8test_globals_complete(pChild, 3, nOpt)) {
+		createViol++;
+	    }
+	} else {
+	    noFire++;
+	}
+	if (pChild) Th8_DeleteInterp(pChild);
+	if (noFire >= 3) break; /* past the whole constructor. */
+    }
+
+    /* RESTORE sweep on one reusable child (built with the fault disarmed). */
+    {
+	Th8_Platform plat = *pParent;
+	Th8_Interp *pChild;
+
+	plat.xPanic = 0;
+	plat.xMalloc = th8test_stub_xMalloc_oneshot;
+	th8test_nMallocOneShot = -1;
+	pChild = Th8_CreateInterp(&plat);
+	if (pChild) {
+	    noFire = 0;
+	    for (t = 0; t < KMAX; t++) {
+		int rc;
+
+		th8test_bOneShotFired = 0;
+		th8test_nMallocOneShot = t;
+		rc = Th8_RestoreInterp(pChild, TH8_RESTORE_VARIABLES);
+		th8test_nMallocOneShot = -1;
+		if (th8test_bOneShotFired) {
+		    noFire = 0;
+		    restoreFired++;
+		    if (rc != TH8_OK) {
+			restoreErr++;
+		    } else if (!th8test_globals_complete(pChild, 3, nOpt)) {
+			restoreViol++;
+		    }
+		} else {
+		    noFire++;
+		}
+		if (noFire >= 3) break;
+	    }
+	    Th8_DeleteInterp(pChild);
+	}
+    }
+
+    th8test_pRealMalloc = NULL;
+
+    aStat[0] = createFired;
+    aStat[1] = createErr;
+    aStat[2] = createViol;
+    aStat[3] = restoreFired;
+    aStat[4] = restoreErr;
+    aStat[5] = restoreViol;
+    for (i = 0; i < 6; i++) {
+	const char
+	    *z = th8test_i64toa((th8_int64_t)aStat[i], zBuf, sizeof(zBuf));
+	if (Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_SetResultStatic(
+	        interp, "ctor_globals_oneshot: out of memory", TH8_NOLEN);
+	    return TH8_ERROR;
+	}
+    }
+    Th8_SetResult(interp, zOut, nOut);
+    Th8_Free(interp, zOut);
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_register_language_oom_cmd --
+ *
+ *	Implements `::th8testlib::register_language_oom` (TH8K-006): a
+ *	PROBATIVE one-shot-OOM test for Th8_RegisterLanguage's all-or-nothing
+ *	contract.
+ *
+ * Why / How:
+ *	Th8_RegisterLanguage must return TH8_ERROR -- never TH8_OK with a
+ *	partial, inconsistent language -- if any registration allocation
+ *	fails.  The reopened TH8K-006 defects (the security-array reset
+ *	ignored seven Th8_SetVar results, and the old ensemble force-init
+ *	loop discarded every eval error) could leave it returning TH8_OK
+ *	after a transient failure.  This test runs TWO sweeps, each walking
+ *	the fault trip across every allocation of a fresh interp's
+ *	Th8_RegisterLanguage and stopping after three consecutive no-fire
+ *	trips (so both cover the whole registration, including the trailing
+ *	security-array reset):
+ *	  PERSISTENT (fail allocation t and every later one): a persistent
+ *	    failure cannot be recovered, so whenever it fired
+ *	    Th8_RegisterLanguage MUST return TH8_ERROR; a success is a real
+ *	    partial-language violation (persViol -- assert persViol == 0).
+ *	  ONE-SHOT (fail exactly allocation t, then resume): crash
+ *	    detection.  Reproduces a transient OOM that leaves an unchecked
+ *	    NULL (the Bug 85 class) -- which the persistent sweep rolls back
+ *	    before reaching.  osViol is reported but NOT asserted zero (a
+ *	    recovered single failure legitimately completes registration);
+ *	    its value is running to completion without crashing.
+ *
+ * Results:
+ *	TH8_OK with a 6-element list
+ *	{persFired persErr persViol osFired osErr osViol} so
+ *	the driver can assert persViol == 0, non-vacuity (persFired > 0 &&
+ *	persErr > 0), and that the one-shot sweep fired (osFired > 0).
+ *
+ * Side effects:
+ *	Repeatedly creates child interpreters under persistent and
+ *	one-shot OOM injectors; sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_register_language_oom_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParent;
+    int persFired = 0, persErr = 0, persViol = 0;
+    int osFired = 0, osErr = 0, osViol = 0;
+    int t, noFire;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    char zBuf[32];
+    int aStat[6];
+    int i;
+    enum {
+	KMAX = 6000
+    };
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::register_language_oom");
+    }
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent || !pParent->xMalloc) {
+	Th8_SetResultStatic(
+	    interp, "register_language_oom: no parent allocator", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    th8test_pRealMalloc = pParent->xMalloc;
+
+    /*
+     * PERSISTENT sweep (fail allocation t and EVERY later one): the
+     * all-or-nothing invariant (the addendum's "assert TH8_ERROR at every
+     * failing trip point").  A persistent failure cannot be recovered, so
+     * whenever it fired during registration Th8_RegisterLanguage MUST
+     * return TH8_ERROR; a success is a real partial-language violation
+     * (persViol).
+     */
+    noFire = 0;
+    for (t = 1; t < KMAX; t++) {
+	Th8_Platform plat = *pParent;
+	Th8_Interp *pChild;
+	int rc, fired;
+
+	plat.xPanic = 0;
+	plat.xMalloc = th8test_stub_xMalloc_failafter;
+	th8test_nMallocTrip = -1; /* construct with the fault disarmed. */
+	pChild = Th8_CreateInterp(&plat);
+	if (!pChild) {
+	    break;
+	}
+	th8test_bOneShotFired = 0;
+	th8test_nMallocTrip =
+	    t; /* fail from the (t+1)-th registration alloc. */
+	rc = Th8_RegisterLanguage(pChild);
+	fired =
+	    th8test_bOneShotFired; /* an allocation was actually failed. */
+	th8test_nMallocTrip = -1;
+	if (fired) {
+	    noFire = 0;
+	    persFired++;
+	    if (rc != TH8_OK) {
+		persErr++;
+	    } else {
+		persViol++;
+	    }
+	} else {
+	    noFire++;
+	}
+	Th8_DeleteInterp(pChild);
+	if (noFire >= 3) {
+	    break;
+	}
+    }
+
+    /*
+     * ONE-SHOT sweep (fail EXACTLY allocation t, then resume): CRASH
+     * detection.  A transient OOM that leaves an unchecked NULL (the
+     * Bug 85 class) crashes here -- which the persistent sweep cannot
+     * reach because it rolls back first.  osViol is NOT asserted to be
+     * zero: with the allocator recovering, many single-allocation failures
+     * are legitimately tolerated and registration completes with a full
+     * language.  The value of this sweep is running to completion without
+     * crashing.
+     */
+    noFire = 0;
+    for (t = 0; t < KMAX; t++) {
+	Th8_Platform plat = *pParent;
+	Th8_Interp *pChild;
+	int rc;
+
+	plat.xPanic = 0;
+	plat.xMalloc = th8test_stub_xMalloc_oneshot;
+	th8test_nMallocOneShot = -1;
+	pChild = Th8_CreateInterp(&plat);
+	if (!pChild) {
+	    break;
+	}
+	th8test_bOneShotFired = 0;
+	th8test_nMallocOneShot = t;
+	rc = Th8_RegisterLanguage(pChild);
+	th8test_nMallocOneShot = -1;
+	if (th8test_bOneShotFired) {
+	    noFire = 0;
+	    osFired++;
+	    if (rc != TH8_OK) {
+		osErr++;
+	    } else {
+		osViol++;
+	    }
+	} else {
+	    noFire++;
+	}
+	Th8_DeleteInterp(pChild);
+	if (noFire >= 3) {
+	    break;
+	}
+    }
+    th8test_pRealMalloc = NULL;
+
+    aStat[0] = persFired;
+    aStat[1] = persErr;
+    aStat[2] = persViol;
+    aStat[3] = osFired;
+    aStat[4] = osErr;
+    aStat[5] = osViol;
+    for (i = 0; i < 6; i++) {
+	const char
+	    *z = th8test_i64toa((th8_int64_t)aStat[i], zBuf, sizeof(zBuf));
+	if (Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_SetResultStatic(
+	        interp, "register_language_oom: out of memory", TH8_NOLEN);
+	    return TH8_ERROR;
+	}
+    }
+    Th8_SetResult(interp, zOut, nOut);
+    Th8_Free(interp, zOut);
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_reset_security_oom_cmd --
+ *
+ *	Implements `::th8testlib::reset_security_oom` (TH8K-006/-020):
+ *	prove the now-int `Th8_ResetSecurityArray` REPORTS an allocation
+ *	failure instead of silently swallowing it (its old void contract).
+ *
+ * Why / How:
+ *	On a fresh registered child (so `::th8_security` exists as a
+ *	seven-element system var), sweep a fail-after-t OOM across the
+ *	reset's seven `Th8_SetVar` writes: for every trip t, arm the fault
+ *	at t, call `Th8_ResetSecurityArray`, and record whether the fault
+ *	fired and what the call returned.  The probative invariant is that
+ *	whenever a write was actually failed, the call returned TH8_ERROR
+ *	-- NEVER TH8_OK.  Reverting the fix (discarding the internal
+ *	status) makes a fired-but-TH8_OK case appear -> viol > 0 -> FAIL.
+ *	A disarmed reset must return TH8_OK (non-vacuity), and the fault
+ *	must have fired at least once over the sweep (non-vacuity).
+ *
+ * Results:
+ *	TH8_OK with result "ok" on success, or a "FAIL:<reason>" /
+ *	"skip:<reason>" diagnostic.
+ *
+ * Side effects:
+ *	Creates/destroys a child interpreter and installs a fault
+ *	allocator on it.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_reset_security_oom_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParent;
+    Th8_Platform plat;
+    Th8_Interp *pChild;
+    int t, noFire, fired = 0, viol = 0, cleanOk;
+    enum {
+	KMAX = 256
+    };
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::reset_security_oom");
+    }
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent || !pParent->xMalloc) {
+	Th8_SetResultStatic(interp, "skip:no-allocator", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    th8test_pRealMalloc = pParent->xMalloc;
+    plat = *pParent;
+    plat.xPanic = 0;
+    plat.xMalloc = th8test_stub_xMalloc_failafter;
+    th8test_nMallocTrip =
+        -1; /* construct + register with the fault disarmed. */
+    pChild = Th8_CreateInterp(&plat);
+    if (!pChild) {
+	th8test_pRealMalloc = NULL;
+	Th8_SetResultStatic(interp, "skip:no-child", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (Th8_RegisterLanguage(pChild) != TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	th8test_pRealMalloc = NULL;
+	Th8_SetResultStatic(interp, "skip:no-register", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    /* Disarmed reset must succeed (non-vacuity + sanity). */
+    th8test_nMallocTrip = -1;
+    cleanOk = (Th8_ResetSecurityArray(pChild) == TH8_OK);
+
+    /* Sweep a fail-after fault across the reset's seven writes. */
+    noFire = 0;
+    for (t = 0; t < KMAX; t++) {
+	int rc;
+
+	th8test_bOneShotFired = 0;
+	th8test_nMallocTrip = t;
+	rc = Th8_ResetSecurityArray(pChild);
+	th8test_nMallocTrip = -1;
+	if (th8test_bOneShotFired) {
+	    noFire = 0;
+	    fired++;
+	    if (rc == TH8_OK) {
+		viol++; /* fired but reported success == swallowed error. */
+	    }
+	} else {
+	    noFire++;
+	    if (noFire >= 5) {
+		break; /* past the reset's last allocation. */
+	    }
+	}
+    }
+
+    Th8_DeleteInterp(pChild);
+    th8test_pRealMalloc = NULL;
+
+    if (!cleanOk) {
+	Th8_SetResultStatic(interp, "FAIL:no-clean", TH8_NOLEN);
+    } else if (fired == 0) {
+	Th8_SetResultStatic(interp, "FAIL:no-fire", TH8_NOLEN);
+    } else if (viol != 0) {
+	Th8_SetResultStatic(interp, "FAIL:swallowed-error", TH8_NOLEN);
+    } else {
+	Th8_SetResultStatic(interp, "ok", 2);
+    }
+    return TH8_OK;
+}
+#  endif /* TH8_ENABLE_VARIABLES */
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_sub_prefixed --
+ *
+ *	Shared body of the custom `string twice` handlers: set the result to
+ *	zPrefix followed by argv[2].  Receives the FULL ensemble argv
+ *	(argv[0]="string", argv[1]="twice", argv[2]=value).
+ *
+ * Why / How:
+ *	Composes "<prefix><value>" in a small stack buffer and publishes it
+ *	with Th8_SetResult, so the probe can assert exactly which handler ran.
+ *
+ * Results:
+ *	TH8_OK with "<prefix><value>"; TH8_ERROR on a wrong arg count or an
+ *	over-long value.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_sub_prefixed(
+    Th8_Interp *interp,
+    const char *zPrefix,
+    size_t nPrefix,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    char buf[64];
+    size_t nArg;
+
+    if (argc != 3) return Th8_WrongNumArgs(interp, "string twice value");
+    nArg = TH8_LEN(argl[2]);
+    if (nPrefix + nArg >= sizeof(buf)) {
+	Th8_SetResultStatic(interp, "arg too long", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    Th8_Memcpy(interp, buf, zPrefix, nPrefix);
+    Th8_Memcpy(interp, buf + nPrefix, argv[2], nArg);
+    Th8_SetResult(interp, buf, nPrefix + nArg);
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_sub_twice --
+ *
+ *	Custom `string twice` handler (initial registration): result "TWICE:".
+ *
+ * Why / How:
+ *	Delegates to th8test_sub_prefixed with the "TWICE:" prefix.
+ *
+ * Results:
+ *	See th8test_sub_prefixed.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_sub_twice(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    (void)ctx;
+    return th8test_sub_prefixed(interp, "TWICE:", 6, argc, argv, argl);
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_sub_repl --
+ *
+ *	Custom `string twice` handler (replacement): result "REPL:".
+ *
+ * Why / How:
+ *	Delegates to th8test_sub_prefixed with the "REPL:" prefix.
+ *
+ * Results:
+ *	See th8test_sub_prefixed.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_sub_repl(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    (void)ctx;
+    return th8test_sub_prefixed(interp, "REPL:", 5, argc, argv, argl);
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_sub_register_probe_cmd --
+ *
+ *	Implements `::th8testlib::sub_register_probe` (TH8K-025): validate the
+ *	public Th8_CreateSubCommand -- dynamic sub-command registration onto a
+ *	built-in ensemble, replacement, and that built-ins still dispatch.
+ *
+ * Why / How:
+ *	On a fresh registered child: add a NEW `string twice` sub-command and
+ *	check it runs (`string twice hi` -> "TWICE:hi"); confirm a built-in
+ *	(`string toupper hi` -> "HI") is unaffected; REPLACE `string twice`
+ *	with a different handler and check the new one wins ("REPL:hi").
+ *	Deleting the child exercises the sub-command free path (TH8_HEAP_CHECKS
+ *	catches a leak/double-free).
+ *
+ * Results:
+ *	TH8_OK with "ok" on success, or a "FAIL:<reason>" / "skip:..." token.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_sub_register_probe_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParent;
+    Th8_Platform plat;
+    Th8_Interp *pChild;
+    const char *zRes;
+    size_t nRes = 0;
+    int rc;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::sub_register_probe");
+    }
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent) {
+	Th8_SetResultStatic(interp, "skip:no-platform", TH8_NOLEN);
+	return TH8_OK;
+    }
+    plat = *pParent;
+    plat.xPanic = 0;
+    pChild = Th8_CreateInterp(&plat);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, "skip:no-child", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (Th8_RegisterLanguage(pChild) != TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(interp, "skip:no-register", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    /* Add a NEW sub-command to the built-in `string` ensemble. */
+    if (Th8_CreateSubCommand(
+            pChild, "::string", "twice", th8test_sub_twice, 0, 0, 0) !=
+        TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(interp, "FAIL:create", TH8_NOLEN);
+	return TH8_OK;
+    }
+    rc = Th8_Eval(pChild, 0, "string twice hi", TH8_NOLEN, NULL, 0);
+    zRes = Th8_GetResult(pChild, &nRes);
+    if (rc != TH8_OK || !zRes || nRes != 8 ||
+        Th8_Memcmp(interp, zRes, "TWICE:hi", 8) != 0) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(interp, "FAIL:new-sub", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    /* A built-in sub-command is unaffected. */
+    rc = Th8_Eval(pChild, 0, "string toupper hi", TH8_NOLEN, NULL, 0);
+    zRes = Th8_GetResult(pChild, &nRes);
+    if (rc != TH8_OK || !zRes || nRes != 2 ||
+        Th8_Memcmp(interp, zRes, "HI", 2) != 0) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(interp, "FAIL:builtin", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    /* REPLACE the sub-command; the new handler must win. */
+    if (Th8_CreateSubCommand(
+            pChild, "::string", "twice", th8test_sub_repl, 0, 0, 0) !=
+        TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(interp, "FAIL:replace", TH8_NOLEN);
+	return TH8_OK;
+    }
+    rc = Th8_Eval(pChild, 0, "string twice hi", TH8_NOLEN, NULL, 0);
+    zRes = Th8_GetResult(pChild, &nRes);
+    if (rc != TH8_OK || !zRes || nRes != 7 ||
+        Th8_Memcmp(interp, zRes, "REPL:hi", 7) != 0) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(interp, "FAIL:replaced-run", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    Th8_DeleteInterp(pChild);
+    Th8_SetResultStatic(interp, "ok", 2);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_eval_is --
+ *
+ *	Test helper: return 1 iff evaluating zScript in interp succeeds and the
+ *	result is exactly zExpect.
+ *
+ * Why / How:
+ *	Collapses the repeated eval + Th8_GetResult + Th8_Memcmp pattern used by
+ *	the sub-command lifecycle probes into one call, so each probe reads as a
+ *	sequence of behavioral assertions.
+ *
+ * Results:
+ *	1 if the result matches zExpect, 0 otherwise.
+ *
+ * Side effects:
+ *	Runs zScript (with all its side effects) in interp.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_eval_is(Th8_Interp *interp, const char *zScript, const char *zExpect)
+{
+    size_t nRes = 0;
+    const char *zRes;
+    size_t nExpect = Th8_Strlen(interp, zExpect);
+
+    if (Th8_Eval(interp, 0, zScript, TH8_NOLEN, NULL, 0) != TH8_OK) return 0;
+    zRes = Th8_GetResult(interp, &nRes);
+    return zRes && nRes == nExpect &&
+           Th8_Memcmp(interp, zRes, zExpect, nExpect) == 0;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_eval_fails --
+ *
+ *	Test helper: return 1 iff evaluating zScript in interp fails.
+ *
+ * Why / How:
+ *	Companion of th8test_eval_is for the probes' negative assertions (a
+ *	sub-command that should error, a command that is no longer an ensemble).
+ *
+ * Results:
+ *	1 if the eval returns non-OK, 0 otherwise.
+ *
+ * Side effects:
+ *	Runs zScript (with all its side effects) in interp.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_eval_fails(Th8_Interp *interp, const char *zScript)
+{
+    return Th8_Eval(interp, 0, zScript, TH8_NOLEN, NULL, 0) != TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_sub_child --
+ *
+ *	Create a fresh, language-registered child interpreter for a sub-command
+ *	lifecycle probe, or NULL (with *pzWhy set to a "skip:..." token) if the
+ *	environment cannot support it.
+ *
+ * Why / How:
+ *	Factors the "clone platform, create interp, register language" boiler
+ *	shared by the sub-command probes.  A child keeps every probe's built-in
+ *	mutation (e.g. replacing `string toupper`) off the shared suite interp.
+ *	The platform is NOT owned by the interpreter (Th8_CreateInterp stores
+ *	the pointer), so the CALLER supplies pPlat storage that must outlive the
+ *	child -- a stack-local here would dangle the child's platform the moment
+ *	this helper returned.
+ *
+ * Results:
+ *	A new Th8_Interp * to be freed with Th8_DeleteInterp, or NULL.  On
+ *	success *pPlat holds the child's platform and must stay live until the
+ *	child is deleted.
+ *
+ * Side effects:
+ *	Creates an interpreter on success.
+ *
+ *----------------------------------------------------------------------
+ */
+static Th8_Interp *
+th8test_sub_child(Th8_Interp *interp, Th8_Platform *pPlat, const char **pzWhy)
+{
+    const Th8_Platform *pParent = Th8_GetPlatform(interp);
+    Th8_Interp *pChild;
+
+    if (!pParent) {
+	*pzWhy = "skip:no-platform";
+	return NULL;
+    }
+    *pPlat = *pParent;
+    pPlat->xPanic = 0;
+    pChild = Th8_CreateInterp(pPlat);
+    if (!pChild) {
+	*pzWhy = "skip:no-child";
+	return NULL;
+    }
+    if (Th8_RegisterLanguage(pChild) != TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	*pzWhy = "skip:no-register";
+	return NULL;
+    }
+    return pChild;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_sub_a --
+ *
+ *	Trivial sub-command handler returning the fixed string "SUBA" so a probe
+ *	can assert which sub-command ran.
+ *
+ * Why / How:
+ *	Receives the full ensemble argv but ignores it; publishes a constant.
+ *
+ * Results:
+ *	TH8_OK with "SUBA".
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_sub_a(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    (void)ctx;
+    (void)argc;
+    (void)argv;
+    (void)argl;
+    Th8_SetResultStatic(interp, "SUBA", 4);
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_sub_b --
+ *
+ *	Trivial sub-command handler returning the fixed string "SUBB" so a probe
+ *	can assert which sub-command ran.
+ *
+ * Why / How:
+ *	Receives the full ensemble argv but ignores it; publishes a constant.
+ *
+ * Results:
+ *	TH8_OK with "SUBB".
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_sub_b(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    (void)ctx;
+    (void)argc;
+    (void)argv;
+    (void)argl;
+    Th8_SetResultStatic(interp, "SUBB", 4);
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_base_cmd --
+ *
+ *	A plain command handler returning the fixed string "BASE".  Used as the
+ *	fallback handler of a command that is then given a sub-command overlay.
+ *
+ * Why / How:
+ *	Publishes a constant so a probe can tell "the sub-command ran" from "the
+ *	command's own handler ran" for any argv.
+ *
+ * Results:
+ *	TH8_OK with "BASE".
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_base_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    (void)ctx;
+    (void)argc;
+    (void)argv;
+    (void)argl;
+    Th8_SetResultStatic(interp, "BASE", 4);
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_sub_newcmd_probe_cmd --
+ *
+ *	Implements `::th8testlib::sub_newcmd_probe` (TH8K-025): sub-commands on a
+ *	BRAND-NEW (pure ensemble) command, plus delete-by-token and the
+ *	empty-overlay revert.
+ *
+ * Why / How:
+ *	On a fresh child: create a NULL-handler command `tmpens` (a pure
+ *	ensemble shell -- invoking it with no sub-command is an error); add two
+ *	sub-commands and check both dispatch and that [info subcommands] lists
+ *	them in registration order; delete one by token and check it is gone
+ *	from both dispatch and introspection; delete the last and check the
+ *	command reverts (introspection now reports "not an ensemble").
+ *
+ * Results:
+ *	TH8_OK with "ok" or a "FAIL:<reason>" / "skip:..." token.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_sub_newcmd_probe_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const char *zWhy = 0;
+    Th8_Platform
+        plat; /* Owns the child's platform for the child's lifetime. */
+    Th8_Interp *pChild;
+    th8_uint64_t tokA = 0, tokB = 0;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::sub_newcmd_probe");
+    }
+    pChild = th8test_sub_child(interp, &plat, &zWhy);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, zWhy, TH8_NOLEN);
+	return TH8_OK;
+    }
+
+#  define TH8T_SUBFAIL(msg)                                                  \
+      do {                                                                   \
+	  Th8_DeleteInterp(pChild);                                          \
+	  Th8_SetResultStatic(interp, msg, TH8_NOLEN);                       \
+	  return TH8_OK;                                                     \
+      } while (0)
+
+    /* A pure ensemble shell: NULL handler, no sub-commands yet. */
+    if (Th8_CreateCommand(pChild, "::tmpens", 0, 0, 0, 0) != TH8_OK) {
+	TH8T_SUBFAIL("FAIL:createcmd");
+    }
+    if (!th8test_eval_fails(pChild, "tmpens"))
+	TH8T_SUBFAIL("FAIL:bare-shell");
+    if (Th8_CreateSubCommand(
+            pChild, "::tmpens", "aa", th8test_sub_a, 0, 0, &tokA) != TH8_OK) {
+	TH8T_SUBFAIL("FAIL:add-aa");
+    }
+    if (Th8_CreateSubCommand(
+            pChild, "::tmpens", "bb", th8test_sub_b, 0, 0, &tokB) != TH8_OK) {
+	TH8T_SUBFAIL("FAIL:add-bb");
+    }
+    if (!th8test_eval_is(pChild, "tmpens aa", "SUBA")) {
+	TH8T_SUBFAIL("FAIL:run-aa");
+    }
+    if (!th8test_eval_is(pChild, "tmpens bb", "SUBB")) {
+	TH8T_SUBFAIL("FAIL:run-bb");
+    }
+    if (!th8test_eval_is(pChild, "info subcommands tmpens", "aa bb")) {
+	TH8T_SUBFAIL("FAIL:info");
+    }
+    /* Delete `aa` by token; `bb` remains. */
+    if (Th8_DeleteSubCommand(pChild, tokA) != TH8_OK) {
+	TH8T_SUBFAIL("FAIL:del-aa");
+    }
+    if (!th8test_eval_fails(pChild, "tmpens aa"))
+	TH8T_SUBFAIL("FAIL:aa-lives");
+    if (!th8test_eval_is(pChild, "info subcommands tmpens", "bb")) {
+	TH8T_SUBFAIL("FAIL:info2");
+    }
+    /* Delete the last sub-command; the overlay is dropped and `tmpens` is no
+     * longer an ensemble. */
+    if (Th8_DeleteSubCommand(pChild, tokB) != TH8_OK) {
+	TH8T_SUBFAIL("FAIL:del-bb");
+    }
+    if (!th8test_eval_fails(pChild, "info subcommands tmpens")) {
+	TH8T_SUBFAIL("FAIL:still-ensemble");
+    }
+
+#  undef TH8T_SUBFAIL
+
+    Th8_DeleteInterp(pChild);
+    Th8_SetResultStatic(interp, "ok", 2);
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_sub_fallback_probe_cmd --
+ *
+ *	Implements `::th8testlib::sub_fallback_probe` (TH8K-025): a sub-command
+ *	overlay on a command that has a REAL handler falls back to that handler
+ *	for anything the overlay does not match, and deleting the sub-command
+ *	restores the pristine command.
+ *
+ * Why / How:
+ *	On a fresh child: create `tmpbase` with a "BASE" handler and confirm it
+ *	answers "BASE" for any argv; add sub-command `special` and confirm
+ *	`tmpbase special` runs the sub ("SUBA") while `tmpbase other` and bare
+ *	`tmpbase` still fall back to "BASE"; delete `special` by token and
+ *	confirm `tmpbase special` falls back to "BASE" again.
+ *
+ * Results:
+ *	TH8_OK with "ok" or a "FAIL:<reason>" / "skip:..." token.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_sub_fallback_probe_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const char *zWhy = 0;
+    Th8_Platform
+        plat; /* Owns the child's platform for the child's lifetime. */
+    Th8_Interp *pChild;
+    th8_uint64_t tok = 0;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::sub_fallback_probe");
+    }
+    pChild = th8test_sub_child(interp, &plat, &zWhy);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, zWhy, TH8_NOLEN);
+	return TH8_OK;
+    }
+
+#  define TH8T_SUBFAIL(msg)                                                  \
+      do {                                                                   \
+	  Th8_DeleteInterp(pChild);                                          \
+	  Th8_SetResultStatic(interp, msg, TH8_NOLEN);                       \
+	  return TH8_OK;                                                     \
+      } while (0)
+
+    if (Th8_CreateCommand(pChild, "::tmpbase", th8test_base_cmd, 0, 0, 0) !=
+        TH8_OK) {
+	TH8T_SUBFAIL("FAIL:createcmd");
+    }
+    if (!th8test_eval_is(pChild, "tmpbase", "BASE"))
+	TH8T_SUBFAIL("FAIL:base");
+    if (!th8test_eval_is(pChild, "tmpbase xyz", "BASE")) {
+	TH8T_SUBFAIL("FAIL:base-arg");
+    }
+    if (Th8_CreateSubCommand(
+            pChild, "::tmpbase", "special", th8test_sub_a, 0, 0, &tok) !=
+        TH8_OK) {
+	TH8T_SUBFAIL("FAIL:add-special");
+    }
+    if (!th8test_eval_is(pChild, "tmpbase special", "SUBA")) {
+	TH8T_SUBFAIL("FAIL:special");
+    }
+    if (!th8test_eval_is(pChild, "tmpbase other", "BASE")) {
+	TH8T_SUBFAIL("FAIL:fallthrough");
+    }
+    if (!th8test_eval_is(pChild, "tmpbase", "BASE")) {
+	TH8T_SUBFAIL("FAIL:bare-fallback");
+    }
+    /* Remove the overlay; the command is pristine again. */
+    if (Th8_DeleteSubCommand(pChild, tok) != TH8_OK) {
+	TH8T_SUBFAIL("FAIL:del");
+    }
+    if (!th8test_eval_is(pChild, "tmpbase special", "BASE")) {
+	TH8T_SUBFAIL("FAIL:restored");
+    }
+
+#  undef TH8T_SUBFAIL
+
+    Th8_DeleteInterp(pChild);
+    Th8_SetResultStatic(interp, "ok", 2);
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_sub_saverestore_probe_cmd --
+ *
+ *	Implements `::th8testlib::sub_saverestore_probe` (TH8K-025): capture a
+ *	BUILT-IN sub-command's binding, replace it, use the replacement, then
+ *	restore the original -- the save/restore workflow Th8_GetSubCommandInfo
+ *	exists for.
+ *
+ * Why / How:
+ *	On a fresh child: capture `string toupper`'s {xProc, pContext, xDel}
+ *	with Th8_GetSubCommandInfo; confirm `string toupper hi` is "HI"; replace
+ *	`string toupper` with a handler returning "SUBA" and confirm the
+ *	replacement wins; re-register the captured binding and confirm the
+ *	original behavior ("HI") is back.
+ *
+ * Results:
+ *	TH8_OK with "ok" or a "FAIL:<reason>" / "skip:..." token.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_sub_saverestore_probe_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const char *zWhy = 0;
+    Th8_Platform
+        plat; /* Owns the child's platform for the child's lifetime. */
+    Th8_Interp *pChild;
+    Th8_CommandProc savedProc = 0;
+    void *savedCtx = 0;
+    void (*savedDel)(Th8_Interp *, void *) = 0;
+    th8_uint64_t savedTok = 0;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::sub_saverestore_probe");
+    }
+    pChild = th8test_sub_child(interp, &plat, &zWhy);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, zWhy, TH8_NOLEN);
+	return TH8_OK;
+    }
+
+#  define TH8T_SUBFAIL(msg)                                                  \
+      do {                                                                   \
+	  Th8_DeleteInterp(pChild);                                          \
+	  Th8_SetResultStatic(interp, msg, TH8_NOLEN);                       \
+	  return TH8_OK;                                                     \
+      } while (0)
+
+    /* Capture the built-in binding. */
+    if (Th8_GetSubCommandInfo(
+            pChild, "::string", TH8_NOLEN, "toupper", TH8_NOLEN, &savedProc,
+            &savedCtx, &savedDel, &savedTok) != TH8_OK ||
+        !savedProc) {
+	TH8T_SUBFAIL("FAIL:capture");
+    }
+    if (!th8test_eval_is(pChild, "string toupper hi", "HI")) {
+	TH8T_SUBFAIL("FAIL:orig");
+    }
+    /* Replace, and confirm the replacement wins. */
+    if (Th8_CreateSubCommand(
+            pChild, "::string", "toupper", th8test_sub_a, 0, 0, 0) !=
+        TH8_OK) {
+	TH8T_SUBFAIL("FAIL:replace");
+    }
+    if (!th8test_eval_is(pChild, "string toupper hi", "SUBA")) {
+	TH8T_SUBFAIL("FAIL:replaced-run");
+    }
+    /* Restore the captured binding, and confirm the original is back. */
+    if (Th8_CreateSubCommand(
+            pChild, "::string", "toupper", savedProc, savedCtx, savedDel,
+            0) != TH8_OK) {
+	TH8T_SUBFAIL("FAIL:restore");
+    }
+    if (!th8test_eval_is(pChild, "string toupper hi", "HI")) {
+	TH8T_SUBFAIL("FAIL:restored-run");
+    }
+
+#  undef TH8T_SUBFAIL
+
+    Th8_DeleteInterp(pChild);
+    Th8_SetResultStatic(interp, "ok", 2);
+    return TH8_OK;
+}
+
+/*
+ * Context for th8test_sub_wrap: the captured inner (built-in) binding it
+ * delegates to.  Stored by the probe's frame, which outlives the wrapper's
+ * registration.
+ */
+typedef struct {
+    Th8_CommandProc xInner; /* Captured built-in sub-command handler. */
+    void *pInnerCtx; /* Its context. */
+} th8test_wrap_ctx;
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_sub_wrap --
+ *
+ *	A "sub-classing" sub-command handler: delegate to a captured inner
+ *	(built-in) sub-command, then post-process its result by prefixing "W:".
+ *
+ * Why / How:
+ *	Calls the inner handler (ctx->xInner with ctx->pInnerCtx) with the SAME
+ *	argv, reads its result, and republishes it with a "W:" marker -- the
+ *	wrap-and-delegate pattern Th8_GetSubCommandInfo enables (capture a
+ *	built-in's {xProc, pContext}, install a wrapper that calls back into it).
+ *
+ * Results:
+ *	The inner return code; on inner success, result is "W:" + inner result.
+ *
+ * Side effects:
+ *	Runs the inner sub-command (all its side effects); sets the result.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_sub_wrap(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    th8test_wrap_ctx *w = (th8test_wrap_ctx *)ctx;
+    int rc;
+    const char *zInner;
+    size_t nInner = 0;
+    char buf[64];
+
+    rc = w->xInner(interp, w->pInnerCtx, argc, argv, argl);
+    if (rc != TH8_OK) return rc;
+    zInner = Th8_GetResult(interp, &nInner);
+    if (!zInner || nInner + 2 >= sizeof(buf)) return TH8_OK; /* leave as-is */
+    buf[0] = 'W';
+    buf[1] = ':';
+    Th8_Memcpy(interp, buf + 2, zInner, nInner);
+    Th8_SetResult(interp, buf, nInner + 2);
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_sub_wrap_probe_cmd --
+ *
+ *	Implements `::th8testlib::sub_wrap_probe` (TH8K-025): "sub-class" a
+ *	built-in sub-command -- capture it, replace it with a wrapper that calls
+ *	back into the captured implementation and post-processes, then restore.
+ *
+ * Why / How:
+ *	On a fresh child: capture `string toupper`'s {xProc, pContext} with
+ *	Th8_GetSubCommandInfo; install th8test_sub_wrap bound to that capture;
+ *	confirm `string toupper hi` now yields "W:HI" (proving the wrapper both
+ *	ran AND successfully delegated to the built-in for the "HI"); restore the
+ *	captured binding and confirm plain "HI" is back.  This exercises that the
+ *	queried pContext round-trips and the captured handler is directly
+ *	callable.
+ *
+ * Results:
+ *	TH8_OK with "ok" or a "FAIL:<reason>" / "skip:..." token.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_sub_wrap_probe_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const char *zWhy = 0;
+    Th8_Platform
+        plat; /* Owns the child's platform for the child's lifetime. */
+    Th8_Interp *pChild;
+    th8test_wrap_ctx w;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::sub_wrap_probe");
+    }
+    pChild = th8test_sub_child(interp, &plat, &zWhy);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, zWhy, TH8_NOLEN);
+	return TH8_OK;
+    }
+
+#  define TH8T_SUBFAIL(msg)                                                  \
+      do {                                                                   \
+	  Th8_DeleteInterp(pChild);                                          \
+	  Th8_SetResultStatic(interp, msg, TH8_NOLEN);                       \
+	  return TH8_OK;                                                     \
+      } while (0)
+
+    /* Capture the built-in binding to delegate to. */
+    w.xInner = 0;
+    w.pInnerCtx = 0;
+    if (Th8_GetSubCommandInfo(
+            pChild, "::string", TH8_NOLEN, "toupper", TH8_NOLEN, &w.xInner,
+            &w.pInnerCtx, 0, 0) != TH8_OK ||
+        !w.xInner) {
+	TH8T_SUBFAIL("FAIL:capture");
+    }
+    /* Install the wrapper bound to the captured inner. */
+    if (Th8_CreateSubCommand(
+            pChild, "::string", "toupper", th8test_sub_wrap, &w, 0, 0) !=
+        TH8_OK) {
+	TH8T_SUBFAIL("FAIL:wrap");
+    }
+    /* Wrapper ran AND delegated to the built-in -> "W:" + "HI". */
+    if (!th8test_eval_is(pChild, "string toupper hi", "W:HI")) {
+	TH8T_SUBFAIL("FAIL:wrapped-run");
+    }
+    /* Restore the captured built-in; plain behavior is back. */
+    if (Th8_CreateSubCommand(
+            pChild, "::string", "toupper", w.xInner, w.pInnerCtx, 0, 0) !=
+        TH8_OK) {
+	TH8T_SUBFAIL("FAIL:restore");
+    }
+    if (!th8test_eval_is(pChild, "string toupper hi", "HI")) {
+	TH8T_SUBFAIL("FAIL:restored-run");
+    }
+
+#  undef TH8T_SUBFAIL
+
+    Th8_DeleteInterp(pChild);
+    Th8_SetResultStatic(interp, "ok", 2);
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_bare_child --
+ *
+ *	Create a child interpreter WITHOUT registering any language, for named
+ *	command subset probes (which install a filtered surface with
+ *	Th8_RegisterSubsets instead of Th8_RegisterLanguage).
+ *
+ * Why / How:
+ *	Like th8test_sub_child but omits Th8_RegisterLanguage.  The caller owns
+ *	*pPlat (the platform is not owned by the interpreter).
+ *
+ * Results:
+ *	A new Th8_Interp * to free with Th8_DeleteInterp, or NULL (with *pzWhy a
+ *	"skip:..." token).
+ *
+ * Side effects:
+ *	Creates an interpreter on success.
+ *
+ *----------------------------------------------------------------------
+ */
+static Th8_Interp *
+th8test_bare_child(
+    Th8_Interp *interp,
+    Th8_Platform *pPlat,
+    const char **pzWhy)
+{
+    const Th8_Platform *pParent = Th8_GetPlatform(interp);
+    Th8_Interp *pChild;
+
+    if (!pParent) {
+	*pzWhy = "skip:no-platform";
+	return NULL;
+    }
+    *pPlat = *pParent;
+    pPlat->xPanic = 0;
+    pChild = Th8_CreateInterp(pPlat);
+    if (!pChild) {
+	*pzWhy = "skip:no-child";
+	return NULL;
+    }
+    return pChild;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_result_has --
+ *
+ *	Return 1 iff interp's current result matches the glob pattern zPat.
+ *
+ * Why / How:
+ *	Convenience for asserting that a Th8_ListSubsets / Th8_GetSubsetMembers
+ *	audit list contains an expected element.
+ *
+ * Results:
+ *	1 if the result matches, else 0.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_result_has(Th8_Interp *interp, const char *zPat)
+{
+    size_t n = 0;
+    const char *z = Th8_GetResult(interp, &n);
+
+    return z && Th8_GlobMatch(interp, zPat, Th8_Strlen(interp, zPat), z, n);
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_subset_probe_cmd --
+ *
+ *	Implements `::th8testlib::subset_probe` (TH8K-025): Th8_RegisterSubsets
+ *	installs only the chosen subsets, and an unknown subset name is
+ *	transactional (registers nothing).
+ *
+ * Why / How:
+ *	On a bare (no-language) child, register {"strings","lists"} and check
+ *	that `string` and `lappend` work while `for` (the withheld "looping"
+ *	subset) is absent -- the security goal.  On a second bare child, register
+ *	{"bogus"} and check it fails AND left nothing registered.
+ *
+ * Results:
+ *	TH8_OK with "ok" or a "FAIL:<reason>" / "skip:..." token.
+ *
+ * Side effects:
+ *	Creates and destroys child interpreters.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_subset_probe_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const char *zWhy = 0;
+    Th8_Platform plat;
+    Th8_Interp *pChild;
+    static const char *const azSel[] = {"strings", "lists"};
+    static const char *const azBad[] = {"bogus"};
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::subset_probe");
+    }
+    pChild = th8test_bare_child(interp, &plat, &zWhy);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, zWhy, TH8_NOLEN);
+	return TH8_OK;
+    }
+
+#  define TH8T_SUBFAIL(msg)                                                  \
+      do {                                                                   \
+	  Th8_DeleteInterp(pChild);                                          \
+	  Th8_SetResultStatic(interp, msg, TH8_NOLEN);                       \
+	  return TH8_OK;                                                     \
+      } while (0)
+
+    if (Th8_RegisterSubsets(pChild, azSel, 2) != TH8_OK) {
+	TH8T_SUBFAIL("FAIL:register");
+    }
+    if (!th8test_eval_is(pChild, "string toupper hi", "HI")) {
+	TH8T_SUBFAIL("FAIL:string");
+    }
+    if (!th8test_eval_is(pChild, "lappend l a b", "a b")) {
+	TH8T_SUBFAIL("FAIL:lappend");
+    }
+    /* "for" lives in the withheld "looping" subset -> Turing-completeness gone. */
+    if (!th8test_eval_fails(pChild, "for")) TH8T_SUBFAIL("FAIL:for-present");
+
+#  undef TH8T_SUBFAIL
+
+    Th8_DeleteInterp(pChild);
+
+    /* Unknown subset name is transactional: registers nothing. */
+    pChild = th8test_bare_child(interp, &plat, &zWhy);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, zWhy, TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (Th8_RegisterSubsets(pChild, azBad, 1) == TH8_OK) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(interp, "FAIL:bad-ok", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (!th8test_eval_fails(pChild, "string toupper hi")) {
+	Th8_DeleteInterp(pChild);
+	Th8_SetResultStatic(interp, "FAIL:bad-residue", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    Th8_DeleteInterp(pChild);
+    Th8_SetResultStatic(interp, "ok", 2);
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_subset_curated_probe_cmd --
+ *
+ *	Implements `::th8testlib::subset_curated_probe` (TH8K-025): the
+ *	introspection APIs (Th8_ListSubsets / Th8_GetSubsetMembers) and the
+ *	hybrid model's fine-grained curated subset.
+ *
+ * Why / How:
+ *	Check that Th8_ListSubsets includes plugin names ("strings","looping")
+ *	and the curated "safe-file"; that Th8_GetSubsetMembers("strings") audits
+ *	"command string" and "subcommand string toupper"; that an unknown name
+ *	errors.  Then register the curated "safe-file" subset and confirm the
+ *	FILTERED file ensemble: `file dirname` works but `file delete` is absent.
+ *
+ * Results:
+ *	TH8_OK with "ok" or a "FAIL:<reason>" / "skip:..." token.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_subset_curated_probe_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const char *zWhy = 0;
+    Th8_Platform plat;
+    Th8_Interp *pChild;
+    static const char *const azSel[] = {"safe-file"};
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::subset_curated_probe");
+    }
+    pChild = th8test_bare_child(interp, &plat, &zWhy);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, zWhy, TH8_NOLEN);
+	return TH8_OK;
+    }
+
+#  define TH8T_SUBFAIL(msg)                                                  \
+      do {                                                                   \
+	  Th8_DeleteInterp(pChild);                                          \
+	  Th8_SetResultStatic(interp, msg, TH8_NOLEN);                       \
+	  return TH8_OK;                                                     \
+      } while (0)
+
+    if (Th8_ListSubsets(pChild) != TH8_OK) TH8T_SUBFAIL("FAIL:list");
+    if (!th8test_result_has(pChild, "*strings*") ||
+        !th8test_result_has(pChild, "*looping*") ||
+        !th8test_result_has(pChild, "*safe-file*")) {
+	TH8T_SUBFAIL("FAIL:list-content");
+    }
+    if (Th8_GetSubsetMembers(pChild, "strings") != TH8_OK) {
+	TH8T_SUBFAIL("FAIL:members");
+    }
+    if (!th8test_result_has(pChild, "*command string*") ||
+        !th8test_result_has(pChild, "*subcommand string toupper*")) {
+	TH8T_SUBFAIL("FAIL:members-content");
+    }
+    if (Th8_GetSubsetMembers(pChild, "bogus") == TH8_OK) {
+	TH8T_SUBFAIL("FAIL:members-bad");
+    }
+
+    /* Register the curated subset and check the FILTERED [file] ensemble. */
+    if (Th8_RegisterSubsets(pChild, azSel, 1) != TH8_OK) {
+	TH8T_SUBFAIL("FAIL:register");
+    }
+    if (!th8test_eval_is(pChild, "file dirname /a/b/c", "/a/b")) {
+	TH8T_SUBFAIL("FAIL:dirname");
+    }
+    /* "delete" was not granted -> unknown subcommand. */
+    if (!th8test_eval_fails(pChild, "file delete zzz")) {
+	TH8T_SUBFAIL("FAIL:delete-present");
+    }
+
+#  undef TH8T_SUBFAIL
+
+    Th8_DeleteInterp(pChild);
+    Th8_SetResultStatic(interp, "ok", 2);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_subset_mcdc_probe_cmd --
+ *
+ *	Implements `::th8testlib::subset_mcdc_probe` (TH8K-025): drives the
+ *	ERROR / edge / OOM arms of the sub-command and named-subset APIs that
+ *	the happy-path probes leave uncovered (the MC/DC debt).
+ *
+ * Why / How:
+ *	Exercises, in order: every NULL-argument guard on the public
+ *	Th8_GetSubsetMembers / Th8_RegisterSubsets / Th8_CreateSubCommand /
+ *	Th8_GetSubCommandInfo / Th8_DeleteSubCommand entry points (each a
+ *	distinct MC/DC condition, all must report failure); Th8_RegisterSubsets
+ *	argument errors (nNames < 0, NULL azNames); a not-found sub-command
+ *	query and a bogus-token delete; an audit of the CURATED "safe-file"
+ *	subset (which drives th8SubsetResolveMember's COMMAND and SUBCOMMAND
+ *	arms and th8SubsetFindCommandProc / th8SubsetFindEnsembleSub); a
+ *	create->replace->delete-by-token cycle in a child (the new-vs-replace
+ *	arm and th8RemoveSubTokenEntry); and a one-shot allocation-fault sweep
+ *	over Th8_GetSubsetMembers (the th8SubsetAppendMember Th8_StringAppend
+ *	failure arms).  All mutating operations run on a throwaway child; the
+ *	shared interpreter sees only read-only or error-returning calls.
+ *
+ * Results:
+ *	TH8_OK with "ok", or "FAIL:<hexbits>" naming which checks failed, or a
+ *	"skip:" token.
+ *
+ * Side effects:
+ *	Creates and destroys child interpreters; installs a one-shot OOM
+ *	injector on a child (disarmed before return).
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_subset_mcdc_probe_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    Th8_Platform plat;
+    Th8_Interp *pChild;
+    const char *zWhy = 0;
+    th8_uint64_t tok = 0;
+    Th8_CommandProc xP = 0;
+    void *pC = 0;
+    void (*xD)(Th8_Interp *, void *) = 0;
+    static const char *const azFile[] = {"safe-file"};
+    static const char *const azStr[] = {"strings"};
+    static const char *const azMath[] = {"math"};
+    int fails = 0;
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::subset_mcdc_probe");
+    }
+
+    /* NULL-argument guards (each a distinct 0% MC/DC arm): all must fail. */
+    if (Th8_GetSubsetMembers(0, "safe-file") == TH8_OK) fails |= 0x1;
+    if (Th8_GetSubsetMembers(interp, 0) == TH8_OK) fails |= 0x2;
+    if (Th8_RegisterSubsets(interp, azFile, -1) == TH8_OK) fails |= 0x4;
+    if (Th8_RegisterSubsets(interp, 0, 1) == TH8_OK) fails |= 0x8;
+    if (Th8_CreateSubCommand(0, "string", "x", th8test_nop_cmd, 0, 0, 0) ==
+        TH8_OK)
+	fails |= 0x10;
+    if (Th8_CreateSubCommand(interp, 0, "x", th8test_nop_cmd, 0, 0, 0) ==
+        TH8_OK)
+	fails |= 0x20;
+    if (Th8_CreateSubCommand(interp, "string", 0, th8test_nop_cmd, 0, 0, 0) ==
+        TH8_OK)
+	fails |= 0x40;
+    if (Th8_CreateSubCommand(interp, "string", "x", 0, 0, 0, 0) == TH8_OK)
+	fails |= 0x80;
+    if (Th8_GetSubCommandInfo(
+            0, "string", TH8_NOLEN, "toupper", TH8_NOLEN, &xP, &pC, &xD,
+            &tok) == TH8_OK)
+	fails |= 0x100;
+    if (Th8_GetSubCommandInfo(
+            interp, 0, TH8_NOLEN, "toupper", TH8_NOLEN, &xP, &pC, &xD,
+            &tok) == TH8_OK)
+	fails |= 0x200;
+    if (Th8_GetSubCommandInfo(
+            interp, "string", TH8_NOLEN, 0, TH8_NOLEN, &xP, &pC, &xD, &tok) ==
+        TH8_OK)
+	fails |= 0x400;
+    if (Th8_GetSubCommandInfo(
+            interp, "string", TH8_NOLEN, "no_such_sub_zzz", TH8_NOLEN, &xP,
+            &pC, &xD, &tok) == TH8_OK)
+	fails |= 0x800;
+    if (Th8_DeleteSubCommand(interp, (th8_uint64_t)0xDEADBEEFu) == TH8_OK)
+	fails |= 0x1000;
+
+    /* Audit the CURATED "safe-file" and "math" subsets: drives
+     * th8SubsetResolveMember's COMMAND + SUBCOMMAND + FUNCTION arms and
+     * th8FindMathFunc on the (full) shared interp. */
+    if (Th8_GetSubsetMembers(interp, "safe-file") != TH8_OK) fails |= 0x2000;
+    if (Th8_GetSubsetMembers(interp, "math") != TH8_OK) fails |= 0x4000;
+
+    /* Create -> replace -> delete-by-token in a child (new-vs-replace arm +
+     * th8RemoveSubTokenEntry). */
+    pChild = th8test_bare_child(interp, &plat, &zWhy);
+    if (pChild) {
+	th8_uint64_t t2 = 0;
+
+	(void)Th8_RegisterSubsets(pChild, azStr, 1);
+	/* Register the "math" subset: drives th8SubsetApplyMember's FUNCTION
+	 * arm -> th8RegisterOneMathFunc ("abs") + th8RegisterMathFuncs ("*"). */
+	if (Th8_RegisterSubsets(pChild, azMath, 1) != TH8_OK) fails |= 0x8000;
+	/* NEW create (bNewEntry=1), then delete BY TOKEN
+	 * (th8RemoveSubTokenEntry) while the token is still valid. */
+	if (Th8_CreateSubCommand(
+	        pChild, "string", "mc", th8test_nop_cmd, 0, 0, &t2) != TH8_OK)
+	    fails |= 0x10000;
+	if (Th8_DeleteSubCommand(pChild, t2) != TH8_OK) fails |= 0x20000;
+	/* Create then REPLACE (drives the new-vs-replace arm; bNewEntry=0). */
+	if (Th8_CreateSubCommand(
+	        pChild, "string", "mc2", th8test_nop_cmd, 0, 0, 0) != TH8_OK)
+	    fails |= 0x40000;
+	if (Th8_CreateSubCommand(
+	        pChild, "string", "mc2", th8test_nop_cmd, 0, 0, 0) != TH8_OK)
+	    fails |= 0x80000;
+	Th8_DeleteInterp(pChild);
+    }
+
+    /* One-shot allocation-fault sweep over Th8_GetSubsetMembers("safe-file"):
+     * drives the th8SubsetAppendMember Th8_StringAppend != OK arms. */
+    {
+	const Th8_Platform *pParent = Th8_GetPlatform(interp);
+
+	if (pParent && pParent->xMalloc) {
+	    int trip;
+
+	    plat = *pParent;
+	    plat.xPanic = 0;
+	    plat.xMalloc = th8test_stub_xMalloc_oneshot;
+	    th8test_pRealMalloc = pParent->xMalloc;
+	    for (trip = 0; trip < 48; trip++) {
+		Th8_Interp *pF;
+
+		th8test_nMallocOneShot = -1;
+		pF = Th8_CreateInterp(&plat);
+		if (!pF) continue;
+		if (Th8_RegisterLanguage(pF) == TH8_OK) {
+		    th8test_nMallocOneShot = trip;
+		    (void)Th8_GetSubsetMembers(pF, "safe-file");
+		    th8test_nMallocOneShot = -1;
+		}
+		Th8_DeleteInterp(pF);
+	    }
+	    th8test_pRealMalloc = NULL;
+	    th8test_nMallocOneShot = -1;
+	}
+    }
+
+    if (fails) {
+	(void)Th8_SetResultInt(interp, fails);
+    } else {
+	Th8_SetResultStatic(interp, "ok", 2);
     }
     return TH8_OK;
 }
@@ -18353,8 +22706,11 @@ fault_cmd_install_err:
  * Parameters:
  *	interp, pCtx, zMsg, nMsg -- all ignored.
  *
- * Results / Side effects:
- *	No return value; no side effects.
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
+ *	None.  Deliberately does not abort, keeping the process alive.
  *
  *----------------------------------------------------------------------
  */
@@ -18395,11 +22751,19 @@ th8test_safe_panic_stub(
  *	value at the `(!p && xNeedMemory)` compound, so the
  *	(T, T) MC/DC vector at `src/th8_core.c:1108` fires.
  *
+ * Why / How:
+ *	Installing a non-NULL xNeedMemory makes the `(!p && xNeedMemory)`
+ *	compound's second operand true; returning NULL declines recovery
+ *	so the original allocation failure still propagates.
+ *
  * Parameters:
  *	interp -- ignored.
  *	nByte  -- ignored (size that was being requested).
+ *	bPanic -- ignored.
+ *	zFile  -- ignored (caller __FILE__).
+ *	nLine  -- ignored (caller __LINE__).
  *
- * Returns:
+ * Results:
  *	NULL unconditionally.
  *
  * Side effects:
@@ -18408,10 +22772,18 @@ th8test_safe_panic_stub(
  *----------------------------------------------------------------------
  */
 static void *
-th8test_safe_need_memory_stub(Th8_Interp *interp, size_t nByte)
+th8test_safe_need_memory_stub(
+    Th8_Interp *interp,
+    size_t nByte,
+    int bPanic,
+    const char *zFile,
+    int nLine)
 {
     (void)interp;
     (void)nByte;
+    (void)bPanic;
+    (void)zFile;
+    (void)nLine;
     return NULL;
 }
 
@@ -18452,6 +22824,12 @@ th8test_safe_need_memory_stub(Th8_Interp *interp, size_t nByte)
  *	always passes 0, so the bPanic side of the compound is
  *	otherwise unreachable from any script-level allocator.
  *
+ * Why / How:
+ *	Runs each mode on an isolated child interpreter with a fault
+ *	config that triggers the specific allocator condition, using the
+ *	no-op panic stub so the (T,T) panic compound fires without
+ *	aborting the test process.
+ *
  * Parameters:
  *	interp -- live interpreter (receives result).
  *	ctx    -- unused command context.
@@ -18460,7 +22838,7 @@ th8test_safe_need_memory_stub(Th8_Interp *interp, size_t nByte)
  *		argv[3]=SIZE2 (realloc-* only).
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` with the result set to `"nil"` if the
  *	allocator returned NULL (expected -- the panic stub
  *	does not abort), `"ptr"` if it surprisingly returned
@@ -18793,6 +23171,405 @@ th8test_malloc_drive_cmd(
 /*
  *----------------------------------------------------------------------
  *
+ * th8test_alloc_ceiling_cmd --
+ *
+ *	Implements `::th8testlib::alloc_ceiling` (TH8K-023): a PROBATIVE test
+ *	that the per-interpreter memory limit (Th8_SetAllocLimit) is a real
+ *	ceiling the second-chance xNeedMemory path cannot punch through, and
+ *	that a legitimate cache-clear recovery still works.
+ *
+ * Why / How:
+ *	Before the fix, Th8_SafeAlloc's second chance invoked xNeedMemory for
+ *	BOTH a real allocator failure and a policy-limit rejection, and the
+ *	built-in xNeedMemory retried a RAW xMalloc with no limit check -- so an
+ *	allocation rejected for exceeding nAllocLimit could still be satisfied,
+ *	blowing past the ceiling.  The fix routes the second chance back through
+ *	the one limit-checked, accounted core (th8MallocCommon), so the limit
+ *	is enforced on every path and accounting lives in one place.
+ *
+ *	Check 1 (no bypass): a fresh child with a 4 KiB limit headroom is asked
+ *	for 1 MiB -- far more than the headroom OR anything a cache clear could
+ *	reclaim.  It MUST return NULL, and nAllocBytes MUST NOT exceed the
+ *	limit.  Pre-fix this returned a live block and drove the counter past
+ *	the ceiling.
+ *
+ *	Check 2 (recovery still works): a child whose IR cache holds reclaimable
+ *	memory is given NO headroom (limit == current usage), then asked for a
+ *	tiny block.  The first attempt fails (no headroom); the second chance
+ *	clears the cache (freeing accounted bytes) and the retry -- through the
+ *	same limit-checked core -- now fits and succeeds.
+ *
+ * Results:
+ *	TH8_OK with the 3-tuple {bypass over recover}; the driver asserts
+ *	{0 0 1} (no bypass, ceiling held, recovery works), or a skip/FAIL token.
+ *
+ * Side effects:
+ *	Creates and destroys child interpreters; allocates/frees memory and
+ *	populates a child IR cache; sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_alloc_ceiling_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParent;
+    Th8_Platform plat;
+    Th8_Interp *pChild;
+    void *p;
+    size_t base;
+    int bypass = 0, over = 0, recover = 0;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    char zBuf[32];
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::alloc_ceiling");
+    }
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent) {
+	Th8_SetResultStatic(interp, "skip:no-platform", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    /* Check 1: the second chance must NOT punch through nAllocLimit. */
+    plat = *pParent;
+    plat.xPanic = 0;
+    /* Opt into the supported memory-recovery layer so the child HAS an
+     * xNeedMemory second chance to exercise (the default platform does not
+     * merge it).  Th8_MergePlatform only fills NULL slots. */
+    (void)Th8_MergePlatform(&plat, Th8_GetMemPlatform());
+    pChild = Th8_CreateInterp(&plat);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, "FAIL child1", TH8_NOLEN);
+	return TH8_OK;
+    }
+    base = Th8_GetAllocBytes(pChild);
+    Th8_SetAllocLimit(pChild, base + 4096); /* 4 KiB headroom */
+    p = Th8_SafeAlloc(
+        pChild, (size_t)1 << 20, __FILE__, __LINE__); /* 1 MiB */
+    if (p) {
+	bypass = 1; /* second chance returned a block past the ceiling. */
+	Th8_Free(pChild, p);
+    }
+    if (Th8_GetAllocBytes(pChild) > base + 4096) {
+	over = 1; /* accounting crossed the ceiling. */
+    }
+    Th8_DeleteInterp(pChild);
+
+    /* Check 2: a cache-clear recovery must still satisfy a now-fitting
+     * request. */
+    plat = *pParent;
+    plat.xPanic = 0;
+    /* Opt into the supported memory-recovery layer so the child HAS an
+     * xNeedMemory second chance to exercise (the default platform does not
+     * merge it).  Th8_MergePlatform only fills NULL slots. */
+    (void)Th8_MergePlatform(&plat, Th8_GetMemPlatform());
+    pChild = Th8_CreateInterp(&plat);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, "FAIL child2", TH8_NOLEN);
+	return TH8_OK;
+    }
+    {
+	/* Populate the IR list cache with reclaimable, ACCOUNTED memory:
+	 * Th8_SplitList caches the split (a persistent TH8_CACHE_LIST entry
+	 * allocated via TH8_ALLOC) keyed by the input string, so 128 distinct
+	 * inputs leave 128 reclaimable entries the second-chance th8ClearCache
+	 * will free. */
+	int k;
+	char zEl[24];
+
+	for (k = 0; k < 128; k++) {
+	    const char *z = th8test_i64toa((th8_int64_t)k, zEl, sizeof(zEl));
+	    char **azElem = 0;
+	    size_t *anElem = 0;
+	    int nElem = 0;
+
+	    if (Th8_SplitList(
+	            pChild, z, TH8_NOLEN, &azElem, &anElem, &nElem,
+	            TH8_LIST_NONE) == TH8_OK) {
+		Th8_Free(pChild, (void *)azElem);
+	    }
+	}
+    }
+    base = Th8_GetAllocBytes(pChild);
+    Th8_SetAllocLimit(
+        pChild, base); /* no headroom: first attempt must fail */
+    p = Th8_SafeAlloc(
+        pChild, 1, __FILE__, __LINE__); /* fits after cache clear */
+    if (p) {
+	recover =
+	    1; /* second chance reclaimed room and satisfied the request */
+	Th8_Free(pChild, p);
+    }
+    Th8_DeleteInterp(pChild);
+
+    {
+	const char *z;
+
+	z = th8test_i64toa((th8_int64_t)bypass, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+	z = th8test_i64toa((th8_int64_t)over, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+	z = th8test_i64toa((th8_int64_t)recover, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+    }
+    if (zOut) {
+	Th8_SetResult(interp, zOut, nOut);
+	Th8_Free(interp, zOut);
+    } else {
+	Th8_ClearResult(interp);
+    }
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_try_transactional_cmd --
+ *
+ *	Implements `::th8testlib::try_transactional`: a PROBATIVE test of
+ *	the [try]/[finally] command's transactional and accounting
+ *	properties, run in throwaway child interpreters so the shared
+ *	suite interpreter is never perturbed.  Returns a four-element list
+ *	{acct noleak cancelfree oom}; the correct result is {1 1 1 1}.
+ *
+ * Why / How:
+ *	Four independent defects, one flag each:
+ *	  acct (TH8K-023/-018): a finally block runs with a fresh
+ *	    allocation budget, but memory it leaves LIVE must still be
+ *	    charged afterward, or the counter reset silently bypasses
+ *	    Th8_SetAllocLimit.  A finally block persists ~256 KiB in a
+ *	    global; acct==1 iff the counter grew by at least that much
+ *	    (pre-fix it was restored to the pre-finally value, hiding the
+ *	    live bytes).
+ *	  noleak (TH8K-020): a [try] with NO finally clause needs no copy
+ *	    of its result (it already sits in the interpreter), and
+ *	    copying it leaks.  Thirty-two no-finally tries each producing
+ *	    a 64 KiB result must not grow the counter by even one copy;
+ *	    noleak==1 iff the residue stays below 64 KiB.
+ *	  cancelfree (TH8K-008): when a finally block's cancellation
+ *	    supersedes a saved cancellation, the saved OWNED message
+ *	    (moved out of the interpreter by th8SaveCancel) must be freed.
+ *	    The body cancels with a 128 KiB owned message and finally
+ *	    supersedes it with a tiny one; cancelfree==1 iff the counter
+ *	    did NOT retain the 128 KiB (pre-fix the saved message leaked).
+ *	  oom (TH8K-020): under a one-shot allocation fault swept across
+ *	    the [try] evaluation, a fired fault must never yield success
+ *	    with a silently lost result -- the command either reports the
+ *	    failure or preserves the exact try result.  oom==1 iff a fault
+ *	    fired at least once and no silent-loss violation occurred.
+ *
+ * Results:
+ *	A four-element list of 0/1 flags; {1 1 1 1} when all four
+ *	properties hold.  A per-child setup failure yields a
+ *	"skip:"/"FAIL ..." string instead.
+ *
+ * Side effects:
+ *	Creates and destroys several child interpreters; temporarily
+ *	installs a one-shot OOM injector on the last child's platform
+ *	(disarmed before return).  Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_try_transactional_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const Th8_Platform *pParent;
+    Th8_Platform plat;
+    Th8_Interp *pChild;
+    size_t base, after;
+    int acct = 0, noleak = 0, cancelfree = 0, oom = 0;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    char zBuf[32];
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::try_transactional");
+    }
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent) {
+	Th8_SetResultStatic(interp, "skip:no-platform", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    /*
+     * Check 1 (acct): finally's persistent allocations are charged to the
+     * interpreter after the block completes (TH8K-023/-018).
+     */
+    plat = *pParent;
+    plat.xPanic = 0;
+    pChild = Th8_CreateInterp(&plat);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, "FAIL child-acct", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (Th8_RegisterLanguage(pChild) == TH8_OK) {
+	base = Th8_GetAllocBytes(pChild);
+	(void)Th8_Eval(
+	    pChild, 0,
+	    "try {} finally { set ::keep [string repeat x 262144] }",
+	    TH8_NOLEN, NULL, 0);
+	after = Th8_GetAllocBytes(pChild);
+	if (after >= base + 262144) acct = 1;
+    }
+    Th8_DeleteInterp(pChild);
+
+    /*
+     * Check 2 (noleak): a no-finally [try] does not copy (and leak) its
+     * result (TH8K-020).
+     */
+    plat = *pParent;
+    plat.xPanic = 0;
+    pChild = Th8_CreateInterp(&plat);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, "FAIL child-noleak", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (Th8_RegisterLanguage(pChild) == TH8_OK) {
+	int k;
+
+	base = Th8_GetAllocBytes(pChild);
+	for (k = 0; k < 32; k++) {
+	    (void)Th8_Eval(
+	        pChild, 0, "try { string repeat y 65536 }", TH8_NOLEN, NULL,
+	        0);
+	}
+	Th8_ClearResult(pChild);
+	after = Th8_GetAllocBytes(pChild);
+	if (after < base + 65536) noleak = 1;
+    }
+    Th8_DeleteInterp(pChild);
+
+    /*
+     * Check 3 (cancelfree): th8RestoreCancel frees a saved OWNED cancel
+     * message when a new cancel supersedes it (TH8K-008).  Exercised directly
+     * on the save/restore primitives (not through [try]) so the measurement is
+     * not confounded by the finally-budget accounting: install a large owned
+     * cancel message, save it (moving it out of the interpreter), install a
+     * new cancel to supersede it, then restore.  The counter is continuous
+     * here, so a retained 128 KiB is an unambiguous leak.
+     */
+    plat = *pParent;
+    plat.xPanic = 0;
+    pChild = Th8_CreateInterp(&plat);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, "FAIL child-cancel", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (Th8_RegisterLanguage(pChild) == TH8_OK) {
+	char *zBig = (char *)Th8_Malloc(pChild, 131072);
+
+	if (zBig) {
+	    char savedCancel[TH8_CANCEL_SAVE_SIZE];
+
+	    /* Owner-thread cancel with a large owned message; the copy inside
+	     * the interpreter is what we track, so free our source buffer. */
+	    (void)Th8_CancelEval(pChild, zBig, 131072, 0);
+	    Th8_Free(pChild, zBig);
+	    base =
+	        Th8_GetAllocBytes(pChild); /* includes the 128 KiB message */
+	    th8SaveCancel(
+	        pChild, savedCancel); /* moves it out of the interp */
+	    (void)
+	        Th8_CancelEval(pChild, "B", 1, 0); /* supersede with a tiny */
+	    th8RestoreCancel(
+	        pChild, savedCancel); /* must free the saved 128 KiB */
+	    after = Th8_GetAllocBytes(pChild);
+	    if (after < base) cancelfree = 1; /* the 128 KiB was released */
+	}
+    }
+    Th8_DeleteInterp(pChild);
+
+    /*
+     * Check 4 (oom): when copying the try result for the finally block fails,
+     * [try] reports the failure instead of silently returning an empty result
+     * (TH8K-020 -- the control.c dup and the try_return_saved restore).
+     * Deterministic via the allocation limit rather than a command sweep, so
+     * the body/finally commands' own OOM behavior cannot confound the outcome:
+     * the body produces a ~100 KiB result that fits ONCE, but the limit leaves
+     * no room for the second ~100 KiB copy the finally path must make, so the
+     * copy fails and [try] must surface an error.
+     */
+    plat = *pParent;
+    plat.xPanic = 0;
+    pChild = Th8_CreateInterp(&plat);
+    if (!pChild) {
+	Th8_SetResultStatic(interp, "FAIL child-oom", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (Th8_RegisterLanguage(pChild) == TH8_OK) {
+	int rc;
+
+	/* Materialize a ~100 KiB value in a variable with NO limit, so the try
+	 * body is a cheap variable read (near-zero transient) rather than a
+	 * command that could itself degrade under the limit. */
+	(void)Th8_Eval(
+	    pChild, 0, "set ::big [string repeat Z 100000]", TH8_NOLEN, NULL,
+	    0);
+	Th8_ClearResult(pChild);
+	base = Th8_GetAllocBytes(pChild);
+	/* Headroom for ONE ~100 KiB copy (the body read that materializes the
+	 * result) but not a SECOND (the try-result copy the finally path
+	 * makes): the body succeeds, the copy fails. */
+	Th8_SetAllocLimit(pChild, base + 150000);
+	rc = Th8_Eval(
+	    pChild, 0, "try { set ::big } finally {}", TH8_NOLEN, NULL, 0);
+	Th8_SetAllocLimit(pChild, 0);
+	/* The result copy cannot fit, so [try] must report the failure --
+	 * never silently return TH8_OK with a lost result. */
+	if (rc != TH8_OK) oom = 1;
+    }
+    Th8_DeleteInterp(pChild);
+
+    /*
+     * Emit {acct noleak cancelfree oom}.
+     */
+    {
+	const char *z;
+
+	z = th8test_i64toa((th8_int64_t)acct, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+	z = th8test_i64toa((th8_int64_t)noleak, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+	z = th8test_i64toa((th8_int64_t)cancelfree, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+	z = th8test_i64toa((th8_int64_t)oom, zBuf, sizeof(zBuf));
+	Th8_ListAppend(interp, &zOut, &nOut, z, TH8_NOLEN);
+    }
+    if (zOut) {
+	Th8_SetResult(interp, zOut, nOut);
+	Th8_Free(interp, zOut);
+    } else {
+	Th8_ClearResult(interp);
+    }
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8test_strnicmp --
  *
  *	Simple ASCII case-insensitive comparison of the first n bytes.
@@ -18983,6 +23760,21 @@ th8test_kv_cmd(
  *	forms).  Write operations are deliberately omitted to avoid
  *	mutating the host process's environment from tests.
  *
+ * Why / How:
+ *	Resolves the env-backed platform via Th8_GetEnvPlatform and
+ *	calls its xKeyValue directly, so th8_env.c's decisions are
+ *	driven even when the loaded prologue has installed an override
+ *	xKeyValue that would otherwise intercept the call.
+ *
+ * Results:
+ *	TH8_OK; interpreter result is 1/0 for exists forms, otherwise
+ *	xKeyValue's own result/return.  TH8_ERROR on an unknown
+ *	operation or an unavailable env platform.
+ *
+ * Side effects:
+ *	Sets the interpreter result.  Read-only: never mutates the
+ *	environment.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -19085,6 +23877,15 @@ th8test_env_kv_cmd(
  *	Without an explicit test that calls the public C API, the
  *	functions sit at 0% MC/DC.
  *
+ * Results:
+ *	TH8_OK with "ok" once a full save+restore cycle succeeds;
+ *	otherwise the failing API's return code, or a usage error on
+ *	bad arguments.
+ *
+ * Side effects:
+ *	Saves and then restores the named system array; sets the
+ *	interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -19134,6 +23935,20 @@ th8test_sysvar_cmd(
  *	Drives `pPlat && pPlat->xXxx` MC/DC compounds (~8-10
  *	conditions across th8_core.c, th8_expressions.c,
  *	th8_filesystems.c, th8_plat.c).
+ *
+ * Why / How:
+ *	Clones the parent platform onto a child interpreter with one
+ *	named callback slot NULLed, then evaluates SCRIPT there, so the
+ *	`pPlat && pPlat->xXxx` guards take their callback-absent branch
+ *	without disturbing the parent's platform.
+ *
+ * Results:
+ *	The child evaluation's return code, with its result forwarded
+ *	verbatim; TH8_ERROR on bad arguments or child-setup failure.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter; sets the interpreter
+ *	result.
  *
  *----------------------------------------------------------------------
  */
@@ -19262,6 +24077,21 @@ th8test_platform_cb_null_cmd(
  *	    Allocate a Th8_PkgInfo with zVersion set to VERSION but
  *	    paIfNeeded=NULL.  Drives `if (pPkg && pPkg->paIfNeeded)`
  *	    at th8_extensibility.c:556 and :1225.
+ *
+ * Why / How:
+ *	The normal [package] machinery always fills a Th8_PkgInfo
+ *	completely, so its `pPkg->zVersion` / `pPkg->paIfNeeded` second
+ *	operands never go false; this hand-builds partial records
+ *	directly in the package hash to reach those vectors.
+ *
+ * Results:
+ *	TH8_OK once the partial record is registered; TH8_ERROR on bad
+ *	arguments, a missing package hash, an allocation failure, or an
+ *	unknown subcommand (interpreter result carries a diagnostic).
+ *
+ * Side effects:
+ *	Allocates a Th8_PkgInfo and inserts it into the interpreter's
+ *	package hash; sets or clears the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -19423,6 +24253,12 @@ typedef struct {
  *
  *	Gated on `TH8_ENABLE_CRYPTOGRAPHY && TH8_ENABLE_VARIABLES`.
  *
+ * Why / How:
+ *	Provides a real but process-local KV backend so secure-variable
+ *	persistence can be exercised in tests without touching any
+ *	external store; the lazily-created hash lives for the process
+ *	and each payload is one length-prefixed allocation.
+ *
  * Parameters:
  *	interp -- live interpreter (used for hash allocation
  *		and `Th8_SetResult` on GET).
@@ -19433,7 +24269,7 @@ typedef struct {
  *	zValue -- payload bytes (SET only; ignored otherwise).
  *	nValue -- payload length (SET only).
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success.  `TH8_ERROR` on allocation
  *	failure, GET-of-missing-key, EXISTS-of-missing-key,
  *	or unknown `op`.
@@ -19524,6 +24360,23 @@ th8test_kvCallback(
  *	persistence subsystem.  "enable" installs an in-memory KV
  *	store, sets a fixed 32-byte test master key, and opens the
  *	persistence gate.  "disable" clears all three.
+ *
+ * Why / How:
+ *	Wires up the whole secure-persistence stack (in-memory KV
+ *	backend, a fixed test master key, and the enable flag) in one
+ *	call so persistence tests have a deterministic backend; when a
+ *	real xKeyValue is already installed it is trusted rather than
+ *	overridden.
+ *
+ * Results:
+ *	TH8_OK on enable/disable success; TH8_ERROR (with a message) if
+ *	the KV callback cannot be installed or a persistence API fails,
+ *	or on an unknown subcommand.
+ *
+ * Side effects:
+ *	Installs/removes the KV callback and master key and toggles the
+ *	persistence gate on the interpreter; clears the interpreter
+ *	result.
  *
  *----------------------------------------------------------------------
  */
@@ -19628,6 +24481,20 @@ th8test_secure_persist_cmd(
  *	Used for the Bug 25 root-cause investigation: the partial
  *	fix from 2026-05-29 added per-EVP-step messages, so this
  *	command exposes the exact failing step to the script.
+ *
+ * Why / How:
+ *	Replays the failing create/set-master-key/get-var chain in an
+ *	isolated child interpreter and captures each step's return code
+ *	and diagnostic message, surfacing the exact failing EVP step to
+ *	the script for root-cause analysis.
+ *
+ * Results:
+ *	TH8_OK with a {createRc createMsg getRc getMsg} list as the
+ *	interpreter result.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter; sets the interpreter
+ *	result.
  *
  *----------------------------------------------------------------------
  */
@@ -19740,6 +24607,9 @@ th8test_bug25_diag_cmd(
 
 
 #  if defined(TH8_ENABLE_CRYPTOGRAPHY)
+/* The drivekeyfault / faulteval family drives crypto code paths via fault
+ * injection, so it needs both CRYPTOGRAPHY and FAULT_INJECTION. */
+#    if defined(TH8_ENABLE_FAULT_INJECTION)
 /*
  *----------------------------------------------------------------------
  *
@@ -19773,6 +24643,21 @@ th8test_bug25_diag_cmd(
  *	model -- since that uses a fresh child without testlib
  *	commands, the getpublickeytoken helper is unreachable
  *	from inside the eval'd script.
+ *
+ * Why / How:
+ *	Runs the fault-config / cache-reset / install / token-fetch /
+ *	uninstall cycle in one C command so the embedded-key lazy-init
+ *	guards are driven directly, avoiding the child-interp eval model
+ *	where the token helper would be unreachable.
+ *
+ * Results:
+ *	TH8_ERROR with the wrapper's "cannot load embedded ..." message
+ *	when the fault fires; TH8_OK with the resolved token only when
+ *	no fault mode was requested; TH8_ERROR on bad arguments.
+ *
+ * Side effects:
+ *	Resets the file-scope key caches; briefly installs and removes
+ *	the fault layer; sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -19814,11 +24699,11 @@ th8test_drivekeyfault_cmd(
     } else if (argl[1] == 4 && Th8_Memcmp(interp, argv[1], "root", 4) == 0) {
 	pTokenFunc = Th8_GetPublicKeyRootToken;
 	pFlagField = &cfg.nFailEmbeddedKeyRoot;
-#    if defined(TH8_ENABLE_TEST_KEY)
+#      if defined(TH8_ENABLE_TEST_KEY)
     } else if (argl[1] == 4 && Th8_Memcmp(interp, argv[1], "test", 4) == 0) {
 	pTokenFunc = Th8_GetPublicKeyTestToken;
 	pFlagField = &cfg.nFailEmbeddedKeyTest;
-#    endif
+#      endif
     } else {
 	Th8_SetResultStatic(interp, "expected zero|root|test", TH8_NOLEN);
 	return TH8_ERROR;
@@ -19993,6 +24878,21 @@ th8test_faulteval_impl(
  *	script's return code, so callers can `catch` it and match
  *	the forced error message.
  *
+ * Why / How:
+ *	Arms an OpenSSL-op fault bit and evaluates the script in the
+ *	current (crypto-live) interpreter, unlike `fault eval` which
+ *	runs in a policy-less child, so the OSSL_CALL error arms run
+ *	with the real crypto path; forwards to th8test_faulteval_impl.
+ *
+ * Results:
+ *	The evaluated script's return code, with its result string
+ *	preserved across fault-uninstall and returned as this command's
+ *	result.
+ *
+ * Side effects:
+ *	Installs and uninstalls a fault configuration on the calling
+ *	interpreter around the evaluation; sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -20051,6 +24951,8 @@ th8test_posixfaulteval_cmd(
     return th8test_faulteval_impl(interp, argc, argv, argl, 1);
 }
 
+#    endif /* TH8_ENABLE_FAULT_INJECTION (drivekeyfault / faulteval family) */
+
 
 #    if defined(TH8_ENABLE_CRYPTOGRAPHY)
 /*
@@ -20059,8 +24961,18 @@ th8test_posixfaulteval_cmd(
  * th8testHexToBytes --
  *
  *	Decode nOut*2 hex characters from zHex into nOut bytes.
- *	Returns TH8_OK on success, TH8_ERROR on a wrong length or a
+ *
+ * Why / How:
+ *	A CRT-free hex decoder so tests can supply binary fixtures (NTP
+ *	timestamps, key material) as ASCII hex without depending on
+ *	strtol or similar.
+ *
+ * Results:
+ *	TH8_OK on success; TH8_ERROR on a wrong input length or a
  *	non-hex character.
+ *
+ * Side effects:
+ *	Writes nOut decoded bytes into pOut on success.
  *
  *----------------------------------------------------------------------
  */
@@ -20119,6 +25031,19 @@ th8testHexToBytes(
  *	(@40) and req.txTs (@40).  On success returns the derived
  *	epoch seconds; on failure propagates the specific validation
  *	error message so the caller can assert the driven arm.
+ *
+ * Why / How:
+ *	Builds synthetic response/request packets from the arguments and
+ *	calls th8NtpValidateResponse via the internal stubs, so every
+ *	validation arm can be driven deterministically without a live
+ *	NTP exchange.
+ *
+ * Results:
+ *	TH8_OK with the derived epoch seconds; TH8_ERROR propagating the
+ *	specific validation error, or a usage/hex-format error.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -20187,6 +25112,20 @@ th8test_ntpvalidate_cmd(
  *	(e.g. "cannot load embedded keyRoot") so the caller can
  *	assert the expected MC/DC fault outcome.
  *
+ * Why / How:
+ *	Exposes the three embedded-key token accessors to script so
+ *	their lazy-init paths can be driven from a coverage test without
+ *	relying on the th8sh-only startup banner.
+ *
+ * Results:
+ *	TH8_OK with the 16-character hex token; TH8_ERROR propagating
+ *	the underlying failure message, or a usage error on an unknown
+ *	key name.
+ *
+ * Side effects:
+ *	May run a key's lazy-init on first use; sets the interpreter
+ *	result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -20246,6 +25185,18 @@ th8test_getpublickeytoken_cmd(
  *
  *	No arguments; returns the empty string on success.
  *
+ * Why / How:
+ *	Delegates to th8PolicyResetCachedKeys so the next key accessor
+ *	re-enters its lazy-init body, letting a fault option drive the
+ *	load-guard vectors that are otherwise reached only once.
+ *
+ * Results:
+ *	TH8_OK with an empty interpreter result; TH8_ERROR on a
+ *	wrong-argument-count usage error.
+ *
+ * Side effects:
+ *	Clears the file-scope key caches; clears the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -20275,13 +25226,15 @@ th8test_resetkeycaches_cmd(
  *
  * th8test_policyverifydata_cmd --
  *
- *	::th8testlib::policyverifydata null|empty|name|absolute
+ *	::th8testlib::policyverifydata null|empty|name|absolute|badtoken|notoken
  *
- *	Drives th8_policy.c L1100 `if (!zName || nName == 0)` and
- *	L1106 `if (!IsRelativePath(...) && !IsHttpUri(...))` MC/DC
+ *	Drives th8_policy.c L1100 `if (!zName || nName == 0)`,
+ *	L1106 `if (!IsRelativePath(...) && !IsHttpUri(...))`, and the
+ *	token-guard `if (!zToken || Th8_Strlen(...) != 16)` MC/DC
  *	vectors that the normal Th8_EvalFile path cannot reach
- *	(file paths are always non-NULL relative paths).  Creates an
- *	isolated child interpreter, installs the signed-policy
+ *	(file paths are always non-NULL relative paths, and every
+ *	real signature carries a valid 16-character token).  Creates
+ *	an isolated child interpreter, installs the signed-policy
  *	callback so a fresh Th8_PolicyCtx is available, then calls
  *	th8PolicyVerifyData directly via the internal stubs.
  *
@@ -20303,10 +25256,40 @@ th8test_resetkeycaches_cmd(
  *	              start with '/' (IsRelativePath=F) AND with
  *	              "http://" (IsHttpUri=T) since the prefix
  *	              checks are mutually exclusive.
+ *	  badtoken -- zName="tests/helpers/badtoken.tcl" -> passes
+ *	              L1100/L1106 with (F,F), reads the sibling
+ *	              badtoken.tcl.b64sig (a coverage fixture whose
+ *	              line-3 token "ABCD" is 4 chars, not 16),
+ *	              Th8_HarpySigLoad returns a non-NULL token, so
+ *	              the token guard is (F,T) -> TH8_ERROR "missing
+ *	              public key token".  Closes that decision's
+ *	              C2-Pair against the (F,F) baseline of every
+ *	              real signed load.
+ *	  notoken  -- zName="tests/helpers/notoken.tcl" -> same, but
+ *	              notoken.tcl.b64sig omits the "-- TOKEN" pattern
+ *	              on line 3, so Th8_HarpySigLoad returns a NULL
+ *	              token and the guard is (T,-) -> same error.
+ *	              Closes the C1-Pair; badtoken + notoken + the
+ *	              (F,F) baseline take the token guard to 100%.
  *
  *	Returns a 2-element list: {rc msg} where rc is 1 if
  *	th8PolicyVerifyData returned TH8_ERROR or 0 on success,
  *	and msg is the child interp's result string.
+ *
+ * Why / How:
+ *	Normal Th8_EvalFile only ever passes non-NULL relative paths, so
+ *	the name-empty and absolute-path guards are unreachable that
+ *	way; this installs the signed policy on a child interp and calls
+ *	th8PolicyVerifyData directly with each mode's crafted name.
+ *
+ * Results:
+ *	TH8_OK with a {rc msg} list (rc=1 on the verify's TH8_ERROR,
+ *	0 on success; msg is the child's result); TH8_ERROR on child
+ *	setup failure or an unknown mode.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter; sets the interpreter
+ *	result.
  *
  *----------------------------------------------------------------------
  */
@@ -20331,7 +25314,8 @@ th8test_policyverifydata_cmd(
 
     if (argc != 2) {
 	return Th8_WrongNumArgs(
-	    interp, "th8testlib::policyverifydata null|empty|name|absolute");
+	    interp, "th8testlib::policyverifydata "
+	            "null|empty|name|absolute|badtoken|notoken");
     }
     if (argl[1] == 4 && Th8_Memcmp(interp, argv[1], "null", 4) == 0) {
 	zName = NULL;
@@ -20346,9 +25330,18 @@ th8test_policyverifydata_cmd(
         argl[1] == 8 && Th8_Memcmp(interp, argv[1], "absolute", 8) == 0) {
 	zName = "/abs/x.tcl";
 	nName = 10;
+    } else if (
+        argl[1] == 8 && Th8_Memcmp(interp, argv[1], "badtoken", 8) == 0) {
+	zName = "tests/helpers/badtoken.tcl";
+	nName = 26;
+    } else if (
+        argl[1] == 7 && Th8_Memcmp(interp, argv[1], "notoken", 7) == 0) {
+	zName = "tests/helpers/notoken.tcl";
+	nName = 25;
     } else {
 	Th8_SetResultStatic(
-	    interp, "expected null|empty|name|absolute", TH8_NOLEN);
+	    interp, "expected null|empty|name|absolute|badtoken|notoken",
+	    TH8_NOLEN);
 	return TH8_ERROR;
     }
 
@@ -20388,6 +25381,146 @@ th8test_policyverifydata_cmd(
     Th8_DeleteInterp(pChild);
     return TH8_OK;
 }
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_rsa_extract_mismatch_cmd --
+ *
+ *	::th8testlib::rsa_extract_mismatch
+ *
+ *	Drives the DigestInfo-format guard in Th8_RsaExtractHash
+ *	(th8_snk.c) -- `if (recoveredLen != sha512PrefixLen + 64 ||
+ *	Th8_Memcmp(interp, recovered, sha512Prefix, sha512PrefixLen)
+ *	!= 0)` -- which is permanently (F,F) for every real
+ *	signature (each carries a well-formed SHA-512 DigestInfo).
+ *	Using the th8RsaSignRawBlock internal helper, this forges
+ *	two signatures that RECOVER with valid PKCS#1 padding (so
+ *	the earlier "RSA recover failed" arm is not taken) but whose
+ *	unwrapped block fails the DigestInfo check:
+ *
+ *	  wronglen    -- a 51-byte block -> recoveredLen != 83
+ *	                 drives the C1 (T,-) vector.
+ *	  wrongprefix -- an 83-byte block whose first 19 bytes are
+ *	                 zero (not the SHA-512 prefix) -> recoveredLen
+ *	                 == 83 but the Th8_Memcmp differs, driving the
+ *	                 C2 (F,T) vector.
+ *
+ *	The (F,F) baseline is already covered by every real signed
+ *	load (th8PolicyVerifyData -> Th8_RsaExtractHash), so these
+ *	two vectors take the decision to 100% MC/DC.
+ *
+ * Why / How:
+ *	No real signature can reach either error arm, so the guard is
+ *	undrivable without forging a validly-padded but wrong-content
+ *	signature; th8RsaSignRawBlock signs a raw block (no digest),
+ *	giving exact control over the recovered bytes.  The embedded
+ *	test private key supplies the signer/verifier key pair.
+ *
+ * Results:
+ *	TH8_OK with a list {wronglen <ok|FAIL|SIGN-FAIL> wrongprefix
+ *	<ok|FAIL|SIGN-FAIL>} ("ok" = Th8_RsaExtractHash returned the
+ *	expected TH8_ERROR), or "skip:<reason>" when the test key or
+ *	the internal helper is unavailable; TH8_ERROR on setup
+ *	failure.
+ *
+ * Side effects:
+ *	Loads and frees one RSA key and two signatures; sets the
+ *	interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8test_rsa_extract_mismatch_cmd(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    const unsigned char *zKeyData;
+    size_t nKeyData = 0;
+    Th8_RsaKey *pPriv = NULL;
+    unsigned char *pSig = NULL;
+    size_t nSig = 0;
+    char *zOut = NULL;
+    size_t nOut = 0;
+    char zHashOut[129];
+
+    (void)ctx;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::rsa_extract_mismatch");
+    }
+    if (!th8InternalStubsPtr->th8_RsaSignRawBlock) {
+	Th8_SetResultStatic(interp, "skip:no-raw-sign-helper", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    zKeyData = Th8_GetEmbeddedKeyTest(&nKeyData);
+    if (!zKeyData || nKeyData == 0) {
+	Th8_SetResultStatic(interp, "skip:no-embedded-test-key", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (Th8_RsaKeyLoad(interp, zKeyData, nKeyData, &pPriv) != TH8_OK ||
+        !pPriv) {
+	Th8_SetResultStatic(
+	    interp, "rsa_extract_mismatch: key load failed", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    /* Drive A: wrong LENGTH (51-byte block) -> recoveredLen != 83. */
+    {
+	unsigned char blockA[51];
+
+	Th8_Memset(interp, blockA, 0xAB, sizeof(blockA));
+	Th8_ListAppend(interp, &zOut, &nOut, "wronglen", TH8_NOLEN);
+	if (th8RsaSignRawBlock(
+	        interp, pPriv, blockA, sizeof(blockA), &pSig, &nSig) ==
+	        TH8_OK &&
+	    pSig) {
+	    int rE = Th8_RsaExtractHash(interp, pPriv, pSig, nSig, zHashOut);
+	    Th8_ListAppend(
+	        interp, &zOut, &nOut, rE == TH8_ERROR ? "ok" : "FAIL",
+	        TH8_NOLEN);
+	    Th8_Free(interp, pSig);
+	    pSig = NULL;
+	} else {
+	    Th8_ListAppend(interp, &zOut, &nOut, "SIGN-FAIL", TH8_NOLEN);
+	}
+    }
+
+    /* Drive B: right LENGTH, wrong PREFIX (83 zero bytes) -> recoveredLen
+     * == 83 but the SHA-512 DigestInfo prefix comparison differs. */
+    {
+	unsigned char blockB[83];
+
+	Th8_Memset(interp, blockB, 0x00, sizeof(blockB));
+	Th8_ListAppend(interp, &zOut, &nOut, "wrongprefix", TH8_NOLEN);
+	if (th8RsaSignRawBlock(
+	        interp, pPriv, blockB, sizeof(blockB), &pSig, &nSig) ==
+	        TH8_OK &&
+	    pSig) {
+	    int rE = Th8_RsaExtractHash(interp, pPriv, pSig, nSig, zHashOut);
+	    Th8_ListAppend(
+	        interp, &zOut, &nOut, rE == TH8_ERROR ? "ok" : "FAIL",
+	        TH8_NOLEN);
+	    Th8_Free(interp, pSig);
+	    pSig = NULL;
+	} else {
+	    Th8_ListAppend(interp, &zOut, &nOut, "SIGN-FAIL", TH8_NOLEN);
+	}
+    }
+
+    Th8_SetResult(interp, zOut, nOut);
+    Th8_Free(interp, zOut);
+    Th8_RsaKeyFree(interp, pPriv);
+    return TH8_OK;
+}
 #  endif /* TH8_ENABLE_CRYPTOGRAPHY */
 
 
@@ -20419,6 +25552,20 @@ th8test_policyverifydata_cmd(
  *
  *	th8RemoveFromCache is reached via the internal-stubs
  *	table (TH8_INTERNAL).  No new stubs entry required.
+ *
+ * Why / How:
+ *	No in-tree caller removes the same cache key twice, so the
+ *	tombstone (T,F) vector is reached only by populating the cache
+ *	and then calling th8RemoveFromCache twice via the internal
+ *	stubs.
+ *
+ * Results:
+ *	TH8_OK with an empty interpreter result; TH8_ERROR on a
+ *	wrong-argument usage error.
+ *
+ * Side effects:
+ *	Inserts and then double-removes one cache entry; clears the
+ *	interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -20476,6 +25623,19 @@ th8test_cache_double_remove_cmd(
  *	1 if th8SecureCheckCanary returned TH8_ERROR
  *	(expected).
  *
+ * Why / How:
+ *	Th8_KeyStore is file-scope and cannot be built here, so a zeroed
+ *	buffer is passed whose first field (pPage) is thus NULL by
+ *	struct-layout, driving the `!pKS->pPage` operand the existing
+ *	NULL-pKS test cannot reach.
+ *
+ * Results:
+ *	TH8_OK; interpreter result 1 if th8SecureCheckCanary reported
+ *	TH8_ERROR (expected), else 0.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -20523,6 +25683,21 @@ th8test_securecanary_noppage_cmd(
  *	Returns 1 if FindKey returned NULL (the expected
  *	outcome -- no key matched in an empty cache), 0
  *	otherwise.
+ *
+ * Why / How:
+ *	In-tree callers always preload a key before FindKey, so the
+ *	paKeys-NULL operand is only reachable by installing the policy
+ *	on a fresh child interp and calling FindKey immediately, before
+ *	any preload.
+ *
+ * Results:
+ *	TH8_OK; interpreter result 1 if FindKey returned NULL
+ *	(expected), else 0.  TH8_ERROR if the child interp or policy
+ *	cannot be set up.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter; sets the interpreter
+ *	result.
  *
  *----------------------------------------------------------------------
  */
@@ -20609,6 +25784,21 @@ th8test_policyfindkey_nopaeys_cmd(
  *	Returns a 2-element list {rc msg} where rc is 1 if
  *	Th8_Eval returned TH8_ERROR (expected) or 0 on
  *	success, and msg is the child interp's result.
+ *
+ * Why / How:
+ *	Routes through the public Th8_Eval / policy-callback path on a
+ *	signed-only child interp (rather than calling the static helper
+ *	directly), so th8PolicyEvalPre's name-guard fires naturally with
+ *	the requested (zName, nName).
+ *
+ * Results:
+ *	TH8_OK with a {rc msg} list (rc=1 on Th8_Eval TH8_ERROR, else 0;
+ *	msg is the child's result); TH8_ERROR on child setup failure or
+ *	an unknown mode.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter; sets the interpreter
+ *	result.
  *
  *----------------------------------------------------------------------
  */
@@ -20704,6 +25894,18 @@ th8test_policyevalpre_cmd(
  *	Returns 1 if th8AfMapGet returned NULL (the expected
  *	outcome) or 0 otherwise.
  *
+ * Why / How:
+ *	Both in-tree callers pass bCreate=1, so th8AfMapGet's bCreate
+ *	operand is always true; calling it directly on an empty map with
+ *	bCreate=0 drives the short-circuit C1=F vector.
+ *
+ * Results:
+ *	TH8_OK; interpreter result 1 if th8AfMapGet returned NULL
+ *	(expected), else 0.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -20756,6 +25958,19 @@ th8test_afmapget_nocreate_cmd(
  *	new th8_AfFlagSetAdd / th8_AfFlagSetRemove internal-
  *	stubs entries with c = 0xC3 (195, well above 128)
  *	drives the C1=F vector.
+ *
+ * Why / How:
+ *	The `flags change` path filters chars through th8AfIsIdentChar
+ *	(always < 128), so the `c < 128` operand is always true; calling
+ *	Add/Remove directly with a high-bit byte drives the C1=F vector,
+ *	then confirms present[] was untouched.
+ *
+ * Results:
+ *	TH8_OK; interpreter result 0 (no flag set, since the high-bit
+ *	call short-circuits); TH8_ERROR on an unknown subcommand.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -20834,6 +26049,18 @@ th8test_flagsethighbit_cmd(
  *	Builds a tiny Th8_AfMap from "abc" then calls Have with
  *	zHave=NULL.  Expected return: 1 (have-none case).
  *
+ * Why / How:
+ *	The `flags have` command can only pass a Tcl string, never a C
+ *	NULL, so the `!zHave` operand is unreachable from script; this
+ *	parses a map then calls Th8_AttrFlagsHave with zHave=NULL.
+ *
+ * Results:
+ *	TH8_OK; interpreter result is Th8_AttrFlagsHave's value (1 for
+ *	the have-none case).  Propagates a parse error if the map fails.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -20893,6 +26120,20 @@ th8test_flagshavennull_cmd(
  *	Returns a 2-element list `{rc msg}` where rc is the
  *	Th8_HarpySigLoad return code (0=OK, 1=error) and msg is
  *	the interp result string after the call.
+ *
+ * Why / How:
+ *	policy.c only ever feeds Th8_HarpySigLoad well-formed bundles,
+ *	so its guard and parser error arms are unreachable that way;
+ *	each mode passes a crafted NULL argument or malformed body to
+ *	drive a specific vector.
+ *
+ * Results:
+ *	TH8_OK with a {rc msg} list (rc=0 on OK, 1 on error; msg is the
+ *	post-call result); TH8_ERROR on an unknown mode.
+ *
+ * Side effects:
+ *	Frees any signature/token buffers Th8_HarpySigLoad allocated;
+ *	sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -20993,6 +26234,19 @@ th8test_harpysigload_cmd(
  *	th8CanonLoadName always emits a "lib:sym" canonical form
  *	(nSymA > 0).  Pass colon-less names to force nSymA == 0.
  *	Returns 1 (names match the same library) or 0 (different).
+ *
+ * Why / How:
+ *	The `load` command always canonicalises to a "lib:sym" form
+ *	(nSymA > 0), so the `nSymA > 0` operand is always true; passing
+ *	colon-less names directly to th8LoadNameMatch forces nSymA == 0
+ *	and drives the C1=F vector.
+ *
+ * Results:
+ *	TH8_OK; interpreter result 1 if the names match the same
+ *	library, else 0.  TH8_ERROR on a wrong-argument usage error.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -21614,7 +26868,14 @@ typedef struct th8test_search_collect {
  *	nSid   -- search-id length.
  *	pCtx   -- `th8test_search_collect *` accumulator.
  *
- * Returns:
+ * Why / How:
+ *	Copies each borrowed name/id into accumulator-owned buffers
+ *	(the iterator only lends them for the callback's lifetime),
+ *	growing the pair array by doubling and short-circuiting
+ *	iteration by returning TH8_ERROR on the first allocation
+ *	failure.
+ *
+ * Results:
  *	`TH8_OK` to continue iteration, `TH8_ERROR` on
  *	allocation failure (also recorded in `pCtx->rc`).
  *
@@ -21704,7 +26965,12 @@ th8test_search_collect_cb(
  *	a -- pointer to a `th8test_search_pair`.
  *	b -- pointer to a `th8test_search_pair`.
  *
- * Returns:
+ * Why / How:
+ *	Gives array_searches a stable, locale-free order (name then id,
+ *	prefix bytes then length) so callers can compare results without
+ *	a leading lsort in script.
+ *
+ * Results:
  *	Negative, zero, or positive per the standard `qsort`
  *	contract.
  *
@@ -21748,11 +27014,16 @@ th8test_search_pair_cmp(const void *a, const void *b)
  *	NULL-`aPair` early return covers the failed-iteration
  *	cleanup path).
  *
+ * Why / How:
+ *	Central teardown for the accumulator so both the success and
+ *	failed-iteration paths free the pair array and every owned
+ *	name/id copy exactly once, then reset the counters for reuse.
+ *
  * Parameters:
  *	p -- accumulator to drain (must be non-NULL).
  *
- * Returns:
- *	None.
+ * Results:
+ *	None (void).
  *
  * Side effects:
  *	Frees every owned allocation in `p` via `Th8_Free`.
@@ -21811,7 +27082,13 @@ th8test_search_collect_free(th8test_search_collect *p)
  *	argv   -- argv[0]=command name; argv[1]=PATTERN (optional).
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Why / How:
+ *	Walks the per-interp search hash via Th8_IterateArraySearches,
+ *	accumulating {array id} pairs, sorting them in C, and formatting
+ *	the list so leak-checking trailing tests can assert an empty
+ *	result without any script-side sorting.
+ *
+ * Results:
  *	`TH8_OK` with the formatted list in the interpreter
  *	result.  `TH8_ERROR` on argument-count error or
  *	allocation failure (interpreter result: existing
@@ -21968,6 +27245,18 @@ typedef void *(*th8test_thread_proc)(void *);
  *	th8test_thread_join.  Returns 0 on success, non-zero on
  *	failure (handle is NOT written on failure).
  *
+ * Why / How:
+ *	Hides the pthread vs _beginthreadex spawn difference behind one
+ *	signature; an optional stack size is applied best-effort (too
+ *	small a request keeps the larger platform default).
+ *
+ * Results:
+ *	0 on success (*pTid holds a joinable handle); non-zero on
+ *	failure (handle left unwritten).
+ *
+ * Side effects:
+ *	Creates a joinable OS thread.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -22016,6 +27305,19 @@ th8test_thread_create(
  *	Returns 0 when the platform provides no xGetStackBounds (caller then
  *	falls back to the platform-default stack).
  *
+ * Why / How:
+ *	A worker thread that runs TH8 evals needs a stack as large as
+ *	the owning thread's; by the single-thread-per-interp contract
+ *	the calling thread is the owner, so xGetStackBounds on it gives
+ *	the size to request.
+ *
+ * Results:
+ *	The owning thread's recorded stack size in bytes, or 0 if the
+ *	platform provides no xGetStackBounds.
+ *
+ * Side effects:
+ *	None.
+ *
  *----------------------------------------------------------------------
  */
 static size_t
@@ -22043,6 +27345,17 @@ th8test_owning_stack_size(Th8_Interp *interp)
  *	handle is closed immediately, which is the standard
  *	"detached" pattern.  Returns 0 on success, non-zero on
  *	failure.
+ *
+ * Why / How:
+ *	For fire-and-forget workers that free their own context; hides
+ *	the POSIX detach-attr vs Win32 close-handle-immediately
+ *	difference behind one call.
+ *
+ * Results:
+ *	0 on success; non-zero on failure.
+ *
+ * Side effects:
+ *	Creates a detached OS thread.
  *
  *----------------------------------------------------------------------
  */
@@ -22085,6 +27398,16 @@ th8test_thread_create_detached(
  *	longer valid.  Caller must NOT call this on a thread
  *	created via th8test_thread_create_detached.
  *
+ * Why / How:
+ *	Hides the WaitForSingleObject+CloseHandle vs pthread_join
+ *	difference so callers join a worker portably in one call.
+ *
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
+ *	Blocks until the thread exits and releases its handle.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -22109,6 +27432,16 @@ th8test_thread_join(th8test_thread_t tid)
  *	immediately for nMs <= 0.  No fractional-millisecond
  *	precision is provided; this is for test-pacing purposes
  *	only.
+ *
+ * Why / How:
+ *	Portable coarse sleep for pacing worker threads, hiding the
+ *	Win32 Sleep vs POSIX nanosleep difference.
+ *
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
+ *	Blocks the calling thread for roughly nMs milliseconds.
  *
  *----------------------------------------------------------------------
  */
@@ -22155,12 +27488,18 @@ typedef struct th8test_qe_ctx {
  *	                  `Th8_FinalizeAsyncState`.
  *	  * `q`       -- the wrapper context itself.
  *
+ * Why / How:
+ *	Runs on the interpreter's owning thread when the queued event
+ *	drains, so the deferred SCRIPT executes safely there; it then
+ *	frees the script copy, finalizes the async state, and frees its
+ *	own context, so nothing leaks once the callback fires.
+ *
  * Parameters:
  *	interp -- the interpreter the event is draining into.
  *	pCtx   -- `th8test_qe_ctx *` registered by the queueing
  *		side.
  *
- * Returns:
+ * Results:
  *	The return code of the inner `Th8_Eval` call (whatever
  *	the SCRIPT body produces).
  *
@@ -22271,6 +27610,13 @@ TH8TEST_WORKER_DECL(th8test_queue_event_worker)
  *	    `Th8_QueueEvent` fails (interp already deleted).
  *	No leak in either case.
  *
+ * Why / How:
+ *	Exercises the cross-thread async-event path: a worker off the
+ *	owning thread queues an event that the owning thread later
+ *	drains via [update]/[vwait], with ownership of the context,
+ *	script copy, and async state transferring to whichever side
+ *	completes so nothing leaks.
+ *
  * Parameters:
  *	interp -- live interpreter (receives result; will own
  *		the queued event).
@@ -22280,7 +27626,7 @@ TH8TEST_WORKER_DECL(th8test_queue_event_worker)
  *		argv[2]=SCRIPT.
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on successful spawn (interpreter result:
  *	empty string).  `TH8_ERROR` on bad arguments,
  *	allocation failure, `Th8_CreateAsyncState` failure, or
@@ -22516,6 +27862,17 @@ typedef struct th8test_worker {
  *	&worker[i].counter pointer captured at
  *	Th8_CreateAsyncState time; bump it by one.
  *
+ * Why / How:
+ *	A minimal drain-side effect the stress test can count; because
+ *	draining is single-threaded per counter, the increment needs no
+ *	atomic.
+ *
+ * Results:
+ *	TH8_OK always.
+ *
+ * Side effects:
+ *	Increments the counter pointed to by pCtx (when non-NULL).
+ *
  *----------------------------------------------------------------------
  */
 
@@ -22584,6 +27941,20 @@ TH8TEST_WORKER_DECL(th8test_worker_thread)
  *	        F = E - D (events that submitted but never drained).
  *
  *	A passing test asserts F == 0 (live interp; no events lost).
+ *
+ * Why / How:
+ *	Verifies the cross-thread event queue loses nothing under
+ *	contention: many workers enqueue concurrently, then a single
+ *	post-join drain runs every callback so the counter sums can be
+ *	compared against the events submitted.
+ *
+ * Results:
+ *	TH8_OK with a "dispatched=D failed=F expected=E" string;
+ *	TH8_ERROR on bad arguments or a thread/allocation failure.
+ *
+ * Side effects:
+ *	Spawns and joins worker threads; allocates and finalizes per-
+ *	worker async states; sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -23028,6 +28399,20 @@ TH8TEST_WORKER_DECL(th8test_tid_worker_fn)
  *	without tripping the affinity assertion, proving both APIs are
  *	callable from any thread.  Returns "ok" or a diagnostic string.
  *
+ * Why / How:
+ *	Compares the identity queries on the owning thread against those
+ *	a spawned worker sees, confirming Th8_GetThreadId is per-thread
+ *	while Th8_GetInterpThreadId always names the owner, and that
+ *	neither trips the affinity assertion off-thread.
+ *
+ * Results:
+ *	TH8_OK; interpreter result "ok" on success, "skip:no-thread-id"
+ *	when the platform has no thread ids, or a "FAIL ..." diagnostic;
+ *	TH8_ERROR only on a usage error.
+ *
+ * Side effects:
+ *	Spawns and joins one worker thread; sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 static int
@@ -23102,6 +28487,573 @@ th8test_thread_identity_cmd(
 /*
  *----------------------------------------------------------------------
  *
+ * Shared state for th8test_cancel_foreign_cmd.
+ *
+ *----------------------------------------------------------------------
+ */
+typedef struct th8test_cf_worker {
+    Th8_Interp *interp; /* Child interp (owned by the main thread). */
+    const char *zMsg; /* Message to cancel with, or NULL. */
+    int flags; /* TH8_CANCEL_* flags for the foreign cancel. */
+} th8test_cf_worker;
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_cf_worker_fn --
+ *
+ *	Foreign-thread worker for th8test_cancel_foreign_cmd.  Cancels the
+ *	child interpreter with the round's (message, flags), exercising the
+ *	TH8K-008 cross-thread request path: a non-owner thread must publish
+ *	only the atomic request word (and, for a non-signal cancel, hand off a
+ *	COPIED message via an atomic pointer swap) and never touch the owner's
+ *	multi-field message state or its byte accounting.
+ *
+ *----------------------------------------------------------------------
+ */
+TH8TEST_WORKER_DECL(th8test_cf_worker_fn)
+{
+    th8test_cf_worker *w = (th8test_cf_worker *)arg;
+
+    Th8_ThreadInit();
+    (void)Th8_CancelEval(w->interp, w->zMsg, TH8_NOLEN, w->flags);
+    Th8_ThreadDone();
+    TH8TEST_WORKER_RETURN;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_cf_one --
+ *
+ *	Run one TH8K-008 cross-thread cancellation round on a fresh child
+ *	interp: optionally pre-cancel on the OWNER thread with (zOwnerPre,
+ *	ownerFlags), spawn a foreign worker that cancels with (zForeign,
+ *	foreignFlags), join, then on the owner thread confirm the child
+ *	reports cancellation and its message equals zExpect.  Returns 1 on
+ *	success, 0 on failure.
+ *
+ * Why / How:
+ *	Factors out one cross-thread cancellation scenario: joining the
+ *	foreign worker establishes happens-before so the post-cancel
+ *	message check is deterministic, and a fresh child per round
+ *	isolates state (TH8_HEAP_CHECKS catches any wrong-heap
+ *	allocation).
+ *
+ * Results:
+ *	1 if the child reports cancellation with the expected message,
+ *	else 0 (including setup failures).
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter; spawns and joins a
+ *	worker thread.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_cf_one(
+    Th8_Interp *interp, /* Parent (for the platform + Th8_Memcmp). */
+    const char *zOwnerPre, /* Owner pre-cancel message, or NULL. */
+    int ownerFlags, /* Owner pre-cancel cancel flags. */
+    const char *zForeign, /* Foreign-thread message, or NULL. */
+    int foreignFlags, /* Foreign-thread cancel flags. */
+    const char *zExpect) /* Expected reported message. */
+{
+    const Th8_Platform *pParent = Th8_GetPlatform(interp);
+    Th8_Platform plat;
+    Th8_Interp *pChild;
+    th8test_cf_worker w;
+    th8test_thread_t tid;
+    int ok = 1;
+
+    if (!pParent) return 0;
+    plat = *pParent;
+    plat.xPanic = 0;
+    /* Opt into the supported memory-recovery layer so the child HAS an
+     * xNeedMemory second chance to exercise (the default platform does not
+     * merge it).  Th8_MergePlatform only fills NULL slots. */
+    (void)Th8_MergePlatform(&plat, Th8_GetMemPlatform());
+    pChild = Th8_CreateInterp(&plat);
+    if (!pChild) return 0;
+
+    /* Owner-thread pre-cancel, if requested. */
+    if (zOwnerPre) {
+	(void)Th8_CancelEval(pChild, zOwnerPre, TH8_NOLEN, ownerFlags);
+    }
+
+    w.interp = pChild;
+    w.zMsg = zForeign;
+    w.flags = foreignFlags;
+    if (th8test_thread_create(
+            &tid, th8test_cf_worker_fn, &w,
+            th8test_owning_stack_size(interp)) != 0) {
+	Th8_DeleteInterp(pChild);
+	return 0;
+    }
+    th8test_thread_join(tid);
+
+    if (Th8_IsCanceled(pChild, 0) != TH8_ERROR) {
+	ok = 0;
+    } else {
+	size_t nRes = 0;
+	const char *zRes = Th8_GetResult(pChild, &nRes);
+	size_t nExp = zExpect ? Th8_Strlen(interp, zExpect) : 0;
+
+	if (!zRes || nRes != nExp ||
+	    (nExp > 0 && Th8_Memcmp(interp, zRes, zExpect, nExp) != 0)) {
+	    ok = 0;
+	}
+    }
+
+    Th8_ResetCancel(pChild);
+    Th8_DeleteInterp(pChild);
+    return ok;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_cancel_foreign_cmd --
+ *
+ *	::th8testlib::cancel_foreign
+ *
+ *	Verify TH8K-008 across the cross-thread cancellation modes: a
+ *	foreign worker cancels a child interpreter it does not own with
+ *	(A) a non-signal custom message the owner ADOPTS (the redesign's new
+ *	capability -- a copied message handed off by atomic pointer swap),
+ *	(B) a signal cancel -> owner reports the fixed "eval canceled via
+ *	signal" text and any message is ignored, (C) a non-signal cancel with
+ *	no message -> owner default "eval canceled", and (D) after an owner
+ *	custom pre-cancel whose message must win (first-writer-wins) over the
+ *	later foreign request; (F) a non-signal cancel with a NON-NULL but
+ *	empty message -> no buffer published, owner default; plus (E) an
+ *	owner-only custom-then-signal cancel proving the custom message still
+ *	wins over the signal flag.
+ *	Each foreign round joins the worker (establishing happens-before, so
+ *	the check is deterministic) and TH8_HEAP_CHECKS catches any owner-only
+ *	accounting the foreign path must not touch.  Returns "ok", a skip
+ *	token, or a diagnostic.
+ *
+ * Why / How:
+ *	Runs the five TH8K-008 message-precedence scenarios through
+ *	th8test_cf_one, proving a non-owner cancel publishes only the atomic
+ *	request word (plus, for a non-signal cancel, a copied message swapped
+ *	in atomically) and never mutates the owner's multi-field message state
+ *	or its byte accounting.
+ *
+ * Results:
+ *	TH8_OK with "ok", a "skip:..." token when thread ids or the
+ *	platform are unavailable, or a per-round diagnostic; TH8_ERROR
+ *	only on a usage error.
+ *
+ * Side effects:
+ *	Creates/destroys child interpreters and spawns/joins worker
+ *	threads (via th8test_cf_one); sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_cancel_foreign_cmd(
+    Th8_Interp *interp, /* Interpreter. */
+    void *pContext, /* Unused. */
+    int argc, /* Argument count. */
+    const char **argv, /* Argument values. */
+    size_t *argl) /* Argument lengths. */
+{
+    static const char zStatic[] = "foreign-cancel-msg";
+    const Th8_Platform *pParent;
+    int i;
+
+    (void)pContext;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	Th8_SetResultStatic(
+	    interp, "wrong # args: should be \"cancel_foreign\"", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    if (Th8_GetThreadId(interp) == 0) {
+	/* No thread ids: owner vs foreign is indistinguishable here. */
+	Th8_SetResultStatic(interp, "skip:no-thread-id", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent) {
+	Th8_SetResultStatic(interp, "skip:no-platform", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    (void)pParent;
+
+    for (i = 0; i < 4; i++) {
+	int sig = TH8_CANCEL_UNWIND | TH8_CANCEL_SIGNAL;
+	int uw = TH8_CANCEL_UNWIND;
+
+	/* Mode A: foreign non-signal + custom message -> owner ADOPTS the
+	 * copied message (the redesign's new cross-thread capability). */
+	if (!th8test_cf_one(interp, 0, 0, zStatic, uw, zStatic)) {
+	    Th8_SetResultStatic(interp, "FAIL A foreign custom", TH8_NOLEN);
+	    return TH8_OK;
+	}
+	/* Mode B: foreign signal (message ignored) -> fixed signal text. */
+	if (!th8test_cf_one(
+	        interp, 0, 0, zStatic, sig, "eval canceled via signal")) {
+	    Th8_SetResultStatic(interp, "FAIL B signal text", TH8_NOLEN);
+	    return TH8_OK;
+	}
+	/* Mode C: foreign non-signal + no message -> owner default. */
+	if (!th8test_cf_one(interp, 0, 0, 0, uw, "eval canceled")) {
+	    Th8_SetResultStatic(interp, "FAIL C foreign no-msg", TH8_NOLEN);
+	    return TH8_OK;
+	}
+	/* Mode D: owner custom pre-cancel wins (first-writer-wins) over a
+	 * later foreign request. */
+	if (!th8test_cf_one(
+	        interp, "owner-msg", uw, zStatic, uw, "owner-msg")) {
+	    Th8_SetResultStatic(interp, "FAIL D owner precancel", TH8_NOLEN);
+	    return TH8_OK;
+	}
+	/* Mode F: foreign non-signal with a NON-NULL but EMPTY message ->
+	 * no buffer is published (nMsg == 0), owner default.  Drives the
+	 * th8CancelReqPublish `zMsg && nMsg > 0` false-via-length vector. */
+	if (!th8test_cf_one(interp, 0, 0, "", uw, "eval canceled")) {
+	    Th8_SetResultStatic(
+	        interp, "FAIL F foreign empty-msg", TH8_NOLEN);
+	    return TH8_OK;
+	}
+
+	/*
+	 * Mode E: owner-only custom-then-signal cancel.  A signal never
+	 * touches the owner-only message state, so a custom message installed
+	 * first still wins over the later signal flag.
+	 */
+	{
+	    Th8_Platform plat = *pParent;
+	    Th8_Interp *pChild;
+	    const char *zRes;
+	    size_t nRes = 0;
+
+	    plat.xPanic = 0;
+	    pChild = Th8_CreateInterp(&plat);
+	    if (!pChild) {
+		Th8_SetResultStatic(interp, "FAIL E child", TH8_NOLEN);
+		return TH8_OK;
+	    }
+	    (void)Th8_CancelEval(pChild, "dyn-owned", TH8_NOLEN, 0);
+	    (void)Th8_CancelEval(
+	        pChild, zStatic, TH8_NOLEN,
+	        TH8_CANCEL_UNWIND | TH8_CANCEL_SIGNAL);
+	    if (Th8_IsCanceled(pChild, 0) != TH8_ERROR) {
+		Th8_DeleteInterp(pChild);
+		Th8_SetResultStatic(interp, "FAIL E not canceled", TH8_NOLEN);
+		return TH8_OK;
+	    }
+	    zRes = Th8_GetResult(pChild, &nRes);
+	    if (!zRes || nRes != 9 ||
+	        Th8_Memcmp(interp, zRes, "dyn-owned", 9) != 0) {
+		Th8_DeleteInterp(pChild);
+		Th8_SetResultStatic(interp, "FAIL E custom lost", TH8_NOLEN);
+		return TH8_OK;
+	    }
+	    Th8_ResetCancel(pChild);
+	    Th8_DeleteInterp(pChild);
+	}
+    }
+
+    Th8_SetResultStatic(interp, "ok", 2);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * Shared state + worker for th8test_cancel_stress_cmd (TH8K-008).
+ *
+ *----------------------------------------------------------------------
+ */
+typedef struct th8test_cs_worker {
+    Th8_Interp *interp; /* Child interp (owned by the main thread). */
+    const char *zMsg; /* Distinct STATIC message for this publisher. */
+    int flags; /* Cancel flags (always includes TH8_CANCEL_SIGNAL). */
+    volatile int *pGo; /* Shared start gate; all publishers race on open. */
+} th8test_cs_worker;
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_cs_worker_fn --
+ *
+ *	Concurrent foreign canceller for th8test_cancel_stress_cmd.  Spins on
+ *	the shared start gate so ALL publishers fire as simultaneously as
+ *	possible, then cancels the child interpreter with its own distinct
+ *	static message.  Maximizes publisher-vs-publisher and
+ *	publisher-vs-owner contention on the TH8K-008 request slot.
+ *
+ *----------------------------------------------------------------------
+ */
+TH8TEST_WORKER_DECL(th8test_cs_worker_fn)
+{
+    th8test_cs_worker *w = (th8test_cs_worker *)arg;
+
+    Th8_ThreadInit();
+    /* Atomic-read spin on the gate (TSan-clean: no plain shared read). */
+    while (Th8_IntCmpXchg(w->interp, w->pGo, 0, 0) == 0) {
+	/* busy-wait until the owner opens the gate */
+    }
+    (void)Th8_CancelEval(w->interp, w->zMsg, TH8_NOLEN, w->flags);
+    Th8_ThreadDone();
+    TH8TEST_WORKER_RETURN;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_cs_known --
+ *
+ *	Return 1 if zRes (nRes bytes) is EXACTLY one of the known publisher
+ *	messages or the "eval canceled" default -- i.e. a coherent adopted
+ *	message.  A torn pointer/length would yield a different length or
+ *	garbage bytes and fail this check.  The messages have distinct
+ *	lengths so a pointer from one publisher paired with a length from
+ *	another cannot masquerade as a valid message.
+ *
+ * Why / How:
+ *	Because the known messages have distinct lengths, an exact
+ *	length+bytes match proves the adopted (pointer,length) pair is
+ *	coherent; a torn cross-thread publish would mismatch and fail
+ *	this check.
+ *
+ * Results:
+ *	1 if zRes exactly matches a known publisher message or the
+ *	default, else 0.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_cs_known(
+    Th8_Interp *interp,
+    const char *zRes,
+    size_t nRes,
+    const char *const *azMsg)
+{
+    int i;
+
+    if (!zRes) return 0;
+    if (nRes == 13 && Th8_Memcmp(interp, zRes, "eval canceled", 13) == 0) {
+	return 1; /* default (no message adopted). */
+    }
+    if (nRes == 24 &&
+        Th8_Memcmp(interp, zRes, "eval canceled via signal", 24) == 0) {
+	return 1; /* signal cancel carries no message by design (TH8K-008). */
+    }
+    for (i = 0; azMsg[i]; i++) {
+	size_t n = Th8_Strlen(interp, azMsg[i]);
+
+	if (nRes == n && Th8_Memcmp(interp, zRes, azMsg[i], n) == 0) {
+	    return 1; /* exact foreign non-signal custom message (length-coherent). */
+	}
+    }
+    return 0;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8test_cancel_stress_cmd --
+ *
+ *	::th8testlib::cancel_stress
+ *
+ *	TH8K-008 CONCURRENT stress: over many rounds, spawn several foreign
+ *	threads that cancel one child interpreter SIMULTANEOUSLY (each with a
+ *	distinct static message), while the owning thread races them by
+ *	polling Th8_IsCanceled (adopting the request) and periodically
+ *	Th8_ResetCancel (clearing it).  This exercises the races the earlier
+ *	single-joined-canceller test (apicontract-10.2) did not: two publishers
+ *	racing the request slot, publisher-vs-owner-adopt, and
+ *	publisher-vs-owner-clear.  The invariant checked on EVERY observed
+ *	cancellation is that the reported message is a COHERENT known message
+ *	(exact match) -- a torn pointer/length (the pre-fix race) would produce
+ *	a wrong length or garbage.  TH8_HEAP_CHECKS + the fatal-signal handler
+ *	catch any crash from a torn request.  Best run under ThreadSanitizer
+ *	(make tsan) as well as ordinary debug.
+ *
+ *	Returns "ok" (torn == 0 and at least one coherent cancellation was
+ *	observed), a skip token, or a diagnostic.
+ *
+ * Why / How:
+ *	Maximizes contention on the TH8K-008 request slot -- several
+ *	gated publishers fire at once while the owner adopts and clears
+ *	-- and checks every observed message for coherence, so a torn
+ *	cross-thread publish would surface as a mismatch or crash.
+ *
+ * Results:
+ *	TH8_OK with "ok" (no torn message and at least one coherent
+ *	cancellation), a "skip:..." token, or a diagnostic; TH8_ERROR
+ *	only on a usage error.
+ *
+ * Side effects:
+ *	Repeatedly creates/destroys a child interpreter and spawns/joins
+ *	worker threads; sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8test_cancel_stress_cmd(
+    Th8_Interp *interp,
+    void *pContext,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    static const char *const azMsg[] = {"cs-A",    "cs-BB",    "cs-CCC",
+                                        "cs-DDDD", "cs-EEEEE", "cs-FFFFFF",
+                                        0};
+    enum {
+	NWORKER = 6,
+	NROUND = 200,
+	NSPIN = 4000
+    };
+    const Th8_Platform *pParent;
+    int round;
+    int torn = 0;
+    int nCustom =
+        0; /* observed an exact foreign non-signal custom message. */
+    int nSigDefault = 0; /* observed the signal-cancel default text. */
+    th8_int64_t observed = 0;
+
+    (void)pContext;
+    (void)argv;
+    (void)argl;
+
+    if (argc != 1) {
+	return Th8_WrongNumArgs(interp, "th8testlib::cancel_stress");
+    }
+    if (Th8_GetThreadId(interp) == 0) {
+	Th8_SetResultStatic(interp, "skip:no-thread-id", TH8_NOLEN);
+	return TH8_OK;
+    }
+    pParent = Th8_GetPlatform(interp);
+    if (!pParent) {
+	Th8_SetResultStatic(interp, "skip:no-platform", TH8_NOLEN);
+	return TH8_OK;
+    }
+
+    for (round = 0; round < NROUND; round++) {
+	Th8_Platform plat = *pParent;
+	Th8_Interp *pChild;
+	th8test_cs_worker aw[NWORKER];
+	th8test_thread_t atid[NWORKER];
+	volatile int go = 0;
+	int i, spin;
+	int nStarted = 0;
+	/*
+	 * TH8K-008: alternate the request KIND by round so BOTH cross-thread
+	 * message paths are exercised.  Non-signal rounds hand off an exact,
+	 * length-prefixed CUSTOM message (allocated on the worker thread,
+	 * adopted+freed by the owner -- stress-testing the atomic-exchange
+	 * buffer reclamation); signal rounds carry NO message (async-signal-safe
+	 * bit+flags only), so the owner reports the fixed signal default.
+	 */
+	int bSignalRound = (round & 1);
+
+	plat.xPanic = 0;
+	pChild = Th8_CreateInterp(&plat);
+	if (!pChild) {
+	    Th8_SetResultStatic(interp, "FAIL child create", TH8_NOLEN);
+	    return TH8_OK;
+	}
+
+	for (i = 0; i < NWORKER; i++) {
+	    aw[i].interp = pChild;
+	    aw[i].zMsg = bSignalRound ? 0 : azMsg[i];
+	    aw[i].flags = (bSignalRound ? TH8_CANCEL_SIGNAL : 0) |
+	                  ((i & 1) ? TH8_CANCEL_UNWIND : 0);
+	    aw[i].pGo = &go;
+	    if (th8test_thread_create(
+	            &atid[i], th8test_cs_worker_fn, &aw[i],
+	            th8test_owning_stack_size(interp)) != 0) {
+		break; /* spawn failed; join the ones started below */
+	    }
+	    nStarted++;
+	}
+
+	/* Open the gate: every started publisher fires now. */
+	(void)Th8_IntCmpXchg(interp, &go, 1, 0);
+
+	/* Owner races: adopt, validate coherence, classify, occasionally clear. */
+	for (spin = 0; spin < NSPIN; spin++) {
+	    if (Th8_IsCanceled(pChild, 0) == TH8_ERROR) {
+		size_t nRes = 0;
+		const char *zRes = Th8_GetResult(pChild, &nRes);
+
+		observed++;
+		if (!th8test_cs_known(interp, zRes, nRes, azMsg)) {
+		    torn++;
+		} else if (nRes == 24) {
+		    nSigDefault++; /* "eval canceled via signal" */
+		} else if (nRes != 13) {
+		    nCustom++; /* an exact foreign custom message */
+		}
+		if ((spin & 0x3F) == 0) {
+		    Th8_ResetCancel(pChild); /* race publisher-vs-clear */
+		}
+	    }
+	}
+
+	for (i = 0; i < nStarted; i++) {
+	    th8test_thread_join(atid[i]);
+	}
+
+	/* Post-join: whatever is reported must still be coherent. */
+	if (Th8_IsCanceled(pChild, 0) == TH8_ERROR) {
+	    size_t nRes = 0;
+	    const char *zRes = Th8_GetResult(pChild, &nRes);
+
+	    observed++;
+	    if (!th8test_cs_known(interp, zRes, nRes, azMsg)) {
+		torn++;
+	    }
+	}
+
+	Th8_ResetCancel(pChild);
+	Th8_DeleteInterp(pChild);
+
+	if (torn > 0) {
+	    Th8_SetResultStatic(interp, "FAIL torn", TH8_NOLEN);
+	    return TH8_OK;
+	}
+    }
+
+    if (observed <= 0) {
+	/* Vacuous: the owner never observed a cancellation (unexpected). */
+	Th8_SetResultStatic(interp, "FAIL vacuous", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (nCustom <= 0) {
+	/* The exact foreign non-signal custom-message path never fired. */
+	Th8_SetResultStatic(interp, "FAIL no-custom", TH8_NOLEN);
+	return TH8_OK;
+    }
+    if (nSigDefault <= 0) {
+	/* The signal-cancel default-text path never fired. */
+	Th8_SetResultStatic(interp, "FAIL no-signal", TH8_NOLEN);
+	return TH8_OK;
+    }
+    Th8_SetResultStatic(interp, "ok", 2);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8test_event_delete_race_cmd --
  *
  *	::th8testlib::event_delete_race NFAST NSLOW SLOW_DELAY_MS
@@ -23134,6 +29086,22 @@ th8test_thread_identity_cmd(
  *	A passing test asserts F + (NSLOW - S) == NFAST
  *	(every fast event drained) and there is no crash.  In
  *	the typical timing, F == NFAST and S == NSLOW.
+ *
+ * Why / How:
+ *	Deliberately delays some workers past Th8_DeleteInterp so their
+ *	Th8_QueueEvent observes the atomically-marked nDeleted and fails
+ *	cleanly, proving that deleting an interpreter with events still
+ *	in flight neither crashes nor drains stale events; pStates
+ *	outlive the interp so finalizing them afterward is safe.
+ *
+ * Results:
+ *	TH8_OK with a "fast_dispatched=F slow_failed=S total=T" string;
+ *	TH8_ERROR on bad arguments or a thread/allocation failure.
+ *
+ * Side effects:
+ *	Creates and destroys a child interpreter; spawns and joins
+ *	worker threads; finalizes per-worker async states; sets the
+ *	interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -23335,6 +29303,11 @@ static int th8test_mem_capacity = 0; /* Allocated slots. */
  *	Append (ptr, size) to the logical allocation list, growing the
  *	backing array with raw realloc as needed.
  *
+ * Why / How:
+ *	Tracks the blocks handed out by test_malloc so test_free can
+ *	reject any address that is not a live test allocation; the array
+ *	grows by doubling with an overflow-checked size.
+ *
  * Results:
  *	TH8_OK, or TH8_ERROR if the array cannot grow (overflow / OOM).
  *
@@ -23377,6 +29350,11 @@ th8test_mem_list_add(void *ptr, size_t size)
  *	Remove the logical-list entry for ptr, if present, by swapping the
  *	last entry into the gap (order is not significant).
  *
+ * Why / How:
+ *	test_free uses the found/not-found result as its safety gate;
+ *	order does not matter, so the cheap swap-with-last removal is
+ *	used instead of shifting.
+ *
  * Results:
  *	1 if an entry was found and removed, else 0.
  *
@@ -23412,6 +29390,12 @@ th8test_mem_list_remove(void *ptr)
  *	tracked exactly like any other allocation), record it in the
  *	logical allocation list, and return the pointer as a hex address
  *	string the test can hold and later free.
+ *
+ * Why / How:
+ *	Lets a script obtain and later release a real tracked allocation
+ *	by address; routing through the normal malloc funnel means the
+ *	block is accounted exactly like any other, and recording it
+ *	makes test_free memory-safe.
  *
  * Results:
  *	TH8_OK with the block's hex address; TH8_ERROR on a bad size or
@@ -23483,6 +29467,12 @@ th8test_test_malloc_cmd(
  *	safe from script -- it cannot be coerced into freeing an
  *	arbitrary, foreign, or already-freed address.
  *
+ * Why / How:
+ *	Gating the free on the logical-list membership check is what
+ *	makes the command safe to expose to script: only an address
+ *	test_malloc actually handed out (and has not yet freed) can be
+ *	released.
+ *
  * Results:
  *	TH8_OK on success; TH8_ERROR if `ptr` does not parse or is not a
  *	live test allocation.
@@ -23541,6 +29531,12 @@ th8test_test_free_cmd(
  *	errors otherwise, so a test can never clobber an existing file.
  *	In a non-TH8_MEM_DEBUG build the stub reports that a debug build
  *	is required.
+ *
+ * Why / How:
+ *	Exposes th8MemTrackDump (reached via the internal-stubs table)
+ *	so a test can snapshot the live-allocation set; the
+ *	create-exclusive open guarantees the command can never clobber
+ *	an existing file.
  *
  * Results:
  *	TH8_OK with the live block count; TH8_ERROR on any failure.
@@ -23698,11 +29694,17 @@ const Th8InternalStubsTable *th8InternalStubsPtr = NULL;
  *	interpreter result and returns `TH8_ERROR` so the
  *	loader can propagate the error.
  *
+ * Why / How:
+ *	This is the plugin's single load-time contract with the loader:
+ *	it binds the stub tables the plugin's redirected `Th8_*` /
+ *	`th8*` calls depend on before registering any command, so every
+ *	`::th8testlib::*` helper is fully wired when control returns.
+ *
  * Parameters:
  *	interp -- live interpreter into which the test
  *		commands are being installed.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on successful install; `TH8_ERROR` on stubs
  *	binding / validation / command-registration failure
  *	(interpreter result: diagnostic).
@@ -23972,6 +29974,70 @@ Th8test_Init(Th8_Interp *interp)
 
     Th8_CreateCommand(
         interp, "::th8testlib::sandbox", th8test_sandbox_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::timelimit", th8test_timelimit_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::deadline_overshoot",
+        th8test_deadline_overshoot_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::alloc_account_overflow",
+        th8test_alloc_account_overflow_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::hash_order_saturation",
+        th8test_hash_order_saturation_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::same_interp_post_limit",
+        th8test_same_interp_post_limit_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::create_command_oom",
+        th8test_create_command_oom_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::invalid_platform_rejected",
+        th8test_invalid_platform_rejected_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::ctor_alloc_transactional",
+        th8test_ctor_alloc_transactional_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::alloc_ceiling", th8test_alloc_ceiling_cmd, 0,
+        0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::try_transactional",
+        th8test_try_transactional_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::sub_register_probe",
+        th8test_sub_register_probe_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::sub_newcmd_probe",
+        th8test_sub_newcmd_probe_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::sub_fallback_probe",
+        th8test_sub_fallback_probe_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::sub_saverestore_probe",
+        th8test_sub_saverestore_probe_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::sub_wrap_probe", th8test_sub_wrap_probe_cmd, 0,
+        0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::subset_probe", th8test_subset_probe_cmd, 0, 0,
+        0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::subset_curated_probe",
+        th8test_subset_curated_probe_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::subset_mcdc_probe",
+        th8test_subset_mcdc_probe_cmd, 0, 0, 0);
+#  if defined(TH8_ENABLE_VARIABLES)
+    Th8_CreateCommand(
+        interp, "::th8testlib::ctor_globals_oneshot",
+        th8test_ctor_globals_oneshot_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::register_language_oom",
+        th8test_register_language_oom_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::reset_security_oom",
+        th8test_reset_security_oom_cmd, 0, 0, 0);
+#  endif
 #  if defined(TH8_ENABLE_FAULT_INJECTION)
     Th8_CreateCommand(
         interp, "::th8testlib::fault", th8test_fault_cmd, 0, 0, 0);
@@ -24019,6 +30085,7 @@ Th8test_Init(Th8_Interp *interp)
     Th8_CreateCommand(
         interp, "::th8testlib::getpublickeytoken",
         th8test_getpublickeytoken_cmd, 0, 0, 0);
+#    if defined(TH8_ENABLE_FAULT_INJECTION)
     Th8_CreateCommand(
         interp, "::th8testlib::drivekeyfault", th8test_drivekeyfault_cmd, 0,
         0, 0);
@@ -24028,12 +30095,16 @@ Th8test_Init(Th8_Interp *interp)
     Th8_CreateCommand(
         interp, "::th8testlib::posixfaulteval", th8test_posixfaulteval_cmd, 0,
         0, 0);
+#    endif /* TH8_ENABLE_FAULT_INJECTION */
     Th8_CreateCommand(
         interp, "::th8testlib::ntpvalidate", th8test_ntpvalidate_cmd, 0, 0,
         0);
     Th8_CreateCommand(
         interp, "::th8testlib::policyverifydata",
         th8test_policyverifydata_cmd, 0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::rsa_extract_mismatch",
+        th8test_rsa_extract_mismatch_cmd, 0, 0, 0);
     Th8_CreateCommand(
         interp, "::th8testlib::harpysigload", th8test_harpysigload_cmd, 0, 0,
         0);
@@ -24091,6 +30162,12 @@ Th8test_Init(Th8_Interp *interp)
     Th8_CreateCommand(
         interp, "::th8testlib::thread_identity", th8test_thread_identity_cmd,
         0, 0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::cancel_foreign", th8test_cancel_foreign_cmd, 0,
+        0, 0);
+    Th8_CreateCommand(
+        interp, "::th8testlib::cancel_stress", th8test_cancel_stress_cmd, 0,
+        0, 0);
     Th8_CreateCommand(
         interp, "::th8testlib::event_delete_race",
         th8test_event_delete_race_cmd, 0, 0, 0);
@@ -24221,6 +30298,17 @@ Th8test_Unload(Th8_Interp *interp, int flags)
  *	point: returns the literal "ok".  Used purely as a presence
  *	marker by the [load]/[unload] conformance tests.
  *
+ * Why / How:
+ *	Its mere existence (or absence) lets a [load]/[unload] test
+ *	observe whether the secondary module is currently loaded, so
+ *	the body just returns a constant.
+ *
+ * Results:
+ *	TH8_OK with the literal "ok" as the interpreter result.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -24263,6 +30351,20 @@ th8test_loadtest_marker_cmd(
  *	Init registers the single marker command; Unload removes it.
  *	Neither touches any ::th8testlib state.
  *
+ * Why / How:
+ *	A separate export symbol gives the load/unload tests a
+ *	throwaway, independently refcounted target (TH8 keys loads by
+ *	file-identity + symbol) so they can load, unload, and double-
+ *	unload it without perturbing the harness's own testlib.
+ *
+ * Results:
+ *	TH8_OK once the marker command is registered; TH8_ERROR if the
+ *	registration fails.
+ *
+ * Side effects:
+ *	Registers `::__th8_loadtest_marker` on `interp`; clears the
+ *	interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -24299,12 +30401,18 @@ Th8loadtest_Init(Th8_Interp *interp)
  *	unused -- the plugin has no per-flag unload behaviour
  *	and treats every detach the same way.
  *
+ * Why / How:
+ *	The inverse of Th8loadtest_Init; deleting the marker via a
+ *	catch-wrapped rename lets a subsequent [info commands] see a
+ *	clean state and keeps unload succeeding even if the marker was
+ *	already removed by other test code.
+ *
  * Parameters:
  *	interp -- live interpreter from which the plugin is
  *		being detached.
  *	flags  -- unload-flag mask (ignored).
  *
- * Returns:
+ * Results:
  *	`TH8_OK` unconditionally; the `catch` swallows any
  *	failure from the rename.
  *

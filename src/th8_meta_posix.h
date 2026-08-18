@@ -72,14 +72,13 @@
 #  endif
 
 /*
- * DNS resolution via glibc resolver (only when libunbound is
- * not available for DANE/TLSA lookups).
+ * The glibc stub-resolver API (res_query / res_ninit / ns_msg) lives in the
+ * dedicated th8_meta_glibc.h meta-header, which its consumers include
+ * directly.  It is deliberately NOT pulled in here: it is glibc-only and its
+ * one in-tree consumer (harpy/th8_time.c) needs it regardless of whether
+ * libunbound is compiled in, whereas this POSIX header is shared by files that
+ * neither need nor should drag in <resolv.h>.
  */
-
-#  if defined(__GLIBC__) && !defined(TH8_ENABLE_UNBOUND)
-#    include <resolv.h>  /* res_query */
-#    include <arpa/nameser.h> /* ns_msg, ns_rr, NS_* */
-#  endif
 
 #endif /* !_WIN32 && !WIN32 */
 

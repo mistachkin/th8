@@ -367,6 +367,67 @@ bare `0`.  **MUST.**
 Manual review (regex `return\s+0\s*;` would catch many
 unrelated cases).
 
+### 5.6  Transactional (all-or-nothing) state mutation
+
+Every state-mutating API is **transactional**: on ANY failure it
+rolls back all incomplete changes so that observable state is left
+exactly as it was before the call.  A caller that receives an error
+**MUST** be able to treat the operation as if it never happened.
+**MUST.** *(TH8-specific project-wide rule; not in TIP 247.)*
+
+**What "observable state" means -- the discriminator.**  The rule
+governs **script-visible** state -- anything a script can detect:
+commands, procs, namespaces, variables and array elements, channels,
+packages, registered plugins, security/capability flags, and any
+allocation that would otherwise LEAK.  It does **not** require
+rolling back purely *internal, idempotent* state whose loss cannot
+change any script-level result: internal-representation caches,
+lookaside pools, and transient scratch buffers freed within the
+call.  These are deliberately failure-tolerant (e.g. `Th8_FindInCache`
+returns `NULL` on OOM and every caller proceeds with the correct,
+uncached value); a cold cache is a *valid complete state*, not a
+partial one.  If internal state can somehow be observed from the
+script level, it is script-visible and MUST be rolled back.
+
+**Canonical pattern.**
+
+1. **Stage every fallible allocation BEFORE mutating existing
+   state** (allocate the new command, the copied name, the token,
+   etc.; only then splice them in).  A "find-only first, commit
+   last" structure means most failures need no undo at all.
+2. **Where an unavoidable mutation precedes a later fallible step,
+   capture a rollback handle and undo it in EVERY failure arm.**
+   The reference example is `Th8_CreateCommand`: creating a
+   qualified name may create namespaces before later allocations
+   can fail, so `th8FindNamespaceEx` returns the *created-root*
+   (the shallowest namespace this call created; every node it
+   creates forms one contiguous chain whose parent pre-existed),
+   and each failure arm unlinks+frees that root with
+   `th8UnlinkFreeNamespace`.  A single handle rolls back the whole
+   sub-tree and touches only nodes this call created.
+3. **Leave a failed *replace* untouched** -- if the target
+   pre-existed, its identity (old command, old token) must survive
+   the failed call unchanged.
+
+**Enforcement is test-driven.**  Each Tier-1 mutating API ships an
+OOM-sweep exerciser (persistent `_failafter` + one-shot `_oneshot`
+injectors) that, after every fault trip, asserts **zero residue by
+introspecting actual state** -- the new command absent, no namespace
+left behind, the old identity preserved, alloc bytes restored --
+never merely `rc != TH8_OK`.  A survived-with-fault result must be
+proven *complete* (all script-visible state correct), not just
+non-crashing.  Reference tests: `create_command_oom` (TH8K-005),
+`ctor_alloc_transactional` / `ctor_globals_oneshot` (TH8K-002/-003).
+A static heuristic can only *list candidates* (create/mutate
+primitives like `th8FindNamespace(..., 1)` or `Th8_HashFind(..., 1)`
+followed by `->pData =`); transactionality is a cross-line dataflow
+property the per-API test is the authority on.
+
+**Checked by**: per-API OOM-sweep tests (authoritative);
+`audit_patterns.tcl` transactional-candidate lister (informational,
+planned).  See `docs/internal/th8k.md` (TH8K-005 reference impl) and
+`docs/internal/FINDINGS.md` Finding 077.
+
 ---
 
 ## 6.  Macros

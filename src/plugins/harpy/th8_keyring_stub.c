@@ -35,11 +35,19 @@
  *	either replaces this object in the link or builds with
  *	`-DTH8_OMIT_KEYRING_STUB` so the strong definition wins.
  *
+ * Why / How:
+ *	Provides a link-time default so the signed-only loader always has a
+ *	Th8_GetEmbeddedKeyring symbol to call even when no keyring was
+ *	generated.  It simply reports an empty keyring: writes 0 through
+ *	pnEntries (when non-NULL) and returns NULL.  A generated strong
+ *	definition supersedes this stub, either by replacing the object or by
+ *	compiling with -DTH8_OMIT_KEYRING_STUB to elide it.
+ *
  * Parameters:
  *	pnEntries -- output pointer for the number of keyring
  *		entries.  May be NULL; if non-NULL the stub writes 0.
  *
- * Returns:
+ * Results:
  *	NULL (no keyring).  An overriding strong definition would
  *	return a pointer to an array of `*pnEntries` entries.
  *

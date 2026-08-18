@@ -54,6 +54,13 @@ const Th8_SubCommand *th8_array_aSub;
  *	current value (either the pre-existing value or the newly
  *	assigned default).
  *
+ * Why / How:
+ *	Calls Th8_GetVar first; that call, on success, already leaves the
+ *	existing value in the interpreter result.  Only when the variable
+ *	does not exist does it set the variable to the supplied default and
+ *	push that default into the result, so callers never have to
+ *	special-case the first use of a variable.
+ *
  * Results:
  *	TH8_OK unconditionally.  The interpreter result is set to
  *	the variable's value.
@@ -97,8 +104,15 @@ th8GetOrCreateVar(
  *	Used by incr_command to update the variable after computing
  *	the new integer value.
  *
+ * Why / How:
+ *	Reads back the current interpreter result string (and its length)
+ *	with Th8_GetResult and hands it straight to Th8_SetVar, avoiding a
+ *	second integer-to-string conversion by reusing the formatting the
+ *	previous Th8_SetResult* call already performed.
+ *
  * Results:
- *	TH8_OK.
+ *	TH8_OK if the variable was stored; otherwise the TH8_ERROR status
+ *	returned by Th8_SetVar.
  *
  * Side effects:
  *	Variable is set to the current interpreter result string.
@@ -203,7 +217,13 @@ set_command(
 	if (th8CheckSystemVar(interp, argv[1], argl[1]) != TH8_OK) {
 	    return TH8_ERROR;
 	}
-	Th8_SetVar(interp, argv[1], argl[1], argv[2], argl[2]);
+	/* A failed store (e.g. out of memory) must be reported, not ignored:
+	 * otherwise [set] would report success and then read back a stale or
+	 * empty value (TH8K-030). */
+	if (Th8_SetVar(interp, argv[1], argl[1], argv[2], argl[2]) !=
+	    TH8_OK) {
+	    return TH8_ERROR;
+	}
     }
     return Th8_GetVar(interp, argv[1], argl[1]);
 }
@@ -239,10 +259,10 @@ set_command(
 static int
 append_command(
     Th8_Interp *interp, /* Interpreter. */
-    void *ctx,   /* Not used. */
-    int argc,   /* Number of arguments. */
-    const char **argv,  /* Argument values. */
-    size_t *argl)  /* Argument lengths. */
+    void *ctx, /* Not used. */
+    int argc, /* Number of arguments. */
+    const char **argv, /* Argument values. */
+    size_t *argl) /* Argument lengths. */
 {
     int i;
     char *zNew = 0;
@@ -463,8 +483,14 @@ incr_command(
 	}
     }
     iVal += iIncr;
-    Th8_SetResultInt(interp, iVal);
-    th8SetVarFromResult(interp, argv[1], argl[1]);
+    if (Th8_SetResultInt(interp, iVal) != TH8_OK) {
+	return TH8_ERROR;
+    }
+    /* A failed store (out of memory) must be reported, not ignored, or [incr]
+     * reports success while the variable keeps its old value (TH8K-030). */
+    if (th8SetVarFromResult(interp, argv[1], argl[1]) != TH8_OK) {
+	return TH8_ERROR;
+    }
     return TH8_OK;
 }
 
@@ -993,6 +1019,12 @@ variable_command(
 		const char *p = zName + nName;
 
 		while (p > zName + 2) {
+		    if (((size_t)(p - zName) & 0xFFF) == 0) {
+			if (Th8_Ready(interp) != TH8_OK) {
+			    Th8_Free(interp, zQual);
+			    return TH8_ERROR;
+			}
+		    }
 		    p--;
 		    if (p[-1] == ':' && p[0] == ':') {
 			zLocal = p + 1;
@@ -1178,8 +1210,10 @@ array_get_command(
     for (i = 0; i < nCount; i++) {
 	size_t nVal;
 	const char *zVal;
-	size_t nFull = 0;
+	size_t nFull;
 
+	if (Th8_Ready(interp) != TH8_OK) goto oom;
+	nFull = 0;
 	zFull = 0;
 	if (argc == 4 &&
 	    !Th8_GlobMatch(
@@ -1302,8 +1336,10 @@ array_set_command(
     }
 
     for (i = 0; i < nCount; i += 2) {
-	size_t nFull = 0;
+	size_t nFull;
 
+	if (Th8_Ready(interp) != TH8_OK) goto oom;
+	nFull = 0;
 	zFull = 0;
 	TH8_STR_APPEND(interp, &zFull, &nFull, argv[2], argl[2]);
 	TH8_STR_APPEND(interp, &zFull, &nFull, "(", 1);
@@ -1448,6 +1484,7 @@ array_unset_command(
 	 * the C1 (i < nCount) sub-check before reaching C2.  Wrap
 	 * azName ALWAYS at the C2 position. */
 	for (i = 0; i < nCount && ALWAYS(azName); i++) {
+	    if (Th8_Ready(interp) != TH8_OK) goto oom;
 	    if (Th8_GlobMatch(
 	            interp, argv[3], TH8_LEN(argl[3]), azName[i],
 	            TH8_LEN(anName[i]))) {
@@ -1478,15 +1515,14 @@ oom:
 /*
  *----------------------------------------------------------------------
  *
- * array_command --
+ * th8ArraySub --
  *
- *	Implements the Tcl [array] command.  Dispatcher for array
- *	sub-commands.
+ *	Catalogue of `array` sub-commands, installed into the `array` ensemble
+ *	command's per-interpreter sub-command hash at registration (TH8K-025).
  *
  * Why / How:
- *	Uses Th8_CallSubCommand with a static sub-command table.
- *	Exports th8_array_aSub so that [info commands] can enumerate
- *	the available array sub-commands.
+ *	Published as th8_array_aSub so [info subcommands] can enumerate the
+ *	available array sub-commands.
  *
  * Results:
  *	Return code from the sub-command.
@@ -1585,8 +1621,10 @@ array_statistics_command(
      */
     for (i = 0; i < nCount && ALWAYS(azElem); i++) {
 	size_t nVal;
-	size_t nFull = 0;
+	size_t nFull;
 
+	if (Th8_Ready(interp) != TH8_OK) goto oom;
+	nFull = 0;
 	zFull = 0;
 	nNameBytesTotal += anElem[i];
 	if (anElem[i] > nNameLenMax) nNameLenMax = anElem[i];
@@ -1674,6 +1712,15 @@ oom:
  *	bucket or when the table is exhausted.  Backs the
  *	`[array nextelement]` walk.
  *
+ * Why / How:
+ *	The element hash is an array of bucket chains, many of which
+ *	are empty; a naive `pHash->aBucket[i]` at the cursor's saved
+ *	index can land on a NULL head.  This loop keeps incrementing
+ *	`*piBucket` and reloading the bucket head until it finds a
+ *	non-NULL entry or runs off the end of the table
+ *	(TH8_HASH_SIZE), so callers of `[array nextelement]` always
+ *	resume at a real element without duplicating the skip logic.
+ *
  * Parameters:
  *	pHash    -- the array's element hash being iterated.
  *	piBucket -- in/out current bucket index; the caller has
@@ -1682,7 +1729,7 @@ oom:
  *		bucket is empty.  Set to a valid entry, or to NULL
  *		when iteration is exhausted, on return.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -1723,6 +1770,19 @@ th8ArraySearchSkipEmpty(
  *	flake where the allocator reused a freed hash address
  *	after `array unset` + `array set` of the same name.
  *
+ * Why / How:
+ *	Finds the search record in the per-interp search hash by SID,
+ *	then applies defense-in-depth checks in order -- owning
+ *	interp, registered array name, array liveness, generation,
+ *	and epoch -- returning NULL on the first mismatch.  The
+ *	per-interp monotonic generation counter (rather than a bare
+ *	pointer compare on the array hash) is what makes a stale or
+ *	guessed SID unable to drive a re-bound array, fixing the
+ *	Bug 9 / arrsearch-4.3 allocator-reuse flake.  On a liveness
+ *	or generation/epoch failure it also tears the stale record
+ *	down (the `invalidate` path) so the caller reports a clean
+ *	"couldn't find search".
+ *
  * Parameters:
  *	interp -- live interpreter (owns the search hash).
  *	zSid   -- search id (the hash key).
@@ -1730,7 +1790,7 @@ th8ArraySearchSkipEmpty(
  *	zArray -- array name the search must be bound to.
  *	nArray -- array-name length.
  *
- * Returns:
+ * Results:
  *	The matching th8ArraySearch on success; NULL on any
  *	mismatch or if the search was found but invalidated.
  *
@@ -1817,12 +1877,23 @@ invalidate:
  *	in `pEntry` and `pEntry->pData` (Bug 26): a tombstoned or
  *	absent entry is a no-op.
  *
+ * Why / How:
+ *	Casts the iterate context to the owning interpreter, treats
+ *	`pEntry->pData` as the th8ArraySearch, frees its owned
+ *	`zArray` copy and the record itself, then clears `pData` so a
+ *	later pass over the same entry sees a tombstone.  Sharing one
+ *	freer between teardown iteration and `[array donesearch]`
+ *	keeps the ownership rules in a single place; the two leading
+ *	NULL guards are kept as sequential `if`s (Bug 26 / Finding
+ *	005 sec. 5b) so they survive TH8_OMIT without forming a dead
+ *	MC/DC C-pair.
+ *
  * Parameters:
  *	pEntry -- hash entry whose pData is the th8ArraySearch,
  *		or NULL.
  *	pCtx   -- the owning Th8_Interp (hash-iterate context).
  *
- * Returns:
+ * Results:
  *	TH8_OK unconditionally.
  *
  * Side effects:
@@ -1872,6 +1943,15 @@ th8ArraySearchFreeEntry(Th8_HashEntry *pEntry, void *pCtx)
  *	combination, but the defensive arms stay in place
  *	for future callers and embedder paths.
  *
+ * Why / How:
+ *	Fetches the per-interp search hash and, when both it and the
+ *	SID are present, removes the cursor's entry so subsequent
+ *	`[array nextelement]` lookups fail cleanly; then, when the
+ *	cursor struct is present, frees its owned `zArray` copy and
+ *	the struct itself.  Each operand is guarded by its own `if`
+ *	(Finding 005 sec. 5b) so a missing hash, SID, or cursor skips
+ *	only its own block rather than aborting the whole release.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	zSid   -- search id (the hash key), or NULL to skip
@@ -1879,7 +1959,7 @@ th8ArraySearchFreeEntry(Th8_HashEntry *pEntry, void *pCtx)
  *	nSid   -- search-id length.
  *	p      -- cursor struct, or NULL.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -1939,6 +2019,20 @@ th8ArraySearchRelease(
  *	with the canonical `"arrayName" isn't an array` Tcl
  *	error.
  *
+ * Why / How:
+ *	Validates argc and array existence, then allocates and
+ *	initializes a th8ArraySearch positioned at the first
+ *	non-empty bucket and stamped with the array's current epoch
+ *	and generation so a later mutation invalidates the cursor.
+ *	The `"s-<counter>-<arrayName>"` SID formatted by th8Snprintf
+ *	is both unique (monotonic counter) and human-readable; the
+ *	defensive negative-return fallback to `"s-<counter>-array"`
+ *	(Bug 26) keeps the search registerable even if a platform
+ *	snprintf misbehaves, avoiding a bad size_t cast.  The record
+ *	is registered in the per-interp search hash and its SID is
+ *	returned so later `[array nextelement]`/`anymore`/
+ *	`donesearch` calls can retrieve it.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	ctx    -- unused command context.
@@ -1947,7 +2041,7 @@ th8ArraySearchRelease(
  *		argv[2]=arrayName.
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` with the generated search-id as the
  *	interpreter result.  `TH8_ERROR` on wrong argument
  *	count, non-array variable, missing search hash, or
@@ -2080,6 +2174,16 @@ oom:
  *	stale epoch) raises the canonical
  *	`couldn't find search "..."` error.
  *
+ * Why / How:
+ *	Resolves the cursor with th8ArraySearchFind (which also
+ *	validates epoch/generation), sets the result to the current
+ *	entry's key, then advances `p->pCursor` to `pCursor->pNext`.
+ *	Because the epoch was just verified, the bucket chain is
+ *	structurally unchanged so `pNext` is still valid; when it
+ *	reaches the end of a chain, th8ArraySearchSkipEmpty walks on
+ *	to the next non-empty bucket, leaving the cursor ready for
+ *	the following call.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	ctx    -- unused command context.
@@ -2088,7 +2192,7 @@ oom:
  *		argv[2]=arrayName; argv[3]=searchId.
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` with the next key (or empty result at end).
  *	`TH8_ERROR` on wrong argument count, missing cursor,
  *	or stale-epoch cursor (interpreter result:
@@ -2173,6 +2277,13 @@ oom:
  *	`couldn't find search "..."` error, matching the
  *	other `array *search` subcommands.
  *
+ * Why / How:
+ *	Resolves the cursor with th8ArraySearchFind and reports the
+ *	boolean `p->pCursor != 0` as the result -- a non-NULL cursor
+ *	means an element is still pending.  It deliberately does not
+ *	advance the cursor, so a script can test `anymore` and then
+ *	fetch with `nextelement` without skipping an element.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	ctx    -- unused command context.
@@ -2181,7 +2292,7 @@ oom:
  *		argv[2]=arrayName; argv[3]=searchId.
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` with `1` / `0` as the interpreter result.
  *	`TH8_ERROR` on wrong argument count or missing
  *	cursor (interpreter result: diagnostic).
@@ -2243,6 +2354,15 @@ oom:
  *	already released" granularity, not at the script
  *	level.
  *
+ * Why / How:
+ *	Resolves the cursor with th8ArraySearchFind first, so a bad
+ *	or stale search id produces the canonical error before any
+ *	freeing happens; on success it hands the id and cursor to
+ *	th8ArraySearchRelease (unlinking the hash entry and freeing
+ *	the record) and clears the result, giving scripts explicit,
+ *	deterministic cleanup rather than waiting for interpreter
+ *	teardown.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	ctx    -- unused command context.
@@ -2251,7 +2371,7 @@ oom:
  *		argv[2]=arrayName; argv[3]=searchId.
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` with the interpreter result cleared.
  *	`TH8_ERROR` on wrong argument count or missing
  *	cursor (interpreter result: diagnostic).
@@ -2313,49 +2433,6 @@ static const Th8_SubCommand th8ArraySub[] =
      {0, "unset", array_unset_command},
      {0, 0, 0}};
 
-/*
- *----------------------------------------------------------------------
- *
- * array_command --
- *
- *	Implements the script-visible `[array ...]` ensemble.
- *	Pure thin wrapper that hands the dispatch off to
- *	`Th8_CallSubCommand` with the `th8ArraySub` table
- *	covering `anymore`, `donesearch`, `exists`, `get`,
- *	`names`, `nextelement`, `set`, `size`, `startsearch`,
- *	`statistics`, and `unset`.
- *
- *	Diagnostics for unknown or ambiguous subcommands are
- *	emitted by `Th8_CallSubCommand` itself.
- *
- * Parameters:
- *	interp -- live interpreter.
- *	ctx    -- command context (forwarded).
- *	argc   -- argument count.
- *	argv   -- argument vector.
- *	argl   -- argument byte-length vector.
- *
- * Returns:
- *	The selected subcommand handler's return code, or
- *	`TH8_ERROR` with a diagnostic if the subcommand name
- *	is unknown.
- *
- * Side effects:
- *	Whatever the dispatched subcommand performs.
- *
- *----------------------------------------------------------------------
- */
-static int
-array_command(
-    Th8_Interp *interp,
-    void *ctx,
-    int argc,
-    const char **argv,
-    size_t *argl)
-{
-    return Th8_CallSubCommand(interp, ctx, argc, argv, argl, th8ArraySub);
-}
-
 
 /*
  *----------------------------------------------------------------------
@@ -2366,10 +2443,14 @@ array_command(
  */
 
 static Th8_CommandEntry th8VariablesCommands[] = {
-    {1, 0, "append", append_command},     {1, 0, "array", array_command},
-    {1, 0, "global", global_command},     {1, 0, "incr", incr_command},
-    {1, 0, "set", set_command},           {1, 0, "unset", unset_command},
-    {1, 0, "uplevel", uplevel_command},   {1, 0, "upvar", upvar_command},
+    {1, 0, "append", append_command},
+    {1, 0, "array", 0}, /* pure ensemble (TH8K-025) */
+    {1, 0, "global", global_command},
+    {1, 0, "incr", incr_command},
+    {1, 0, "set", set_command},
+    {1, 0, "unset", unset_command},
+    {1, 0, "uplevel", uplevel_command},
+    {1, 0, "upvar", upvar_command},
     {1, 0, "variable", variable_command},
 };
 

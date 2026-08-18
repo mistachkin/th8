@@ -370,9 +370,9 @@ Th8_Memcmp(
 void *
 Th8_Memcpy(
     Th8_Interp *interp, /* Interpreter for platform access. */
-    void *dst,   /* Destination buffer. */
-    const void *src,  /* Source buffer. */
-    size_t n)   /* Number of bytes. */
+    void *dst, /* Destination buffer. */
+    const void *src, /* Source buffer. */
+    size_t n) /* Number of bytes. */
 {
     const Th8_Platform *pPlatform;
 
@@ -417,9 +417,9 @@ Th8_Memcpy(
 void *
 Th8_Memset(
     Th8_Interp *interp, /* Interpreter for platform access. */
-    void *dst,   /* Destination buffer. */
-    int c,   /* Fill byte. */
-    size_t n)   /* Number of bytes. */
+    void *dst, /* Destination buffer. */
+    int c, /* Fill byte. */
+    size_t n) /* Number of bytes. */
 {
     const Th8_Platform *pPlatform;
 
@@ -482,9 +482,9 @@ Th8_Memset(
 void *
 th8Memmove(
     Th8_Interp *interp, /* Interpreter for platform access. */
-    void *dst,   /* Destination buffer. */
-    const void *src,  /* Source buffer. */
-    size_t n)   /* Number of bytes. */
+    void *dst, /* Destination buffer. */
+    const void *src, /* Source buffer. */
+    size_t n) /* Number of bytes. */
 {
     const Th8_Platform *pPlatform = Th8_GetPlatform(interp);
 
@@ -524,8 +524,8 @@ th8Memmove(
 int
 th8Strcmp(
     Th8_Interp *interp, /* Interpreter for platform access. */
-    const char *s1,  /* First string. */
-    const char *s2)  /* Second string. */
+    const char *s1, /* First string. */
+    const char *s2) /* Second string. */
 {
     const Th8_Platform *pPlatform = Th8_GetPlatform(interp);
 
@@ -564,8 +564,8 @@ th8Strcmp(
 char *
 th8Strchr(
     Th8_Interp *interp, /* Interpreter for platform access. */
-    const char *s,  /* String to search. */
-    int c)   /* Byte to find. */
+    const char *s, /* String to search. */
+    int c) /* Byte to find. */
 {
     const Th8_Platform *pPlatform = Th8_GetPlatform(interp);
 
@@ -606,8 +606,8 @@ th8Strchr(
 char *
 th8Strrchr(
     Th8_Interp *interp, /* Interpreter (unused; for API uniformity). */
-    const char *s,  /* String to search. */
-    int c)   /* Byte to find. */
+    const char *s, /* String to search. */
+    int c) /* Byte to find. */
 {
     const char *last = 0;
     (void)interp;
@@ -647,7 +647,7 @@ th8Strrchr(
 int
 th8Atoi(
     Th8_Interp *interp, /* Interpreter for platform access. */
-    const char *s)  /* String to convert. */
+    const char *s) /* String to convert. */
 {
     const Th8_Platform *pPlatform = Th8_GetPlatform(interp);
 
@@ -685,9 +685,9 @@ th8Atoi(
 void
 th8Qsort(
     Th8_Interp *interp, /* Interpreter for platform access. */
-    void *base,  /* Array base. */
-    size_t nmemb,  /* Number of elements. */
-    size_t size,  /* Element size. */
+    void *base, /* Array base. */
+    size_t nmemb, /* Number of elements. */
+    size_t size, /* Element size. */
     int (*cmp)(const void *, const void *))
 {
     const Th8_Platform *pPlatform = Th8_GetPlatform(interp);
@@ -729,10 +729,10 @@ th8Qsort(
 int
 th8Vsnprintf(
     Th8_Interp *interp, /* Interpreter for platform access. */
-    char *buf,   /* Output buffer. */
-    size_t size,  /* Buffer size. */
-    const char *fmt,  /* Format string. */
-    va_list ap)  /* Argument list. */
+    char *buf, /* Output buffer. */
+    size_t size, /* Buffer size. */
+    const char *fmt, /* Format string. */
+    va_list ap) /* Argument list. */
 {
     const Th8_Platform *pPlatform = Th8_GetPlatform(interp);
 
@@ -771,9 +771,9 @@ th8Vsnprintf(
 int
 th8Snprintf(
     Th8_Interp *interp, /* Interpreter for platform access. */
-    char *buf,   /* Output buffer. */
-    size_t size,  /* Buffer size. */
-    const char *fmt,  /* Format string. */
+    char *buf, /* Output buffer. */
+    size_t size, /* Buffer size. */
+    const char *fmt, /* Format string. */
     ...)
 {
     va_list ap;
@@ -816,8 +816,8 @@ th8Snprintf(
 
 static size_t
 th8TranslateCrLfToLf(
-    char *z,   /* Buffer to modify in-place. */
-    size_t n)   /* Current byte length. */
+    char *z, /* Buffer to modify in-place. */
+    size_t n) /* Current byte length. */
 {
     size_t r = 0; /* Read index. */
     size_t w = 0; /* Write index. */
@@ -869,8 +869,8 @@ th8TranslateCrLfToLf(
 
 int
 th8TranslateLineEndings(
-    char *zBuf,   /* Buffer to modify in-place. */
-    size_t *pnBuf)  /* IN/OUT: byte length. */
+    char *zBuf, /* Buffer to modify in-place. */
+    size_t *pnBuf) /* IN/OUT: byte length. */
 {
     size_t n = *pnBuf;
     size_t i;
@@ -928,9 +928,9 @@ th8TranslateLineEndings(
 int
 Th8_Input(
     Th8_Interp *interp, /* Interpreter. */
-    char **pzOut,  /* OUT: data buffer (caller frees). */
-    size_t *pnOut,  /* OUT: data length. */
-    int flags)   /* TH8_TRANSLATE_EOL or 0. */
+    char **pzOut, /* OUT: data buffer (caller frees). */
+    size_t *pnOut, /* OUT: data length. */
+    int flags) /* TH8_TRANSLATE_EOL or 0. */
 {
     const Th8_Platform *pPlatform;
     int rc;
@@ -996,9 +996,9 @@ Th8_Input(
 int
 Th8_Output(
     Th8_Interp *interp, /* Interpreter. */
-    const char *z,  /* Output string. */
-    size_t n,   /* Byte length. */
-    int flags)   /* TH8_TRANSLATE_EOL or 0. */
+    const char *z, /* Output string. */
+    size_t n, /* Byte length. */
+    int flags) /* TH8_TRANSLATE_EOL or 0. */
 {
     const Th8_Platform *pPlatform;
 
@@ -1082,8 +1082,8 @@ oom:
 int
 Th8_OutputError(
     Th8_Interp *interp, /* Interpreter. */
-    const char *z,  /* Output string. */
-    size_t n)   /* Byte length. */
+    const char *z, /* Output string. */
+    size_t n) /* Byte length. */
 {
     const Th8_Platform *pPlatform;
 
@@ -1374,9 +1374,9 @@ Th8_RedirectErrorOutput(Th8_Interp *interp, void *channel)
 int
 Th8_DataExists(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zName,  /* Data name to test. */
-    size_t nName,  /* Byte length (TH8_NOLEN = NUL). */
-    int *pAttrs)  /* OUT: file type attrs (may be NULL). */
+    const char *zName, /* Data name to test. */
+    size_t nName, /* Byte length (TH8_NOLEN = NUL). */
+    int *pAttrs) /* OUT: file type attrs (may be NULL). */
 {
     const Th8_Platform *pPlatform;
 
@@ -1421,8 +1421,8 @@ Th8_DataExists(
 char *
 Th8_NormalizePath(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zPath,  /* Path to normalize. */
-    size_t nPath)  /* Byte length (TH8_NOLEN = NUL). */
+    const char *zPath, /* Path to normalize. */
+    size_t nPath) /* Byte length (TH8_NOLEN = NUL). */
 {
     const Th8_Platform *pPlatform;
 
@@ -1753,11 +1753,11 @@ Th8_SameFile(
 int
 Th8_GetData(
     Th8_Interp *interp, /* Interpreter. */
-    const char *zName,  /* Opaque name. */
-    size_t nName,  /* Name length. */
-    char **pzOut,  /* OUT: data buffer (caller frees). */
-    size_t *pnOut,  /* OUT: data length. */
-    int flags)   /* TH8_TRANSLATE_EOL or 0. */
+    const char *zName, /* Opaque name. */
+    size_t nName, /* Name length. */
+    char **pzOut, /* OUT: data buffer (caller frees). */
+    size_t *pnOut, /* OUT: data length. */
+    int flags) /* TH8_TRANSLATE_EOL or 0. */
 {
     const Th8_Platform *pPlatform;
 
@@ -1860,7 +1860,7 @@ Th8_GetData(
 int
 Th8_GetTimeMs(
     Th8_Interp *interp, /* Interpreter. */
-    th8_int64_t *pMs)  /* OUT: milliseconds. */
+    th8_int64_t *pMs) /* OUT: milliseconds. */
 {
     const Th8_Platform *pPlatform;
 
@@ -1904,7 +1904,7 @@ Th8_GetTimeMs(
 int
 Th8_GetTimeUs(
     Th8_Interp *interp, /* Interpreter. */
-    th8_int64_t *pUs)  /* OUT: microseconds. */
+    th8_int64_t *pUs) /* OUT: microseconds. */
 {
     const Th8_Platform *pPlatform;
 
@@ -2120,7 +2120,7 @@ Th8_GetThreadId(Th8_Interp *interp) /* Interpreter. */
 char *
 Th8_GetEnv(
     Th8_Interp *interp, /* Interpreter (may be NULL). */
-    const char *zName)  /* Variable name. */
+    const char *zName) /* Variable name. */
 {
     const Th8_Platform *p = interp ? Th8_GetPlatform(interp) : NULL;
 
@@ -2183,11 +2183,11 @@ Th8_GetEnv(
 int
 Th8_KeyValue(
     Th8_Interp *interp, /* Interpreter (may be NULL). */
-    int op,   /* TH8_KV_* operation code. */
-    const char *zName,  /* Key name (or glob pattern). */
-    size_t nName,  /* Length of zName. */
-    const char *zValue,  /* Value (SET only; NULL otherwise). */
-    size_t nValue)  /* Length of zValue. */
+    int op, /* TH8_KV_* operation code. */
+    const char *zName, /* Key name (or glob pattern). */
+    size_t nName, /* Length of zName. */
+    const char *zValue, /* Value (SET only; NULL otherwise). */
+    size_t nValue) /* Length of zValue. */
 {
     const Th8_Platform *p = interp ? Th8_GetPlatform(interp) : NULL;
 
@@ -2249,8 +2249,8 @@ Th8_KeyValue(
 int
 Th8_RandomBytes(
     Th8_Interp *interp, /* Interpreter. */
-    void *pBuf,   /* Output buffer. */
-    size_t nByte)  /* Number of bytes to fill. */
+    void *pBuf, /* Output buffer. */
+    size_t nByte) /* Number of bytes to fill. */
 {
     const Th8_Platform *pPlatform;
 
@@ -2278,6 +2278,15 @@ Th8_RandomBytes(
  *	Th8_DnsResolve returns TH8_ERROR -- the caller is
  *	expected to fall back to a non-pinned resolution path or
  *	fail closed.
+ *
+ * Why / How:
+ *	DNS resolution is platform-specific and, for the DNSSEC-
+ *	validating path, may need a resolver library the core does
+ *	not link directly; routing through the xDnsResolve platform
+ *	callback keeps that policy in one place.  This wrapper only
+ *	null-checks its inputs, clears *ppResult, and dispatches --
+ *	the guards are split into separate ifs (Finding 005) so each
+ *	is independently MC/DC-reachable.
  *
  * Results:
  *	TH8_OK on success (check pResult->bogus for DNSSEC
@@ -2327,13 +2336,21 @@ Th8_DnsResolve(
  *	per FINDINGS.md Finding 005 sec. 5b so each guard's
  *	MC/DC C-pair is independently reachable.
  *
+ * Why / How:
+ *	A Th8_DnsResult is allocated by the platform's resolver, so it
+ *	must be released by that same platform's allocator; freeing it
+ *	from the core could cross allocator boundaries.  This routes
+ *	the teardown back through xDnsResolveFree, guarding against a
+ *	NULL interp/result or a platform that supplies no free
+ *	callback (in which case it simply does nothing).
+ *
  * Parameters:
  *	interp  -- live interpreter.
  *	pResult -- result returned by `Th8_DnsResolve`, or
  *		NULL.
  *
- * Returns:
- *	None.
+ * Results:
+ *	None (void).
  *
  * Side effects:
  *	Frees every resource owned by the result via the
@@ -2759,7 +2776,7 @@ Th8_Int64CmpXchg(
 
 int
 Th8_Pledge(
-    Th8_Interp *interp,  /* Interpreter (reserved). */
+    Th8_Interp *interp, /* Interpreter (reserved). */
     const char *zPromises, /* Pledge promises string. */
     const char *zExecPromises) /* Exec promises (or NULL). */
 {
@@ -2804,8 +2821,8 @@ Th8_Pledge(
 
 int
 Th8_Unveil(
-    Th8_Interp *interp,  /* Interpreter (reserved). */
-    const char *zPath,  /* Path to reveal (NULL to lock). */
+    Th8_Interp *interp, /* Interpreter (reserved). */
+    const char *zPath, /* Path to reveal (NULL to lock). */
     const char *zPermissions) /* "r", "w", "x", "c" (NULL to lock). */
 {
     (void)interp;

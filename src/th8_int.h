@@ -91,6 +91,40 @@ TH8_INTERNAL void th8MiHeapDone(void);
 #endif
 
 /*
+ * th8MallocCommon --
+ *	The single limit-checked, zero-filled, accounted allocation core
+ *	behind Th8_Malloc / Th8_AttemptMalloc / Th8_SafeAlloc.  Exposed so the
+ *	built-in xNeedMemory second-chance callback (th8_mem.c) can delegate to
+ *	it and thereby share ONE owner for the per-interpreter memory-limit
+ *	check and nAllocBytes/nAllocPeak accounting (TH8K-023).  It does NOT
+ *	itself invoke xNeedMemory, so a callback calling it cannot recurse.
+ */
+TH8_INTERNAL void *th8MallocCommon(
+    Th8_Interp *interp,
+    size_t nByte,
+    int bPanic,
+    const char *zFile,
+    int nLine);
+
+#if defined(TH8_ENABLE_CRYPTOGRAPHY)
+/*
+ * th8VerifyAnchorSig (th8_time.c) -- verify a DNS trust-anchor file's raw
+ * bytes against its detached ".b64sig" using a compiled-in trusted key
+ * (keyRoot, or keyTest in ENABLE_TEST_KEY builds).  Called by the libunbound
+ * integration to authenticate a TH8-DOMAIN anchor (the bundled module-adjacent
+ * root.key, or a TH8_DNS_ROOT_KEY file) before it is handed to the validator.
+ * The caller reads both files RAW (not via the signed-only policy) and passes
+ * the bytes; this routine owns only its own temporary buffers.
+ */
+TH8_INTERNAL int th8VerifyAnchorSig(
+    Th8_Interp *interp,
+    const char *zAnchor,
+    size_t nAnchor,
+    const char *zSig,
+    size_t nSig);
+#endif
+
+/*
  * NOTE: This is the flag set by Th8_EvalTrusted to signal to the
  *       policy callback(s) that the script is implicitly trusted
  *       by the embedder.  It should be noted that this only works
@@ -98,6 +132,24 @@ TH8_INTERNAL void th8MiHeapDone(void);
  */
 
 #define TH8_EVAL_TRUSTED ((int)0x01)
+
+/*
+ * TH8_CR_CANCELED --
+ *
+ *	The "canceled" bit in interp->nCancelReq (TH8K-008).  A cancellation
+ *	request is one atomic word = TH8_CR_CANCELED | (flags & (UNWIND|SIGNAL)),
+ *	OR-published by any thread.  The bit is chosen ABOVE the public cancel
+ *	flag bits (TH8_CANCEL_UNWIND=0x01, TH8_CANCEL_SIGNAL=0x02) so the flags
+ *	can ride in the same word without colliding.
+ */
+#define TH8_CR_CANCELED ((int)0x100)
+
+/*
+ * TH8_CANCEL_FLAG_MASK --
+ *
+ *	The request-flag bits carried alongside TH8_CR_CANCELED in nCancelReq.
+ */
+#define TH8_CANCEL_FLAG_MASK ((int)(TH8_CANCEL_UNWIND | TH8_CANCEL_SIGNAL))
 
 /*
  * TH8_ASSERT_RAW_LEN(n) --
@@ -529,7 +581,13 @@ TH8_INTERNAL int th8IsBinDig(int c);
 void th8CleanupPackages(Th8_Interp *interp);
 #endif
 #if defined(TH8_ENABLE_EXPRESSIONS)
-void th8RegisterMathFuncs(Th8_Interp *interp);
+int th8RegisterMathFuncs(Th8_Interp *interp);
+/* Named command subsets (TH8K-025): resolve/register one built-in math function
+ * by name.  th8FindMathFunc is a pure lookup (1/0); th8RegisterOneMathFunc
+ * registers a found name (no-op if unknown), TH8_ERROR on OOM. */
+int th8FindMathFunc(Th8_Interp *interp, const char *zName, size_t nName);
+int
+th8RegisterOneMathFunc(Th8_Interp *interp, const char *zName, size_t nName);
 #endif
 
 /*
@@ -591,7 +649,7 @@ int th8NextCommand(Th8_Interp *interp, const char *z, size_t n, size_t *pLen);
 #  elif defined(__GNUC__) || defined(__clang__)
 #    define TH8_THREAD_LOCAL __thread
 #  else
-#    define TH8_THREAD_LOCAL  /* fallback: no TLS */
+#    define TH8_THREAD_LOCAL /* fallback: no TLS */
 #  endif
 #endif
 
@@ -651,6 +709,14 @@ void th8BigintDestroy(Th8_Interp *interp, Th8_Bigint *pBigint);
  */
 void th8BigintSetup(Th8_Interp *interp);
 void th8BigintTeardown(void);
+
+/*
+ * th8ScanBignum (th8_bigint.c) -- parse a signed, optionally radix-prefixed
+ * integer string as an arbitrary-precision value and set the interpreter
+ * result to its decimal form.  Used by the `scan` command's `ll` size
+ * modifier (BigInt storage).
+ */
+int th8ScanBignum(Th8_Interp *interp, const char *zStr, size_t n);
 #endif
 
 /*
@@ -667,10 +733,10 @@ void th8BigintTeardown(void);
 
 typedef struct Th8_CacheEntry Th8_CacheEntry;
 struct Th8_CacheEntry {
-    int cacheType;  /* TH8_CACHE_* that was requested. */
-    char *zOriginal;  /* Copy of original input (owned). */
-    size_t nOriginal;  /* Byte length of zOriginal. */
-    Th8_Value value;  /* The cached value (inline). */
+    int cacheType; /* TH8_CACHE_* that was requested. */
+    char *zOriginal; /* Copy of original input (owned). */
+    size_t nOriginal; /* Byte length of zOriginal. */
+    Th8_Value value; /* The cached value (inline). */
     /*
      * For TH8_CACHE_LIST: the split-list result in Th8_SplitList
      * format so callers can borrow it directly.
@@ -681,9 +747,9 @@ struct Th8_CacheEntry {
      * outside the union so that they survive when a different
      * union member is active.  Owned by the cache entry.
      */
-    char **azListElem;  /* Element string pointers (owned). */
-    size_t *anListElem;  /* Element byte lengths. */
-    int nListElem;  /* Number of elements. */
+    char **azListElem; /* Element string pointers (owned). */
+    size_t *anListElem; /* Element byte lengths. */
+    int nListElem; /* Number of elements. */
 };
 
 /*
@@ -757,33 +823,40 @@ int th8ResolveNsPattern(
 typedef struct Th8_Namespace Th8_Namespace;
 #endif
 struct Th8_Namespace {
-    char *zName;  /* Fully qualified name including the
+    char *zName; /* Fully qualified name including the
 				 * leading "::" (e.g. "::foo::bar").
 				 * For the global namespace, zName is
 				 * "::".  Owned; freed by
 				 * th8FreeNamespace. */
-    size_t nName;  /* Byte length of zName (not including
+    size_t nName; /* Byte length of zName (not including
 				 * the NUL terminator). */
     Th8_Namespace *pParent; /* Parent namespace in the tree.
 				 * NULL only for the global namespace. */
-    Th8_Hash *paChild;  /* Child namespaces (simple tail name
+    int nDepth; /* Nesting depth (global = 0, each child =
+				 * parent + 1).  Bounded at creation by
+				 * TH8_MX_NS_DEPTH so the recursive
+				 * th8FreeNamespace teardown cannot
+				 * overflow the native stack (TH8K-011). */
+    Th8_Hash *paChild; /* Child namespaces (simple tail name
 				 * -> Th8_Namespace*).  Created eagerly
 				 * when the namespace is created. */
-    Th8_Hash *paCmd;  /* Commands in this namespace (simple
+    Th8_Hash *paCmd; /* Commands in this namespace (simple
 				 * name -> Th8_Command*). */
 #if defined(TH8_ENABLE_VARIABLES)
-    Th8_Hash *paVar;  /* Namespace-scoped variables (simple
+    Th8_Hash *paVar; /* Namespace-scoped variables (simple
 				 * name -> Th8_Variable*).
 				 * FUTURE: integrate with frame vars. */
 #endif
-    char *zExport;  /* Space-separated list of export
+    char *zExport; /* Space-separated list of export
 				 * glob patterns, or NULL if none.
 				 * Set by [namespace export]. */
-    size_t nExport;  /* Byte length of zExport. */
+    size_t nExport; /* Byte length of zExport. */
     Th8_Hash *paExpansion; /* Expansion operators: tag name ->
 				 * Th8_ExpansionEntry*.  NULL until
 				 * the first operator is registered
 				 * in this namespace. */
+    Th8_Namespace *pPendingNext; /* Intrusive deferred-delete FIFO link
+				 * (TH8K-007); NULL unless queued. */
 };
 
 Th8_Namespace *th8FindNamespace(
@@ -791,6 +864,22 @@ Th8_Namespace *th8FindNamespace(
     const char *zName,
     size_t nName,
     int bCreate);
+
+/*
+ * th8CommandSubCommands returns a command's per-interpreter sub-command hash
+ * (name -> Th8_SubCmd), or NULL if the command is unknown or is not an
+ * ensemble.  Used by [info subcommands] so introspection enumerates exactly
+ * what the evaluator dispatches (never a stale static catalogue).
+ */
+Th8_Hash *
+th8CommandSubCommands(Th8_Interp *interp, const char *zName, size_t nName);
+
+/*
+ * th8CommandExists is a silent presence check (sets no result): 1 if a command
+ * named zName is registered, else 0.  Used by named command subsets to avoid
+ * re-registering a command (which would replace and wipe an ensemble).
+ */
+int th8CommandExists(Th8_Interp *interp, const char *zName, size_t nName);
 
 /*
  * Secure variable hooks (defined in crypto/th8_secure.c).
@@ -805,18 +894,18 @@ Th8_Namespace *th8FindNamespace(
 #if defined(TH8_PLUGIN_PROCEDURES)
 typedef struct Th8_ProcDefn Th8_ProcDefn;
 struct Th8_ProcDefn {
-    int nParam;   /* Number of formal params (not args) */
-    char **azParam;  /* Parameter names */
-    size_t *anParam;  /* Parameter name lengths */
-    char **azDefault;  /* Default values (NULL = required) */
-    size_t *anDefault;  /* Default value lengths */
-    int hasArgs;  /* True if last param is "args" */
-    char *zProgram;  /* Proc body */
-    size_t nProgram;  /* Body length */
-    char *zUsage;  /* Usage message (separate allocation) */
-    size_t nUsage;  /* Usage message length */
-    size_t nAllocSize;  /* Total size of this allocation block. */
-    void *pDefNs;  /* Defining namespace (Th8_Namespace*). */
+    int nParam; /* Number of formal params (not args) */
+    char **azParam; /* Parameter names */
+    size_t *anParam; /* Parameter name lengths */
+    char **azDefault; /* Default values (NULL = required) */
+    size_t *anDefault; /* Default value lengths */
+    int hasArgs; /* True if last param is "args" */
+    char *zProgram; /* Proc body */
+    size_t nProgram; /* Body length */
+    char *zUsage; /* Usage message (separate allocation) */
+    size_t nUsage; /* Usage message length */
+    size_t nAllocSize; /* Total size of this allocation block. */
+    void *pDefNs; /* Defining namespace (Th8_Namespace*). */
 };
 int th8ProcCall1(Th8_Interp *, void *, int, const char **, size_t *);
 int th8NprocCall1(Th8_Interp *, void *, int, const char **, size_t *);
@@ -866,13 +955,25 @@ extern const Th8_SubCommand *th8_package_aSub;
 
 typedef struct Th8_PkgInfo Th8_PkgInfo;
 struct Th8_PkgInfo {
-    char *zVersion;  /* Provided version (or NULL) */
+    char *zVersion; /* Provided version (or NULL) */
     size_t nVersion;
     Th8_Hash *paIfNeeded; /* Version -> ifneeded script hash */
 };
 #endif
 #if defined(TH8_PLUGIN_STRINGS)
 extern const Th8_SubCommand *th8_string_aSub;
+#endif
+#if defined(TH8_PLUGIN_MANAGEMENT)
+extern const Th8_SubCommand *th8_interp_aSub;
+#endif
+#if defined(TH8_PLUGIN_BINARY)
+extern const Th8_SubCommand *th8_binary_aSub;
+#endif
+#if defined(TH8_PLUGIN_LISTS)
+extern const Th8_SubCommand *th8_dict_aSub;
+#endif
+#if defined(TH8_PLUGIN_TIMEKEEPING)
+extern const Th8_SubCommand *th8_clock_aSub;
 #endif
 
 #if defined(TH8_ENABLE_CRYPTOGRAPHY)
@@ -1294,6 +1395,13 @@ TH8_INTERNAL void th8TestRsaKeyRestorePubBlob(
     Th8_RsaKey *pKey,
     unsigned char *pSavedBlob,
     size_t nSaved);
+TH8_INTERNAL int th8RsaSignRawBlock(
+    Th8_Interp *interp,
+    const Th8_RsaKey *pKey,
+    const unsigned char *zBlock,
+    size_t nBlock,
+    unsigned char **ppSig,
+    size_t *pnSig);
 #endif
 
 /*
@@ -1416,6 +1524,7 @@ TH8_INTERNAL int th8NtpQuery(
     int timeoutMs,
     int maxDisagreeSec,
     int attempts,
+    int bRequireSecure,
     th8_int64_t *pEpochSec);
 /*
  * Validate a received NTP packet (const void * = 48-byte

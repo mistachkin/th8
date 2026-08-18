@@ -248,6 +248,14 @@ static Th8_Platform th8UnwindPlatformData = {
  *	xStackBackTrace on GCC/Clang targets that lack a native OS stack
  *	walk.  Not part of the public platform-getter surface.
  *
+ * Why / How:
+ *	Returns the address of a single file-scope Th8_Platform table
+ *	(th8UnwindPlatformData) whose only populated slot is the
+ *	stack-backtrace callback; all other slots are zero so that a
+ *	merge overrides nothing else.  Returning a pointer to static
+ *	storage means there is no allocation and the table lives for the
+ *	life of the process.
+ *
  * Results:
  *	Pointer to a static Th8_Platform struct.
  *

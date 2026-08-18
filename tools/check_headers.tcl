@@ -315,9 +315,9 @@ proc header_end_index {lines rettypeIdx} {
 #
 ###############################################################################
 
-proc banner_names_function {lines lineIdx name} {
+proc banner_marker_index {lines lineIdx name} {
   set i [header_end_index $lines $lineIdx]
-  if {$i < 0} then { return 0 }
+  if {$i < 0} then { return -1 }
   # Walk up to the start of this comment block ("/*"), checking each line
   # for the banner naming this function.  An optional parenthetical
   # qualifier is allowed after the name -- the project's convention for a
@@ -326,14 +326,107 @@ proc banner_names_function {lines lineIdx name} {
   while {$i >= 0} {
     set line [lindex $lines $i]
     if {[regexp $re $line]} then {
-      return 1
+      return $i
     }
     if {[regexp {/\*} $line]} then {
-      return 0
+      return -1
     }
     incr i -1
   }
+  return -1
+}
+
+
+###############################################################################
+#
+# banner_names_function --
+#
+#     Return 1 if the header block preceding the definition contains a
+#     `* <name> --` banner line for exactly this function, else 0.
+#
+###############################################################################
+
+proc banner_names_function {lines lineIdx name} {
+  return [expr {[banner_marker_index $lines $lineIdx $name] >= 0}]
+}
+
+
+###############################################################################
+#
+# banner_has_content --
+#
+#     Given the line index of a `* <name> --` banner marker, return 1 if the
+#     banner carries descriptive prose (any non-blank, non-separator comment
+#     line before the block closes with `*/`), else 0.  A SKELETON banner --
+#     just the marker line framed by rule separators, with no description,
+#     Why/How, Results, or Side effects -- returns 0.  This is what turns the
+#     gate from "a banner exists" into "a banner documents the function":
+#     check_headers formerly accepted an empty `* Name --` marker (e.g.
+#     Th8_RegisterPlugin), which passed presence but documented nothing.
+#
+###############################################################################
+
+proc banner_has_content {lines markerIdx} {
+  # (a) A one-line banner carries its description on the marker line itself,
+  # after the "--" (e.g. "* foo -- does the thing.").  Accept that.
+  if {[regexp -- {--\s*(\S.*)$} [lindex $lines $markerIdx] -> tail]} then {
+    if {[string trim $tail] ne ""} then { return 1 }
+  }
+  # (b) Otherwise require a following comment line with real prose before the
+  # block closes.
+  set n [llength $lines]
+  for {set j [expr {$markerIdx + 1}]} {$j < $n} {incr j} {
+    set line [lindex $lines $j]
+    if {[regexp {\*/} $line]} then { return 0 }
+    # Strip a leading " *" comment prefix, then any surrounding whitespace.
+    set body $line
+    regsub {^\s*\*} $body "" body
+    set body [string trim $body]
+    if {$body eq ""} then { continue }
+    # A rule separator (---- ... ----) is framing, not content.
+    if {[regexp {^-+$} $body]} then { continue }
+    return 1
+  }
   return 0
+}
+
+
+###############################################################################
+#
+# banner_missing_sections --
+#
+#     Given the marker index of a `* <name> --` banner, return the list of
+#     REQUIRED TH8 banner sections that are absent from the block.  The TH8
+#     convention (Tcl/Tk-derived) is a description followed by, each on its own
+#     `* Section:` line, "Why / How", "Results", and "Side effects".  The
+#     description is handled by banner_has_content; this checks the three named
+#     sections.  A one-line banner (`* foo -- does X.`) has none of them and so
+#     returns all three.  Only consulted when section enforcement is enabled.
+#
+###############################################################################
+
+proc banner_missing_sections {lines markerIdx} {
+  set required [list "Why / How" "Results" "Side effects"]
+  set seen [dict create]
+  foreach r $required { dict set seen $r 0 }
+  set n [llength $lines]
+  for {set j [expr {$markerIdx + 1}]} {$j < $n} {incr j} {
+    set line [lindex $lines $j]
+    if {[regexp {\*/} $line]} then { break }
+    set body $line
+    regsub {^\s*\*\s?} $body "" body
+    set body [string trimleft $body]
+    foreach r $required {
+      if {[string match "${r}:*" $body] || [string match "${r} :*" $body]} then {
+        dict set seen $r 1
+      }
+    }
+  }
+  set missing [list]
+  foreach r $required {
+    if {![dict get $seen $r]} then { lappend missing $r }
+  }
+  return $missing
 }
 
 
@@ -373,9 +466,24 @@ proc check_file {path} {
     if {![looks_like_return_type [lindex $lines $p]]} then { continue }
     # Must be a DEFINITION (body follows), not a declaration (semicolon).
     if {![is_definition $lines $i]} then { continue }
-    # It is a definition; require its banner.
+    # It is a definition; require its banner AND that the banner has content.
     incr checked
-    if {[banner_names_function $lines $p $name]} then { continue }
+    set markerIdx [banner_marker_index $lines $p $name]
+    set problem ""
+    if {$markerIdx < 0} then {
+      set problem [format {has no '%s --' header banner} $name]
+    } elseif {![banner_has_content $lines $markerIdx]} then {
+      set problem [format \
+          {has an EMPTY '%s --' header banner (no description/Why/Results)} \
+          $name]
+    } elseif {$::REQUIRE_SECTIONS} then {
+      set missing [banner_missing_sections $lines $markerIdx]
+      if {[llength $missing] == 0} then { continue }
+      set problem [format {is missing required banner section(s): %s} \
+          [join $missing {; }]]
+    } else {
+      continue
+    }
     # Escape valve: a `CHECK-HEADERS-OK` marker on the return-type line or
     # the two lines above it waives a case the parser cannot see through
     # (documented, like audit_patterns.tcl's AUDIT-OK).
@@ -388,8 +496,7 @@ proc check_file {path} {
     }
     if {$suppressed} then { continue }
     lappend ::violations \
-        [format {%s:%d: function '%s' has no '%s --' header banner} \
-            $path [expr {$i + 1}] $name $name]
+        [format {%s:%d: function '%s' %s} $path [expr {$i + 1}] $name $problem]
   }
   return $checked
 }
@@ -402,6 +509,13 @@ proc check_file {path} {
 ###############################################################################
 
 set ::violations [list]
+
+# Section enforcement: require every banner to carry the standard TH8 sections
+# (Why / How, Results, Side effects), not just a name + description.  The whole
+# tree was brought to 0 violations on 2026-08-11, so this is now ON BY DEFAULT
+# in the audit gate.  Set CHECK_HEADERS_NO_SECTIONS to fall back to the
+# content-only check (escape valve for a future transition, not routine use).
+set ::REQUIRE_SECTIONS [expr {![info exists ::env(CHECK_HEADERS_NO_SECTIONS)]}]
 
 set fileArgs [list]
 foreach a $argv {

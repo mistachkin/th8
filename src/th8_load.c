@@ -191,6 +191,23 @@ struct Th8_LoadedLib {
  *	If there is no ':', the whole string is the library and the
  *	symbol is empty.
  *
+ * Why / How:
+ *	Load names carry both the shared-library path and an optional
+ *	entry-point symbol separated by a colon; every consumer that
+ *	must reason about the two parts (matching, canonicalizing)
+ *	needs them split identically, so the scan-to-first-colon logic
+ *	is centralized here.  The output pointers alias into zName (no
+ *	copy is made); the empty-symbol case points just past the end
+ *	of the string with a length of 0.
+ *
+ * Results:
+ *	None (void).  On return *pzLib and *pnLib describe the library
+ *	portion and *pzSym and *pnSym the symbol portion, both
+ *	aliasing the input buffer.
+ *
+ * Side effects:
+ *	None.  Only the caller-supplied output pointers are written.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -237,6 +254,23 @@ th8SplitLoadName(
  *	when a file cannot be stat'd (e.g. removed between load and
  *	unload, or no xSameFile callback).
  *
+ * Why / How:
+ *	Th8_Unload must find the tracking entry created at load time
+ *	even when the caller supplies a different-but-equivalent path
+ *	(symlink, ./ prefix, relative vs absolute).  Both names are
+ *	split into library/symbol; the symbols must be byte-equal, and
+ *	the library parts match either by a fast byte-identical
+ *	comparison or, failing that, by Th8_SameFile's (st_dev,
+ *	st_ino) physical-file identity check.
+ *
+ * Results:
+ *	1 if the two load names denote the same tracked library; 0
+ *	otherwise.
+ *
+ * Side effects:
+ *	None.  May invoke the platform xSameFile callback (which
+ *	stat()s the two paths) but changes no interpreter state.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -278,6 +312,25 @@ th8LoadNameMatch(
  *	xGetRealPath, file missing, or buffer too small) the original
  *	name is used unchanged.  Sets *pzOut and *pnOut to either zBuf
  *	or the original zName.
+ *
+ * Why / How:
+ *	So that a library is tracked under one stable identity no
+ *	matter which alias first loaded it, the library portion is run
+ *	through Th8_GetRealPath and the "<real>:symbol" string is
+ *	rebuilt in the caller's zBuf.  Canonicalization is best-effort:
+ *	if the real path cannot be obtained or would not fit in zBuf,
+ *	the untouched original name is handed back so loading still
+ *	proceeds.
+ *
+ * Results:
+ *	None (void).  *pzOut and *pnOut point at either the
+ *	canonicalized string in zBuf or, on any failure, the original
+ *	zName.
+ *
+ * Side effects:
+ *	May write the canonical "<real>:symbol" string into zBuf.  May
+ *	invoke the platform xGetRealPath callback (which resolves the
+ *	path on disk).  Changes no interpreter state.
  *
  *----------------------------------------------------------------------
  */
@@ -1000,12 +1053,20 @@ Th8_SetPreLoadCallback(
  *	can drive the gate from C without going through the
  *	public enable / disable wrappers.
  *
+ * Why / How:
+ *	`[load]` is gated by a pair of random-token fields; the gate
+ *	is "open" only when the two fields agree.  Applying the same
+ *	mask to `nLoadToken` here and to `nLoadOk` in th8_core.c flips
+ *	the gate between the enabled and disabled states without
+ *	storing a plaintext boolean an attacker could patch.  A plain
+ *	XOR is used so the operation is its own inverse.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	mask   -- XOR mask to apply.
  *
- * Returns:
- *	None.
+ * Results:
+ *	None (void).
  *
  * Side effects:
  *	Mutates `interp->nLoadToken`.
@@ -1034,12 +1095,19 @@ th8XorInterpLoadToken(Th8_Interp *interp, th8_int64_t mask)
  *	library can drive the gate from C without going
  *	through the public enable / disable wrappers.
  *
+ * Why / How:
+ *	`[unload]` uses the same dual-field random-token gate as
+ *	`[load]`; applying the same mask to `nUnloadToken` here and to
+ *	`nUnloadOk` in th8_core.c toggles the gate between enabled and
+ *	disabled without a patchable plaintext boolean.  XOR is used so
+ *	the operation is its own inverse.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	mask   -- XOR mask to apply.
  *
- * Returns:
- *	None.
+ * Results:
+ *	None (void).
  *
  * Side effects:
  *	Mutates `interp->nUnloadToken`.
@@ -1068,11 +1136,17 @@ th8XorInterpUnloadToken(Th8_Interp *interp, th8_int64_t mask)
  *	callers should use `Th8_EnableUnload` /
  *	`Th8_DisableUnload`.
  *
+ * Why / How:
+ *	Test vectors need each run to start from a known unload-mode
+ *	state; clearing the whole `nUnloadFlags` mask in one store
+ *	withdraws every previously granted flag at once, which is
+ *	simpler and more reliable than clearing them individually.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *
- * Returns:
- *	None.
+ * Results:
+ *	None (void).
  *
  * Side effects:
  *	Zeros `interp->nUnloadFlags`.

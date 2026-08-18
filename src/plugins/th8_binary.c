@@ -99,11 +99,18 @@
  *	write, so byte order does not apply; provided for
  *	symmetry with the multi-byte writers.
  *
+ * Why / How:
+ *	Low-level byte-store primitive that the integer format
+ *	path (`th8BinaryWriteInt`) dispatches to for 1-byte
+ *	specifiers.  Masks `v` to its low 8 bits and stores it;
+ *	one of the family of fixed-width store helpers that keep
+ *	the dispatcher straight-line.
+ *
  * Parameters:
  *	p -- one-byte output buffer (caller guarantees space).
  *	v -- source value; only the low 8 bits are used.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -126,11 +133,18 @@ th8BinaryWriteU8(unsigned char *p, th8_uint64_t v)
  *	little-endian byte order (least-significant byte
  *	first).  Straight-line shifts; no branches.
  *
+ * Why / How:
+ *	Byte-store primitive for the 2-byte little-endian
+ *	integer specifiers (`s`, and `t` on little-endian
+ *	hosts).  Emitting bytes low-to-high with explicit
+ *	shifts makes the on-wire layout independent of the host
+ *	byte order.
+ *
  * Parameters:
  *	p -- two-byte output buffer (caller guarantees space).
  *	v -- source value; only the low 16 bits are used.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -154,11 +168,17 @@ th8BinaryWriteU16Le(unsigned char *p, th8_uint64_t v)
  *	big-endian byte order (most-significant byte first).
  *	Straight-line shifts; no branches.
  *
+ * Why / How:
+ *	Byte-store primitive for the 2-byte big-endian integer
+ *	specifier (`S`).  Emitting the most-significant byte
+ *	first with explicit shifts makes the on-wire layout
+ *	independent of the host byte order.
+ *
  * Parameters:
  *	p -- two-byte output buffer (caller guarantees space).
  *	v -- source value; only the low 16 bits are used.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -181,11 +201,18 @@ th8BinaryWriteU16Be(unsigned char *p, th8_uint64_t v)
  *	Store the low 32 bits of `v` to `p[0..3]` in
  *	little-endian byte order.  Straight-line shifts.
  *
+ * Why / How:
+ *	Byte-store primitive for the 4-byte little-endian
+ *	integer specifiers (`i`, and `n` on little-endian
+ *	hosts) and the little-endian single-precision float
+ *	writer.  Explicit shifts keep the layout host-order
+ *	independent.
+ *
  * Parameters:
  *	p -- four-byte output buffer.
  *	v -- source value; only the low 32 bits are used.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -210,11 +237,17 @@ th8BinaryWriteU32Le(unsigned char *p, th8_uint64_t v)
  *	Store the low 32 bits of `v` to `p[0..3]` in
  *	big-endian byte order.  Straight-line shifts.
  *
+ * Why / How:
+ *	Byte-store primitive for the 4-byte big-endian integer
+ *	specifier (`I`) and the big-endian single-precision
+ *	float writer.  Explicit shifts keep the layout host-order
+ *	independent.
+ *
  * Parameters:
  *	p -- four-byte output buffer.
  *	v -- source value; only the low 32 bits are used.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -239,11 +272,18 @@ th8BinaryWriteU32Be(unsigned char *p, th8_uint64_t v)
  *	Store all 64 bits of `v` to `p[0..7]` in little-endian
  *	byte order.  Straight-line shifts.
  *
+ * Why / How:
+ *	Byte-store primitive for the 8-byte little-endian
+ *	integer specifiers (`w`, and `m` on little-endian
+ *	hosts) and the little-endian double-precision float
+ *	writer.  Explicit shifts keep the layout host-order
+ *	independent.
+ *
  * Parameters:
  *	p -- eight-byte output buffer.
  *	v -- source value.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -272,11 +312,17 @@ th8BinaryWriteU64Le(unsigned char *p, th8_uint64_t v)
  *	Store all 64 bits of `v` to `p[0..7]` in big-endian
  *	byte order.  Straight-line shifts.
  *
+ * Why / How:
+ *	Byte-store primitive for the 8-byte big-endian integer
+ *	specifier (`W`) and the big-endian double-precision
+ *	float writer.  Explicit shifts keep the layout host-order
+ *	independent.
+ *
  * Parameters:
  *	p -- eight-byte output buffer.
  *	v -- source value.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -306,10 +352,17 @@ th8BinaryWriteU64Be(unsigned char *p, th8_uint64_t v)
  *	`th8_int64_t`.  Single-byte access; endianness does not
  *	apply.
  *
+ * Why / How:
+ *	Byte-load primitive that the integer scan path
+ *	(`th8BinaryReadInt`) dispatches to for 1-byte specifiers
+ *	(`c`).  Casting through `signed char` performs the sign
+ *	extension the wider readers get from the shared
+ *	`th8BinarySignExtend*` helpers.
+ *
  * Parameters:
  *	p -- one-byte input buffer.
  *
- * Returns:
+ * Results:
  *	`p[0]` interpreted as a `signed char`, widened to
  *	`th8_int64_t` with sign preserved.
  *
@@ -334,10 +387,18 @@ th8BinaryReadI8(const unsigned char *p)
  *	little-endian and big-endian 16-bit signed readers to
  *	share their sign-extension logic.
  *
+ * Why / How:
+ *	Factoring the sign-extension out of `th8BinaryReadI16Le`
+ *	and `th8BinaryReadI16Be` keeps those readers to a single
+ *	byte-assembly expression each.  Testing bit 15 and
+ *	OR-ing in the high bits performs a portable arithmetic
+ *	extension without relying on implementation-defined
+ *	signed-shift behaviour.
+ *
  * Parameters:
  *	u -- input value; only the low 16 bits are inspected.
  *
- * Returns:
+ * Results:
  *	Sign-extended `th8_int64_t`: `(int16_t)(u & 0xFFFF)`
  *	widened to 64 bits with sign preserved.
  *
@@ -363,10 +424,18 @@ th8BinarySignExtend16(th8_uint64_t u)
  *	32-bit value to a 64-bit signed integer.  Shared by
  *	the LE/BE 32-bit signed readers.
  *
+ * Why / How:
+ *	Factoring the sign-extension out of `th8BinaryReadI32Le`
+ *	and `th8BinaryReadI32Be` keeps those readers to a single
+ *	byte-assembly expression each.  Testing bit 31 and
+ *	OR-ing in the high bits performs a portable arithmetic
+ *	extension without relying on implementation-defined
+ *	signed-shift behaviour.
+ *
  * Parameters:
  *	u -- input value; only the low 32 bits are inspected.
  *
- * Returns:
+ * Results:
  *	Sign-extended `th8_int64_t`.
  *
  * Side effects:
@@ -391,10 +460,16 @@ th8BinarySignExtend32(th8_uint64_t u)
  *	signed 16-bit value and sign-extend to 64 bits via
  *	`th8BinarySignExtend16`.
  *
+ * Why / How:
+ *	Byte-load primitive for the 2-byte little-endian integer
+ *	specifiers (`s`, and `t` on little-endian hosts).
+ *	Assembles the value low-byte-first, then delegates sign
+ *	extension to the shared helper.
+ *
  * Parameters:
  *	p -- two-byte input buffer.
  *
- * Returns:
+ * Results:
  *	Sign-extended `th8_int64_t`.
  *
  * Side effects:
@@ -418,10 +493,15 @@ th8BinaryReadI16Le(const unsigned char *p)
  *	16-bit value and sign-extend to 64 bits via
  *	`th8BinarySignExtend16`.
  *
+ * Why / How:
+ *	Byte-load primitive for the 2-byte big-endian integer
+ *	specifier (`S`).  Assembles the value high-byte-first,
+ *	then delegates sign extension to the shared helper.
+ *
  * Parameters:
  *	p -- two-byte input buffer.
  *
- * Returns:
+ * Results:
  *	Sign-extended `th8_int64_t`.
  *
  * Side effects:
@@ -445,10 +525,16 @@ th8BinaryReadI16Be(const unsigned char *p)
  *	signed 32-bit value and sign-extend to 64 bits via
  *	`th8BinarySignExtend32`.
  *
+ * Why / How:
+ *	Byte-load primitive for the 4-byte little-endian integer
+ *	specifiers (`i`, and `n` on little-endian hosts).
+ *	Assembles the value low-byte-first, then delegates sign
+ *	extension to the shared helper.
+ *
  * Parameters:
  *	p -- four-byte input buffer.
  *
- * Returns:
+ * Results:
  *	Sign-extended `th8_int64_t`.
  *
  * Side effects:
@@ -473,10 +559,15 @@ th8BinaryReadI32Le(const unsigned char *p)
  *	32-bit value and sign-extend to 64 bits via
  *	`th8BinarySignExtend32`.
  *
+ * Why / How:
+ *	Byte-load primitive for the 4-byte big-endian integer
+ *	specifier (`I`).  Assembles the value high-byte-first,
+ *	then delegates sign extension to the shared helper.
+ *
  * Parameters:
  *	p -- four-byte input buffer.
  *
- * Returns:
+ * Results:
  *	Sign-extended `th8_int64_t`.
  *
  * Side effects:
@@ -503,10 +594,17 @@ th8BinaryReadI32Be(const unsigned char *p)
  *	is a re-interpretation of the unsigned accumulator as
  *	signed.
  *
+ * Why / How:
+ *	Byte-load primitive for the 8-byte little-endian integer
+ *	specifiers (`w`, and `m` on little-endian hosts).
+ *	Assembles all eight bytes low-byte-first; because the
+ *	pattern is already 64 bits wide there is no separate
+ *	sign-extension helper.
+ *
  * Parameters:
  *	p -- eight-byte input buffer.
  *
- * Returns:
+ * Results:
  *	`p[0..7]` interpreted as a signed 64-bit integer.
  *
  * Side effects:
@@ -533,10 +631,16 @@ th8BinaryReadI64Le(const unsigned char *p)
  *	64-bit value.  Like `th8BinaryReadI64Le`, no
  *	sign-extension step is required.
  *
+ * Why / How:
+ *	Byte-load primitive for the 8-byte big-endian integer
+ *	specifier (`W`).  Assembles all eight bytes
+ *	high-byte-first; because the pattern is already 64 bits
+ *	wide there is no separate sign-extension helper.
+ *
  * Parameters:
  *	p -- eight-byte input buffer.
  *
- * Returns:
+ * Results:
  *	`p[0..7]` interpreted as a signed 64-bit integer.
  *
  * Side effects:
@@ -596,12 +700,20 @@ typedef int Th8_BinaryAssertFloat64[(sizeof(double) == 8) ? 1 : -1];
  *	The sign bit is irrelevant for the classification.
  *	Mirror of `th8BinaryIsNaN64`.
  *
+ * Why / How:
+ *	Drives the NaN canonicalisation in `th8BinaryFloat32Bits`
+ *	so that `[binary format f]` emits one stable quiet-NaN
+ *	pattern regardless of which NaN payload the host FPU
+ *	produced.  Two mask-and-compare tests suffice: exponent
+ *	all-ones separates NaN/Inf from finite, and a non-zero
+ *	mantissa separates NaN from Infinity.
+ *
  * Parameters:
  *	bits -- 32-bit pattern held in a 64-bit accumulator
  *		(typically from `th8BinaryFloat32Bits`); only the
  *		low 32 bits are inspected.
  *
- * Returns:
+ * Results:
  *	1 if `bits` denotes a NaN; 0 otherwise.
  *
  * Side effects:
@@ -632,11 +744,19 @@ th8BinaryIsNaN32(th8_uint64_t bits)
  *	The sign bit is irrelevant for the classification.
  *	Mirror of `th8BinaryIsNaN32`.
  *
+ * Why / How:
+ *	Drives the NaN canonicalisation in `th8BinaryFloat64Bits`
+ *	so that `[binary format d]` emits one stable quiet-NaN
+ *	pattern regardless of which NaN payload the host FPU
+ *	produced.  Two mask-and-compare tests suffice: exponent
+ *	all-ones separates NaN/Inf from finite, and a non-zero
+ *	mantissa separates NaN from Infinity.
+ *
  * Parameters:
  *	bits -- 64-bit pattern (typically obtained via
  *		`th8BinaryFloat64Bits`).
  *
- * Returns:
+ * Results:
  *	1 if `bits` denotes a NaN; 0 otherwise.
  *
  * Side effects:
@@ -688,10 +808,19 @@ typedef union {
  *	every TH8 toolchain) instead of `memcpy`, which avoids
  *	any dependency on `interp` state.
  *
+ * Why / How:
+ *	The write side of the single-precision float path: it
+ *	turns a host `float` into the exact 32-bit pattern the
+ *	byte writers emit.  Zeroing the union first then storing
+ *	`f` avoids a partially initialised accumulator, and
+ *	folding NaN to `TH8_BINARY_NAN_F32` (via
+ *	`th8BinaryIsNaN32`) makes output reproducible across
+ *	hosts.  Inverse of `th8BinaryBitsToFloat32`.
+ *
  * Parameters:
  *	f -- source IEEE 754 binary32 value.
  *
- * Returns:
+ * Results:
  *	The 32 low bits of the IEEE 754 representation, in a
  *	64-bit accumulator.  NaN payloads collapse to the
  *	canonical pattern.
@@ -724,10 +853,18 @@ th8BinaryFloat32Bits(float f)
  *	step is needed on the read side because consumers
  *	expect the exact pattern written.
  *
+ * Why / How:
+ *	The read side of the single-precision float path: it
+ *	turns the 32-bit pattern assembled by the byte readers
+ *	back into a host `float` for `[binary scan f]`.  Because
+ *	consumers want the exact bits that were written, no NaN
+ *	folding is applied here.  Inverse of
+ *	`th8BinaryFloat32Bits`.
+ *
  * Parameters:
  *	bits -- 64-bit input; only the low 32 bits are used.
  *
- * Returns:
+ * Results:
  *	The `float` value whose IEEE 754 binary32 representation
  *	matches `bits & 0xFFFFFFFFu`.
  *
@@ -755,10 +892,18 @@ th8BinaryBitsToFloat32(th8_uint64_t bits)
  *	`TH8_BINARY_NAN_F64` (`0x7FF8000000000000`).
  *	Type punning through `Th8_BinaryF64Bits`.
  *
+ * Why / How:
+ *	The write side of the double-precision float path: it
+ *	turns a host `double` into the exact 64-bit pattern the
+ *	byte writers emit.  Folding NaN to `TH8_BINARY_NAN_F64`
+ *	(via `th8BinaryIsNaN64`) makes `[binary format d]`
+ *	output reproducible across hosts.  Inverse of
+ *	`th8BinaryBitsToFloat64`.
+ *
  * Parameters:
  *	d -- source IEEE 754 binary64 value.
  *
- * Returns:
+ * Results:
  *	The 64-bit IEEE 754 representation.  NaN payloads
  *	collapse to the canonical pattern.
  *
@@ -787,10 +932,17 @@ th8BinaryFloat64Bits(double d)
  *	binary64 `double` via the `Th8_BinaryF64Bits` union.
  *	Inverse of `th8BinaryFloat64Bits`.
  *
+ * Why / How:
+ *	The read side of the double-precision float path: it
+ *	turns the 64-bit pattern assembled by the byte readers
+ *	back into a host `double` for `[binary scan d]`.  No NaN
+ *	folding is applied so consumers see the exact bits that
+ *	were written.  Inverse of `th8BinaryFloat64Bits`.
+ *
  * Parameters:
  *	bits -- 64-bit IEEE 754 binary64 representation.
  *
- * Returns:
+ * Results:
  *	The `double` value whose IEEE 754 representation
  *	matches `bits`.
  *
@@ -915,9 +1067,29 @@ static const Th8_BinaryOpDef aBinaryOps[128] = {
 };
 
 /*
- * th8BinaryOpFor -- look up the op for a format letter.
- * Returns a pointer to the matching aBinaryOps entry, or NULL
- * if the letter is not a Phase 1 op.  One-decision lookup.
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryOpFor --
+ *
+ *	Look up the op-table entry for a single format letter.
+ *
+ * Why / How:
+ *	The one place that maps a raw format byte to its
+ *	`Th8_BinaryOpDef`, so both drivers and the tokeniser
+ *	share identical letter validation.  Bytes outside
+ *	[0, 127] cannot index the 128-entry table and are
+ *	rejected up front; an in-range letter whose entry has
+ *	kind `TH8_BINARY_KIND_NONE` is an unused slot and also
+ *	returns NULL.
+ *
+ * Results:
+ *	A pointer to the matching `aBinaryOps` entry, or NULL if
+ *	`letter` is out of range or not a defined specifier.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
  */
 static const Th8_BinaryOpDef *
 th8BinaryOpFor(int letter)
@@ -952,11 +1124,19 @@ th8BinaryOpFor(int letter)
  *	non-printable letter is rendered as `?` so the message
  *	stays clean for control bytes.
  *
+ * Why / How:
+ *	Centralising the message here (rather than in each
+ *	caller) guarantees `[binary format]` and `[binary scan]`
+ *	report bad specifiers identically and keeps the per-op
+ *	code free of `Th8_SetResult` calls.  Formats into a
+ *	fixed stack buffer, clamping the length so a truncated
+ *	`th8Snprintf` cannot over-read.
+ *
  * Parameters:
  *	interp -- live interpreter (receives the message).
  *	letter -- the rejected format letter (byte value).
  *
- * Returns:
+ * Results:
  *	`TH8_ERROR` unconditionally.
  *
  * Side effects:
@@ -989,10 +1169,15 @@ th8BinaryErrBadFormat(Th8_Interp *interp, int letter)
  *	return `TH8_ERROR`.  Centralised so every caller emits
  *	an identical message.
  *
+ * Why / How:
+ *	Raised when the format string names more values than the
+ *	argument list supplies.  Uses `Th8_SetResultStatic` so
+ *	the constant message needs no allocation.
+ *
  * Parameters:
  *	interp -- live interpreter (receives the message).
  *
- * Returns:
+ * Results:
  *	`TH8_ERROR` unconditionally.
  *
  * Side effects:
@@ -1018,10 +1203,17 @@ th8BinaryErrNotEnoughArgs(Th8_Interp *interp)
  *	`th8BinaryNextToken` when a decimal count following a
  *	format letter exceeds `TH8_BINARY_MAX_COUNT`.
  *
+ * Why / How:
+ *	Bounds the decimal count so a hostile format string
+ *	cannot request an unbounded allocation; the tokeniser
+ *	calls this the moment the running total would exceed the
+ *	cap.  Uses `Th8_SetResultStatic` for the constant
+ *	message.
+ *
  * Parameters:
  *	interp -- live interpreter (receives the message).
  *
- * Returns:
+ * Results:
  *	`TH8_ERROR` unconditionally.
  *
  * Side effects:
@@ -1047,10 +1239,18 @@ th8BinaryErrCountOverflow(Th8_Interp *interp)
  *	cannot consume an unknown-length list (the op table's
  *	`acceptStar` flag is 0).
  *
+ * Why / How:
+ *	`*` means "count taken from the data" and is meaningful
+ *	only for specifiers that can size themselves from a
+ *	value; on the format side the fixed-cursor ops (`x`,
+ *	`@`) reject it.  Centralised so the diagnostic is
+ *	identical wherever the `bStarFmt` gate fails.  Uses
+ *	`Th8_SetResultStatic` for the constant message.
+ *
  * Parameters:
  *	interp -- live interpreter (receives the message).
  *
- * Returns:
+ * Results:
  *	`TH8_ERROR` unconditionally.
  *
  * Side effects:
@@ -1090,10 +1290,15 @@ th8BinaryErrStarFormat(Th8_Interp *interp)
  *	tokeniser to parse the count modifier that may follow a
  *	format letter.
  *
+ * Why / How:
+ *	A local predicate (rather than `<ctype.h>` `isdigit`)
+ *	so digit classification is locale-independent -- the
+ *	format-string grammar is pure ASCII.
+ *
  * Parameters:
  *	c -- byte value (typically promoted from `unsigned char`).
  *
- * Returns:
+ * Results:
  *	1 if `c` is one of `'0'..'9'`; 0 otherwise.
  *
  * Side effects:
@@ -1126,10 +1331,16 @@ th8BinaryIsDigit(int c)
  *	the format string is user-supplied and may
  *	legitimately contain any of these characters.
  *
+ * Why / How:
+ *	A local predicate (rather than `<ctype.h>` `isspace`)
+ *	so whitespace skipping is locale-independent and limited
+ *	to the four ASCII characters the format grammar allows
+ *	between fields.
+ *
  * Parameters:
  *	c -- byte value (typically promoted from `unsigned char`).
  *
- * Returns:
+ * Results:
  *	1 if `c` is one of `' '`, `'\t'`, `'\n'`, `'\r'`;
  *	0 otherwise.
  *
@@ -1169,6 +1380,14 @@ th8BinaryIsSpace(int c)
  *	     value greater than `TH8_BINARY_MAX_COUNT` via
  *	     `th8BinaryErrCountOverflow`).
  *
+ * Why / How:
+ *	The single tokeniser shared by both the format and scan
+ *	drivers, so the two directions parse specifiers
+ *	identically.  Reporting end-of-string as `*pLetter == 0`
+ *	(rather than a distinct return code) lets the drivers
+ *	loop on one `TH8_OK`/`TH8_ERROR` test and stop when the
+ *	letter is zero.
+ *
  * Parameters:
  *	interp  -- live interpreter (for error messages).
  *	zFmt    -- format string buffer.
@@ -1178,7 +1397,7 @@ th8BinaryIsSpace(int c)
  *	pCount  -- receives the count (`0` when `*` is used or at EOS).
  *	pBStar  -- receives 1 if `*` count, 0 otherwise.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on a parsed token (or at EOS).
  *	`TH8_ERROR` with the interpreter result set on a parse
  *	error (unknown letter, count overflow).
@@ -1271,10 +1490,37 @@ typedef struct Th8_BinaryFormatBuf {
 } Th8_BinaryFormatBuf;
 
 /*
- * th8BinaryReserveAt -- ensure pBuf->zBuf has at least iPos + nMore
- * bytes of allocated space, growing by doubling.  If iPos > nUsed
- * (i.e. an `@` seek opened a gap), zero-fill the gap before
- * returning.  Caller then writes at zBuf[iPos..iPos+nMore].
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryReserveAt --
+ *
+ *	Ensure `pBuf->zBuf` has at least `iPos + nMore` bytes of
+ *	allocated space, then guarantee everything up to `iPos`
+ *	is initialised so the caller may write at
+ *	`zBuf[iPos..iPos+nMore]`.
+ *
+ * Why / How:
+ *	The general reserve used by every format specifier,
+ *	including the `@`/`X` cursor ops that can move the write
+ *	position past the current high-water mark.  Growth is by
+ *	doubling to amortise reallocation; the add and the
+ *	doubling are both overflow-checked so a hostile count
+ *	cannot wrap `size_t`.  When an `@` seek leaves a gap
+ *	between `nUsed` and `iPos`, the gap is zero-filled so the
+ *	output never contains uninitialised bytes.
+ *
+ * Results:
+ *	`TH8_OK` when the space is reserved (and any gap zeroed);
+ *	`TH8_ERROR`, with an interpreter message, on size
+ *	overflow or an allocation failure.
+ *
+ * Side effects:
+ *	May allocate a larger buffer (copying and freeing the old
+ *	one), updating `pBuf->zBuf`, `pBuf->nAlloc`, and
+ *	`pBuf->nUsed`; may zero-fill a seek gap; may set the
+ *	interpreter result on error.
+ *
+ *----------------------------------------------------------------------
  */
 static int
 th8BinaryReserveAt(
@@ -1320,11 +1566,31 @@ th8BinaryReserveAt(
 }
 
 /*
- * th8BinaryReserve -- legacy single-cursor reserve, used by the
- * integer fast path.  Reserves nMore bytes at pBuf->iCur and
- * updates nUsed when the write extends past it.  Callers do the
- * actual write after this returns, then advance pBuf->iCur and
- * pBuf->nUsed themselves.
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryReserve --
+ *
+ *	Reserve `nMore` bytes at the buffer's current cursor
+ *	(`pBuf->iCur`).
+ *
+ * Why / How:
+ *	A thin convenience wrapper over `th8BinaryReserveAt` for
+ *	the common single-cursor case (the integer fast path and
+ *	other specifiers that always write at the cursor), so
+ *	those callers need not repeat `pBuf->iCur`.  The caller
+ *	performs the write, then advances the cursor via
+ *	`th8BinaryAdvanceCursor`.
+ *
+ * Results:
+ *	Whatever `th8BinaryReserveAt` returns: `TH8_OK` on
+ *	success, `TH8_ERROR` (with an interpreter message) on
+ *	overflow or allocation failure.
+ *
+ * Side effects:
+ *	Same as `th8BinaryReserveAt`: may grow the buffer and set
+ *	the interpreter result on error.
+ *
+ *----------------------------------------------------------------------
  */
 static int
 th8BinaryReserve(Th8_Interp *interp, Th8_BinaryFormatBuf *pBuf, size_t nMore)
@@ -1340,21 +1606,39 @@ th8BinaryReserve(Th8_Interp *interp, Th8_BinaryFormatBuf *pBuf, size_t nMore)
 #    define TH8_BINARY_OP_BITWISE_AND 21
 
 /*
- * th8BinaryParseBigint -- truncate an arbitrary-precision
- * integer string modulo 2^64 using the native bigint
- * arithmetic engine (`th8BigintArith` with bitwise AND).
- * The caller has already detected via th8IsBigint that the
- * string is a valid integer too large for Th8_ToWideInt; this
- * routine computes (value & 0xFFFFFFFFFFFFFFFF) symbolically
- * as a bigint, then re-parses the result -- which is now in
- * 64-bit range -- via Th8_ToWideInt.  This is the
- * KIND_BIGINT-dispatch path: no Th8_Eval round-trip, no
- * temporary variables, no nested expression parser.
+ *----------------------------------------------------------------------
  *
- * Runtime gate: caller checks Th8_IsBigintEnabled(interp)
- * before invoking this routine, so we never reach
- * th8BigintArith with bigint disabled.  Compile gate:
- * TH8_ENABLE_BIGINT.
+ * th8BinaryParseBigint --
+ *
+ *	Truncate an arbitrary-precision integer string modulo
+ *	2^64 and return the result as a `th8_int64_t`.  The
+ *	caller has already established (via `th8IsBigint`) that
+ *	the string is a valid integer too large for
+ *	`Th8_ToWideInt`.
+ *
+ * Why / How:
+ *	Implements the `KIND_BIGINT` dispatch path.  It computes
+ *	`value & 0xFFFFFFFFFFFFFFFF` symbolically with the native
+ *	bigint engine (`th8BigintArith` with a bitwise-AND
+ *	opcode against the constant mask 2^64-1), then re-parses
+ *	the now-in-range decimal result through `Th8_ToWideInt`.
+ *	Doing the reduction in the bigint engine avoids a
+ *	`Th8_Eval` round-trip, temporary variables, and any
+ *	nested expression parser.  Compile-gated by
+ *	`TH8_ENABLE_BIGINT`; the caller has already checked the
+ *	runtime `Th8_IsBigintEnabled` gate.
+ *
+ * Results:
+ *	`TH8_OK` with `*pV` set to the low 64 bits of the value;
+ *	`TH8_ERROR` (with the engine's interpreter message) if
+ *	`th8BigintArith` or the re-parse fails.
+ *
+ * Side effects:
+ *	Sets the interpreter result to the reduced decimal string
+ *	(then consumes it), and on failure leaves an error
+ *	message there.
+ *
+ *----------------------------------------------------------------------
  */
 static int
 th8BinaryParseBigint(
@@ -1378,29 +1662,42 @@ th8BinaryParseBigint(
 #  endif /* TH8_ENABLE_BIGINT */
 
 /*
- * th8BinaryParseTrunc -- parse `zArg` as an integer, accepting
- * Th8_ToWideInt-compatible inputs on the fast path AND
- * bignum inputs that exceed the 64-bit range via the
- * first-class KIND_BIGINT dispatch.
+ *----------------------------------------------------------------------
  *
- * Routing:
+ * th8BinaryParseTrunc --
  *
- *   1. Fast path: Th8_ToWideInt.  Zero bigint overhead for the
- *      common case.
+ *	Parse `zArg` as an integer for an integer format
+ *	specifier, truncating an over-wide but valid value to its
+ *	low 64 bits rather than rejecting it.
  *
- *   2. If the fast path failed, ask th8IsBigint whether the
- *      input is a *valid* integer that simply exceeded
- *      64-bit range (vs. a syntactically malformed number).
- *      The branch is compile-gated by TH8_ENABLE_BIGINT and
- *      runtime-gated by Th8_IsBigintEnabled(interp).
+ * Why / How:
+ *	Integer `[binary format]` fields take the low bits of the
+ *	value modulo the field width, so an input larger than 64
+ *	bits must be reduced, not refused.  The routing is:
+ *	  1. Fast path -- `Th8_ToWideInt`; zero bigint overhead
+ *	     for the common in-range case.
+ *	  2. On failure, `th8IsBigint` distinguishes a valid but
+ *	     over-wide integer from a malformed number (compile-
+ *	     gated by `TH8_ENABLE_BIGINT`, runtime-gated by
+ *	     `Th8_IsBigintEnabled`).
+ *	  3. If over-wide, dispatch to `th8BinaryParseBigint` to
+ *	     truncate modulo 2^64.
+ *	  4. If bigint is unavailable or the input is genuinely
+ *	     malformed, restore `Th8_ToWideInt`'s original error
+ *	     message (saved across the bigint attempt) and fail.
  *
- *   3. If yes, dispatch into th8BinaryParseBigint (the
- *      KIND_BIGINT routine): truncate modulo 2^64 via
- *      th8BigintArith and re-parse the now-in-range result.
+ * Results:
+ *	`TH8_OK` with `*pV` set to the (possibly truncated)
+ *	value; `TH8_ERROR`, with an interpreter message, on a
+ *	malformed integer or an internal allocation/engine
+ *	failure.
  *
- *   4. If bigint is disabled or the input is genuinely
- *      malformed, restore the original Th8_ToWideInt error
- *      message and return TH8_ERROR.
+ * Side effects:
+ *	Sets the interpreter result on error.  On the bigint
+ *	path, temporarily allocates and frees a copy of the saved
+ *	error message.
+ *
+ *----------------------------------------------------------------------
  */
 static int
 th8BinaryParseTrunc(
@@ -1443,8 +1740,28 @@ th8BinaryParseTrunc(
 }
 
 /*
- * th8BinaryAdvanceCursor -- advance pBuf->iCur by n bytes and
- * bump nUsed if the write extended past it.
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryAdvanceCursor --
+ *
+ *	Advance the format buffer's write cursor by `n` bytes
+ *	after a specifier has emitted its output.
+ *
+ * Why / How:
+ *	The cursor (`iCur`) and the result length (`nUsed`) are
+ *	separate because `@`/`X` can move the cursor backward
+ *	without shrinking the result.  Centralising the advance
+ *	here keeps that high-water-mark rule -- only ever raise
+ *	`nUsed`, never lower it -- in one place for every writer.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Advances `pBuf->iCur`; raises `pBuf->nUsed` if the new
+ *	cursor passes the previous high-water mark.
+ *
+ *----------------------------------------------------------------------
  */
 static void
 th8BinaryAdvanceCursor(Th8_BinaryFormatBuf *pBuf, size_t n)
@@ -1454,9 +1771,30 @@ th8BinaryAdvanceCursor(Th8_BinaryFormatBuf *pBuf, size_t n)
 }
 
 /*
- * th8BinaryWriteInt -- emit one integer value at the buffer's
- * cursor.  Caller has already reserved pOp->nWidth bytes.
- * Straight-line code; zero MC/DC decisions.
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryWriteInt --
+ *
+ *	Emit one integer value of the specifier's width and byte
+ *	order at the buffer's cursor and advance past it.  The
+ *	caller has already reserved `pOp->nWidth` bytes.
+ *
+ * Why / How:
+ *	Dispatches on the combined `nWidth * 2 + eOrder` key to
+ *	the matching fixed-width byte-store primitive
+ *	(`th8BinaryWriteU8` .. `th8BinaryWriteU64Be`).  Encoding
+ *	width and order into one switch key keeps the per-op code
+ *	branch-free at the table level and lets every integer
+ *	specifier share this single writer.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Writes `pOp->nWidth` bytes into `pBuf->zBuf` at the cursor
+ *	and advances the cursor (raising `nUsed` as needed).
+ *
+ *----------------------------------------------------------------------
  */
 static void
 th8BinaryWriteInt(
@@ -1495,9 +1833,30 @@ th8BinaryWriteInt(
 }
 
 /*
- * th8BinaryWriteFloat32 -- write a single-precision IEEE 754
- * value at the buffer cursor.  NaN inputs are normalised to
- * the canonical pattern via th8BinaryFloat32Bits.
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryWriteFloat32 --
+ *
+ *	Write a single-precision IEEE 754 value (the `f`/`r`/`R`
+ *	specifiers) at the buffer cursor and advance past the 4
+ *	bytes.  The caller has already reserved the space.
+ *
+ * Why / How:
+ *	Narrows the incoming `double` to `float`, converts to the
+ *	canonical 32-bit pattern via `th8BinaryFloat32Bits` (so
+ *	NaN payloads are normalised), then stores it with the
+ *	little- or big-endian U32 writer selected by `eOrder`.
+ *	Sharing the byte writers keeps the on-wire layout
+ *	identical to the integer path.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Writes 4 bytes into `pBuf->zBuf` at the cursor and
+ *	advances the cursor (raising `nUsed` as needed).
+ *
+ *----------------------------------------------------------------------
  */
 static void
 th8BinaryWriteFloat32(
@@ -1517,9 +1876,29 @@ th8BinaryWriteFloat32(
 }
 
 /*
- * th8BinaryWriteFloat64 -- write a double-precision IEEE 754
- * value at the buffer cursor.  NaN inputs are normalised to
- * the canonical pattern.
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryWriteFloat64 --
+ *
+ *	Write a double-precision IEEE 754 value (the `d`/`q`/`Q`
+ *	specifiers) at the buffer cursor and advance past the 8
+ *	bytes.  The caller has already reserved the space.
+ *
+ * Why / How:
+ *	Converts the `double` to its canonical 64-bit pattern via
+ *	`th8BinaryFloat64Bits` (normalising NaN payloads), then
+ *	stores it with the little- or big-endian U64 writer
+ *	selected by `eOrder`.  Mirrors `th8BinaryWriteFloat32`
+ *	for the wider type.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Writes 8 bytes into `pBuf->zBuf` at the cursor and
+ *	advances the cursor (raising `nUsed` as needed).
+ *
+ *----------------------------------------------------------------------
  */
 static void
 th8BinaryWriteFloat64(
@@ -1559,10 +1938,15 @@ th8BinaryWriteFloat64(
  *	NUL for `a` (KIND_STR_NUL) and space for `A`
  *	(KIND_STR_SP).
  *
+ * Why / How:
+ *	Isolates the one difference between the `a` and `A`
+ *	string writers so `th8BinaryFormatStr` can stay a single
+ *	shared routine parameterised only by the pad byte.
+ *
  * Parameters:
  *	kind -- the op kind (TH8_BINARY_KIND_STR_NUL or _STR_SP).
  *
- * Returns:
+ * Results:
  *	`' '` for TH8_BINARY_KIND_STR_SP; `0` (NUL) otherwise.
  *
  * Side effects:
@@ -1578,9 +1962,31 @@ th8BinaryStrPadByte(unsigned char kind)
 }
 
 /*
- * th8BinaryFormatStr -- copy `count` bytes from zSrc/nSrc into the
- * output, padding with the kind-appropriate byte if nSrc < count.
- * Truncates if nSrc > count.
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryFormatStr --
+ *
+ *	Emit a fixed-width `a`/`A` string field: copy up to
+ *	`count` bytes from `zSrc`, padding the tail with the
+ *	kind-appropriate byte when the source is shorter and
+ *	truncating when it is longer.
+ *
+ * Why / How:
+ *	Both string specifiers differ only in their pad byte, so
+ *	one routine parameterised by `th8BinaryStrPadByte(kind)`
+ *	serves both.  Exactly `count` bytes are always written
+ *	(copy of `min(nSrc, count)` plus pad), matching the Tcl
+ *	fixed-field semantics.  The caller has already reserved
+ *	`count` bytes.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Writes `count` bytes into `pBuf->zBuf` at the cursor and
+ *	advances the cursor (raising `nUsed` as needed).
+ *
+ *----------------------------------------------------------------------
  */
 static void
 th8BinaryFormatStr(
@@ -1612,10 +2018,14 @@ th8BinaryFormatStr(
  *	bit value.  Per Tcl 8.6, only `'0'` denotes a zero bit;
  *	every other character is treated as a one bit.
  *
+ * Why / How:
+ *	Encodes the Tcl `b`/`B` rule -- only the literal `'0'`
+ *	clears a bit -- in one place so both bit writers agree.
+ *
  * Parameters:
  *	c -- byte value taken from the source bit string.
  *
- * Returns:
+ * Results:
  *	0 if `c` is `'0'`; 1 otherwise.
  *
  * Side effects:
@@ -1646,10 +2056,17 @@ th8BinaryBitValue(int c)
  *	characters >= `'0'`; kept defensive against future
  *	callers per FINDINGS.md Finding 005 sec. 5b.
  *
+ * Why / How:
+ *	The nibble-decode step shared by the `h`/`H` hex writers.
+ *	A local table-free predicate keeps the classification
+ *	locale-independent; unrecognised bytes fold to 0 so a
+ *	malformed hex string produces zero nibbles rather than
+ *	garbage.
+ *
  * Parameters:
  *	c -- byte value (typically promoted from `unsigned char`).
  *
- * Returns:
+ * Results:
  *	0..15 for hex digits (`'0'..'9'`, `'a'..'f'`, `'A'..'F'`);
  *	0 for any other input.
  *
@@ -1671,12 +2088,35 @@ th8BinaryHexValue(int c)
 }
 
 /*
- * th8BinaryFormatBits -- pack `count` bits drawn from zSrc[0..]
- * (one char per bit) into ceil(count/8) bytes at the cursor.  Pad
- * bits beyond nSrc are 0.  bHiFirst selects high-bit-first (`B`)
- * vs low-bit-first (`b`).
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryFormatBits --
+ *
+ *	Pack a `b`/`B` bit-string field: draw `count` bits (one
+ *	source character each) and pack them into `ceil(count/8)`
+ *	bytes at the cursor, zero-padding any bits beyond the
+ *	source length.
+ *
+ * Why / How:
+ *	`bHiFirst` selects the within-byte bit order -- high-bit-
+ *	first for `B`, low-bit-first for `b` -- while each source
+ *	character's value comes from `th8BinaryBitValue` (only
+ *	`'0'` is a zero bit).  The output bytes are zeroed first
+ *	so untouched pad bits are 0.  The per-4096-bit
+ *	`Th8_Ready` poll (TH8K-009) keeps this
+ *	attacker-controlled loop cancellable.
+ *
+ * Results:
+ *	`TH8_OK` after packing all bits; `TH8_ERROR` if a
+ *	`Th8_Ready` poll reports cancellation/step.
+ *
+ * Side effects:
+ *	Writes `ceil(count/8)` bytes into `pBuf->zBuf` at the
+ *	cursor and advances the cursor (raising `nUsed`).
+ *
+ *----------------------------------------------------------------------
  */
-static void
+static int
 th8BinaryFormatBits(
     Th8_Interp *interp,
     Th8_BinaryFormatBuf *pBuf,
@@ -1691,23 +2131,52 @@ th8BinaryFormatBits(
 
     Th8_Memset(interp, p, 0, nBytes);
     for (iBit = 0; iBit < (size_t)count; iBit++) {
-	int bit = (iBit < nSrc) ? th8BinaryBitValue((unsigned char)zSrc[iBit])
-	                        : 0;
+	int bit;
 	size_t iByte = iBit / 8;
 	int iShift = bHiFirst ? (7 - (int)(iBit % 8)) : (int)(iBit % 8);
 
+	/* TH8K-009: cancellation/step polling on this attacker-controlled
+	 * per-bit loop; the caller owns pBuf->zBuf and frees it. */
+	if ((iBit & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	}
+	bit = (iBit < nSrc) ? th8BinaryBitValue((unsigned char)zSrc[iBit])
+	                    : 0;
 	if (bit) p[iByte] |= (unsigned char)(1u << iShift);
     }
     th8BinaryAdvanceCursor(pBuf, nBytes);
+    return TH8_OK;
 }
 
 /*
- * th8BinaryFormatHex -- pack `count` hex digits drawn from zSrc
- * (one char per nibble) into ceil(count/2) bytes at the cursor.
- * Pad nibbles beyond nSrc are 0.  bHiFirst selects high-nibble-
- * first (`H`) vs low-nibble-first (`h`).
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryFormatHex --
+ *
+ *	Pack an `h`/`H` hex-string field: draw `count` hex digits
+ *	(one source character each) and pack them into
+ *	`ceil(count/2)` bytes at the cursor, zero-padding any
+ *	nibbles beyond the source length.
+ *
+ * Why / How:
+ *	`bHiFirst` selects the within-byte nibble order -- high-
+ *	nibble-first for `H`, low-nibble-first for `h` -- while
+ *	each digit's value comes from `th8BinaryHexValue`.  The
+ *	output bytes are zeroed first so untouched pad nibbles
+ *	are 0.  The per-4096-nibble `Th8_Ready` poll (TH8K-009)
+ *	keeps this attacker-controlled loop cancellable.
+ *
+ * Results:
+ *	`TH8_OK` after packing all nibbles; `TH8_ERROR` if a
+ *	`Th8_Ready` poll reports cancellation/step.
+ *
+ * Side effects:
+ *	Writes `ceil(count/2)` bytes into `pBuf->zBuf` at the
+ *	cursor and advances the cursor (raising `nUsed`).
+ *
+ *----------------------------------------------------------------------
  */
-static void
+static int
 th8BinaryFormatHex(
     Th8_Interp *interp,
     Th8_BinaryFormatBuf *pBuf,
@@ -1722,11 +2191,16 @@ th8BinaryFormatHex(
 
     Th8_Memset(interp, p, 0, nBytes);
     for (iNib = 0; iNib < (size_t)count; iNib++) {
-	int v = (iNib < nSrc) ? th8BinaryHexValue((unsigned char)zSrc[iNib])
-	                      : 0;
+	int v;
 	size_t iByte = iNib / 2;
 	int iShift;
 
+	/* TH8K-009: cancellation/step polling on this attacker-controlled
+	 * per-nibble loop; the caller owns pBuf->zBuf and frees it. */
+	if ((iNib & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	}
+	v = (iNib < nSrc) ? th8BinaryHexValue((unsigned char)zSrc[iNib]) : 0;
 	if (bHiFirst) {
 	    iShift = (iNib & 1u) ? 0 : 4;
 	} else {
@@ -1735,10 +2209,43 @@ th8BinaryFormatHex(
 	p[iByte] |= (unsigned char)((v & 0xF) << iShift);
     }
     th8BinaryAdvanceCursor(pBuf, nBytes);
+    return TH8_OK;
 }
 
 /*
- * binary_format_command -- implementation of [binary format].
+ *----------------------------------------------------------------------
+ *
+ * binary_format_command --
+ *
+ *	Implementation of `[binary format formatString ?arg ...?]`:
+ *	consume the format string and its value arguments and
+ *	produce the packed binary string as the interpreter
+ *	result.
+ *
+ * Why / How:
+ *	Drives the tokeniser (`th8BinaryNextToken`) over the
+ *	format string, and for each specifier looks up its op and
+ *	dispatches on `pOp->kind` to the matching writer, growing
+ *	a `Th8_BinaryFormatBuf` as it goes.  Value-consuming
+ *	specifiers pull the next `argv` entry (with `*` expanding
+ *	a single list argument across the count); the cursor ops
+ *	(`x`/`X`/`@`) consume no argument.  All errors funnel
+ *	through the shared `th8BinaryErr*` helpers and a single
+ *	`done:` label so the work buffer is always freed.
+ *
+ * Results:
+ *	`TH8_OK` with the packed bytes set as the interpreter
+ *	result; `TH8_ERROR` with a diagnostic on a bad specifier,
+ *	a missing/invalid argument, a count overflow, or an
+ *	allocation failure.  Too few arguments triggers
+ *	`Th8_WrongNumArgs`.
+ *
+ * Side effects:
+ *	Allocates and frees the output buffer; sets the
+ *	interpreter result (the packed string or an error
+ *	message).
+ *
+ *----------------------------------------------------------------------
  */
 static int
 binary_format_command(
@@ -1822,6 +2329,13 @@ binary_format_command(
 		for (j = 0; rc == TH8_OK && j < nList; j++) {
 		    th8_int64_t v = 0;
 
+		    /* TH8K-009: poll every element of this attacker-
+		     * controlled list-pack loop. */
+		    if (Th8_Ready(interp) != TH8_OK) {
+			Th8_Free(interp, azElem);
+			if (out.zBuf) Th8_Free(interp, out.zBuf);
+			return TH8_ERROR;
+		    }
 		    rc =
 		        th8BinaryParseTrunc(interp, azElem[j], anElem[j], &v);
 		    if (rc == TH8_OK) th8BinaryWriteInt(&out, pOp, v);
@@ -1890,9 +2404,10 @@ binary_format_command(
 	    nBytes = (size_t)((count + 7) / 8);
 	    rc = th8BinaryReserve(interp, &out, nBytes);
 	    if (rc != TH8_OK) goto done;
-	    th8BinaryFormatBits(
+	    rc = th8BinaryFormatBits(
 	        interp, &out, pOp->kind == TH8_BINARY_KIND_BITS_HI, count,
 	        zSrc, nSrc);
+	    if (rc != TH8_OK) goto done;
 	    break;
 	}
 	case TH8_BINARY_KIND_HEX_LO:
@@ -1913,9 +2428,10 @@ binary_format_command(
 	    nBytes = (size_t)((count + 1) / 2);
 	    rc = th8BinaryReserve(interp, &out, nBytes);
 	    if (rc != TH8_OK) goto done;
-	    th8BinaryFormatHex(
+	    rc = th8BinaryFormatHex(
 	        interp, &out, pOp->kind == TH8_BINARY_KIND_HEX_HI, count,
 	        zSrc, nSrc);
+	    if (rc != TH8_OK) goto done;
 	    break;
 	}
 	case TH8_BINARY_KIND_PAD: {
@@ -1979,6 +2495,13 @@ binary_format_command(
 		for (j = 0; rc == TH8_OK && j < nList; j++) {
 		    double d = 0.0;
 
+		    /* TH8K-009: poll every element of this attacker-
+		     * controlled list-pack loop. */
+		    if (Th8_Ready(interp) != TH8_OK) {
+			Th8_Free(interp, azElem);
+			if (out.zBuf) Th8_Free(interp, out.zBuf);
+			return TH8_ERROR;
+		    }
 		    rc = Th8_ToDouble(interp, azElem[j], anElem[j], &d);
 		    if (rc == TH8_OK) {
 			if (pOp->kind == TH8_BINARY_KIND_FLOAT) {
@@ -2126,6 +2649,14 @@ binary_format_command(
 			for (i2 = 0; i2 < nWidth / 2; i2++) {
 			    unsigned char t = out.zBuf[out.iCur + i2];
 
+			    /* TH8K-009: poll this attacker-controlled
+			     * byte-reverse loop every 4096 iterations. */
+			    if ((i2 & 0xFFF) == 0) {
+				if (Th8_Ready(interp) != TH8_OK) {
+				    if (out.zBuf) Th8_Free(interp, out.zBuf);
+				    return TH8_ERROR;
+				}
+			    }
 			    out.zBuf[out.iCur + i2] =
 			        out.zBuf[out.iCur + nWidth - 1 - i2];
 			    out.zBuf[out.iCur + nWidth - 1 - i2] = t;
@@ -2174,10 +2705,30 @@ done:
  */
 
 /*
- * th8BinaryReadInt -- read one integer value at the buffer's
- * cursor.  Caller has already ensured at least pOp->nWidth
- * bytes are available.  Returns the sign-extended value as
- * th8_int64_t.
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryReadInt --
+ *
+ *	Read one integer value of the specifier's width and byte
+ *	order from `p`.  The caller has already ensured at least
+ *	`pOp->nWidth` bytes are available.
+ *
+ * Why / How:
+ *	The scan-side mirror of `th8BinaryWriteInt`: dispatches on
+ *	the combined `nWidth * 2 + eOrder` key to the matching
+ *	fixed-width byte-load primitive (`th8BinaryReadI8` ..
+ *	`th8BinaryReadI64Be`), each of which sign-extends to 64
+ *	bits.  One shared reader serves every integer specifier.
+ *
+ * Results:
+ *	The decoded value, sign-extended to `th8_int64_t` (0 for
+ *	an unrecognised width/order, which the op table never
+ *	produces).
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
  */
 static th8_int64_t
 th8BinaryReadInt(const unsigned char *p, const Th8_BinaryOpDef *pOp)
@@ -2203,8 +2754,35 @@ th8BinaryReadInt(const unsigned char *p, const Th8_BinaryOpDef *pOp)
 }
 
 /*
- * th8BinaryAssignInt -- format value as a decimal string and
- * write it to varName.  Returns TH8_OK / TH8_ERROR.
+ * [binary scan] binds its results into variables, so its result-assignment
+ * helpers and the scan sub-command itself require the variable subsystem.
+ * With TH8_ENABLE_VARIABLES off, [binary format] remains available but
+ * [binary scan] is not registered.
+ */
+#  if defined(TH8_ENABLE_VARIABLES)
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryAssignInt --
+ *
+ *	Format a single decoded integer as a decimal string and
+ *	assign it to the named scalar variable.
+ *
+ * Why / How:
+ *	The single-element output path for integer `[binary scan]`
+ *	specifiers (count 1).  Rendering into a small stack buffer
+ *	with `%lld` then one `Th8_SetVar` avoids heap traffic; the
+ *	list variant (`th8BinaryAssignIntList`) covers count > 1.
+ *
+ * Results:
+ *	`Th8_SetVar`'s return code (`TH8_OK` / `TH8_ERROR`).
+ *
+ * Side effects:
+ *	Mutates the named variable; sets the interpreter result on
+ *	failure.
+ *
+ *----------------------------------------------------------------------
  */
 static int
 th8BinaryAssignInt(
@@ -2223,9 +2801,34 @@ th8BinaryAssignInt(
 }
 
 /*
- * th8BinaryAssignIntList -- format `count` values as a Tcl
- * list and write to varName.  Used for the `*` count case
- * on scan.  Returns TH8_OK / TH8_ERROR.
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryAssignIntList --
+ *
+ *	Decode `count` integer elements starting at `p` and assign
+ *	them, formatted as a Tcl list of decimal strings, to the
+ *	named scalar variable.
+ *
+ * Why / How:
+ *	The multi-element output path for integer `[binary scan]`
+ *	specifiers with a count > 1 or a `*`.  Each element is
+ *	read via the shared `th8BinaryReadInt`, formatted with
+ *	`%lld`, and appended to a growing list buffer that is
+ *	assigned once at the end.  The per-element `Th8_Ready`
+ *	poll (TH8K-009) bounds work on an attacker-controlled
+ *	count so a huge scan stays cancellable, freeing the list
+ *	buffer on cancellation.
+ *
+ * Results:
+ *	`Th8_SetVar`'s return code on the final assignment;
+ *	`TH8_ERROR` if a `Th8_Ready` poll reports
+ *	cancellation/step.
+ *
+ * Side effects:
+ *	Allocates and frees a temporary list buffer; mutates the
+ *	named variable; sets the interpreter result on failure.
+ *
+ *----------------------------------------------------------------------
  */
 static int
 th8BinaryAssignIntList(
@@ -2246,6 +2849,12 @@ th8BinaryAssignIntList(
 	int n;
 	th8_int64_t v = th8BinaryReadInt(p + (size_t)(i * pOp->nWidth), pOp);
 
+	/* TH8K-009: poll every element of this attacker-controlled
+	 * decode loop; free the list buffer owned here. */
+	if (Th8_Ready(interp) != TH8_OK) {
+	    if (zList) Th8_Free(interp, zList);
+	    return TH8_ERROR;
+	}
 	n = th8Snprintf(interp, buf, sizeof(buf), "%lld", (long long)v);
 	if (n < 0) n = 0;
 	if ((size_t)n >= sizeof(buf)) n = (int)sizeof(buf) - 1;
@@ -2261,8 +2870,30 @@ th8BinaryAssignIntList(
 }
 
 /*
- * th8BinaryScanStr -- assign `nRead` bytes of input to varName,
- * stripping trailing space/NUL when the kind is `A`.
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryScanStr --
+ *
+ *	Assign `nRead` bytes of scanned input to the named scalar
+ *	variable, stripping trailing spaces and NULs for the `A`
+ *	specifier.
+ *
+ * Why / How:
+ *	The output path for the `a`/`A` string scan specifiers.
+ *	`a` copies the field verbatim; `A` mirrors its format-side
+ *	space padding by trimming trailing `' '` and `'\0'` bytes,
+ *	so a value round-trips through `[binary format A]` /
+ *	`[binary scan A]`.  The kind selects which behaviour
+ *	applies.
+ *
+ * Results:
+ *	`Th8_SetVar`'s return code (`TH8_OK` / `TH8_ERROR`).
+ *
+ * Side effects:
+ *	Mutates the named variable; sets the interpreter result on
+ *	failure.
+ *
+ *----------------------------------------------------------------------
  */
 static int
 th8BinaryScanStr(
@@ -2284,9 +2915,33 @@ th8BinaryScanStr(
 }
 
 /*
- * th8BinaryScanBits -- assign a `count`-character "01" string
- * decoded from `nBytes` of input.  bHiFirst selects high-bit-
- * first (`B`) vs low-bit-first (`b`).
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryScanBits --
+ *
+ *	Decode `count` bits from `zSrc` into a `count`-character
+ *	string of `'0'`/`'1'` and assign it to the named scalar
+ *	variable.
+ *
+ * Why / How:
+ *	The scan-side inverse of `th8BinaryFormatBits` for the
+ *	`b`/`B` specifiers; `bHiFirst` selects the within-byte bit
+ *	order (high-bit-first for `B`, low-bit-first for `b`).
+ *	Builds the text in a `count`-byte scratch buffer so the
+ *	whole string is assigned once.  The per-4096-bit
+ *	`Th8_Ready` poll (TH8K-009) keeps this attacker-controlled
+ *	loop cancellable, freeing the buffer on cancellation.  A
+ *	zero count short-circuits to an empty assignment.
+ *
+ * Results:
+ *	`Th8_SetVar`'s return code; `TH8_ERROR` on an allocation
+ *	failure or a cancelling `Th8_Ready` poll.
+ *
+ * Side effects:
+ *	Allocates and frees a scratch buffer; mutates the named
+ *	variable; sets the interpreter result on failure.
+ *
+ *----------------------------------------------------------------------
  */
 static int
 th8BinaryScanBits(
@@ -2309,6 +2964,14 @@ th8BinaryScanBits(
 	int iShift = bHiFirst ? (7 - (int)(iBit % 8)) : (int)(iBit % 8);
 	int bit = (zSrc[iByte] >> iShift) & 1;
 
+	/* TH8K-009: poll this attacker-controlled per-bit loop
+	 * every 4096 iterations; free the buffer owned here. */
+	if ((iBit & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		Th8_Free(interp, zOut);
+		return TH8_ERROR;
+	    }
+	}
 	zOut[iBit] = (char)('0' + bit);
     }
     rc = Th8_SetVar(interp, zVarName, nVarName, zOut, (size_t)count);
@@ -2317,9 +2980,34 @@ th8BinaryScanBits(
 }
 
 /*
- * th8BinaryScanHex -- assign a `count`-character hex string
- * decoded from ceil(count/2) bytes of input.  bHiFirst selects
- * high-nibble-first (`H`) vs low-nibble-first (`h`).
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryScanHex --
+ *
+ *	Decode `count` hex nibbles from `ceil(count/2)` bytes of
+ *	`zSrc` into a `count`-character lowercase hex string and
+ *	assign it to the named scalar variable.
+ *
+ * Why / How:
+ *	The scan-side inverse of `th8BinaryFormatHex` for the
+ *	`h`/`H` specifiers; `bHiFirst` selects the within-byte
+ *	nibble order (high-nibble-first for `H`, low for `h`).
+ *	Each nibble indexes the fixed lowercase-hex table.  Builds
+ *	the text in a `count`-byte scratch buffer so it is
+ *	assigned once.  The per-4096-nibble `Th8_Ready` poll
+ *	(TH8K-009) keeps this attacker-controlled loop
+ *	cancellable, freeing the buffer on cancellation.  A zero
+ *	count short-circuits to an empty assignment.
+ *
+ * Results:
+ *	`Th8_SetVar`'s return code; `TH8_ERROR` on an allocation
+ *	failure or a cancelling `Th8_Ready` poll.
+ *
+ * Side effects:
+ *	Allocates and frees a scratch buffer; mutates the named
+ *	variable; sets the interpreter result on failure.
+ *
+ *----------------------------------------------------------------------
  */
 static int
 th8BinaryScanHex(
@@ -2343,6 +3031,14 @@ th8BinaryScanHex(
 	int iShift;
 	int v;
 
+	/* TH8K-009: poll this attacker-controlled per-nibble loop
+	 * every 4096 iterations; free the buffer owned here. */
+	if ((iNib & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		Th8_Free(interp, zOut);
+		return TH8_ERROR;
+	    }
+	}
 	if (bHiFirst) {
 	    iShift = (iNib & 1u) ? 0 : 4;
 	} else {
@@ -2356,11 +3052,38 @@ th8BinaryScanHex(
     return rc;
 }
 
+#  endif /* TH8_ENABLE_VARIABLES ([binary scan] assign helpers) */
+
 /*
- * th8BinaryFormatDoubleString -- render a double as a decimal
- * string suitable for round-trip back through Th8_ToDouble.
- * NaN renders as "NaN"; +/-Inf renders as "Inf"/"-Inf"; finite
- * values use %.17g (binary64) or %.9g (binary32).
+ *----------------------------------------------------------------------
+ *
+ * th8BinaryFormatDoubleString --
+ *
+ *	Render a `double` into `zBuf` as a decimal (or special)
+ *	string suitable for round-tripping back through
+ *	`Th8_ToDouble`.
+ *
+ * Why / How:
+ *	The shared float-to-text step behind `[binary scan f/d]`,
+ *	used by both the single- and multi-element assigners.  It
+ *	first classifies the value from its IEEE 754 bit pattern
+ *	(via `th8BinaryFloat32/64Bits` + `th8BinaryIsNaN32/64`)
+ *	so NaN renders as `"NaN"` and infinities as `"Inf"` /
+ *	`"-Inf"` rather than a platform-dependent `printf`
+ *	spelling.  Finite values use `%.17g` (binary64) or `%.9g`
+ *	(binary32) -- the shortest precisions that round-trip
+ *	every value of the type.  `bSingle` selects the 32-bit
+ *	path and its precision.
+ *
+ * Results:
+ *	The number of characters written (excluding the NUL), or
+ *	-1 if `nBuf` is too small for the chosen rendering.
+ *
+ * Side effects:
+ *	Writes into `zBuf`.  Does not touch the interpreter
+ *	result.
+ *
+ *----------------------------------------------------------------------
  */
 static int
 th8BinaryFormatDoubleString(
@@ -2435,6 +3158,12 @@ th8BinaryFormatDoubleString(
  *	emitted as `"NaN"` / `"Inf"` / `"-Inf"` by
  *	`th8BinaryFormatDoubleString`.
  *
+ * Why / How:
+ *	The single-element output path for `[binary scan f/d]`.
+ *	Rendering into a small stack buffer then a single
+ *	`Th8_SetVar` avoids per-call heap traffic; the list
+ *	variant (`th8BinaryAssignDoubleList`) handles count > 1.
+ *
  * Parameters:
  *	interp   -- live interpreter.
  *	zVarName -- variable name (not necessarily NUL-terminated).
@@ -2443,7 +3172,7 @@ th8BinaryFormatDoubleString(
  *	bSingle  -- 1 for `float`-equivalent precision, 0 for full
  *		double precision.
  *
- * Returns:
+ * Results:
  *	`Th8_SetVar`'s return code (`TH8_OK` / `TH8_ERROR`).
  *
  * Side effects:
@@ -2481,6 +3210,14 @@ th8BinaryAssignDouble(
  *	variable.  Used by `[binary scan]` letters that take a
  *	count > 1 with a single output-variable name.
  *
+ * Why / How:
+ *	The multi-element output path for `[binary scan f/d]`.
+ *	Each element is decoded through the shared byte readers
+ *	and float bitcasts, appended to a growing list buffer,
+ *	and the whole list assigned once.  The per-element
+ *	`Th8_Ready` poll bounds work on an attacker-controlled
+ *	count so a huge scan stays cancellable.
+ *
  * Parameters:
  *	interp   -- live interpreter.
  *	zVarName -- variable name.
@@ -2491,7 +3228,7 @@ th8BinaryAssignDouble(
  *	eOrder   -- `TH8_BINARY_LE` or `TH8_BINARY_BE`.
  *	count    -- number of elements to consume.
  *
- * Returns:
+ * Results:
  *	`Th8_SetVar`'s return code on the final assignment;
  *	`TH8_ERROR` if any intermediate `Th8_ListAppend` /
  *	formatting step fails.
@@ -2526,6 +3263,12 @@ th8BinaryAssignDoubleList(
 	double d;
 	int n;
 
+	/* TH8K-009: poll every element of this attacker-controlled
+	 * decode loop; free the list buffer owned here. */
+	if (Th8_Ready(interp) != TH8_OK) {
+	    if (zList) Th8_Free(interp, zList);
+	    return TH8_ERROR;
+	}
 	if (bSingle) {
 	    bits = (eOrder == TH8_BINARY_LE)
 	             ? (th8_uint64_t)th8BinaryReadI32Le(q)
@@ -2552,13 +3295,44 @@ th8BinaryAssignDoubleList(
     return rc;
 }
 
+#  if defined(TH8_ENABLE_VARIABLES)
+
 /*
- * binary_scan_command -- implementation of [binary scan].
+ *----------------------------------------------------------------------
  *
- * Returns the number of variables successfully assigned (as
- * a decimal string in the interp result).  Partial scans
- * succeed; the caller compares the return value to the
- * number of varName args supplied.
+ * binary_scan_command --
+ *
+ *	Implementation of
+ *	`[binary scan string formatString ?varName ...?]`:
+ *	decode fields from the input string into the named
+ *	variables and report how many were assigned.
+ *
+ * Why / How:
+ *	Drives the shared tokeniser (`th8BinaryNextToken`) over
+ *	the format string against a byte cursor into the input.
+ *	For each value-producing specifier it checks that enough
+ *	input remains, decodes the field, and assigns it to the
+ *	next `varName` via the appropriate `th8BinaryAssign*` /
+ *	`th8BinaryScan*` helper; the cursor ops (`x`/`X`/`@`) move
+ *	the cursor without consuming a variable.  Scanning stops
+ *	early when the input is exhausted, so partial scans
+ *	succeed -- the caller compares the returned count to the
+ *	number of `varName` arguments supplied.
+ *
+ * Results:
+ *	`TH8_OK` with the number of variables assigned set as a
+ *	decimal string in the interpreter result; `TH8_ERROR`
+ *	with a diagnostic on a bad specifier or a failed variable
+ *	assignment.  Too few arguments triggers
+ *	`Th8_WrongNumArgs`.
+ *
+ * Side effects:
+ *	Assigns the scanned fields to the named variables; sets
+ *	the interpreter result (the assigned-count or an error
+ *	message).  May allocate/free temporary buffers via the
+ *	assign helpers.
+ *
+ *----------------------------------------------------------------------
  */
 static int
 binary_scan_command(
@@ -2778,7 +3552,7 @@ binary_scan_command(
 	    break;
 	}
 	case TH8_BINARY_KIND_BIGINT_FIXED: {
-#  if defined(TH8_ENABLE_BIGINT)
+#    if defined(TH8_ENABLE_BIGINT)
 	    int bBigEndian = (pOp->eOrder == TH8_BINARY_BE);
 	    size_t nWidth;
 
@@ -2885,12 +3659,12 @@ binary_scan_command(
 	    iArg++;
 	    iCur += nWidth;
 	    nAssigned++;
-#  else /* !TH8_ENABLE_BIGINT */
+#    else /* !TH8_ENABLE_BIGINT */
 	    Th8_SetResultStatic(
 	        interp, "j/J specifier requires TH8_ENABLE_BIGINT",
 	        TH8_NOLEN);
 	    return TH8_ERROR;
-#  endif
+#    endif
 	    break;
 	}
 	}
@@ -2901,6 +3675,8 @@ out:
     return TH8_OK;
 }
 
+#  endif /* TH8_ENABLE_VARIABLES (binary_scan_command) */
+
 /*
  *----------------------------------------------------------------------
  *
@@ -2909,53 +3685,16 @@ out:
  *----------------------------------------------------------------------
  */
 
+/* Published for th8_lang.c ensemble population + [info subcommands] (TH8K-025). */
+const Th8_SubCommand *th8_binary_aSub;
+
 static const Th8_SubCommand th8BinarySub[] = {
     {0, "format", binary_format_command},
-    {0, "scan", binary_scan_command},
+#  if defined(TH8_ENABLE_VARIABLES)
+    {0, "scan", binary_scan_command}, /* binds results into variables */
+#  endif
     {0, 0, 0},
 };
-
-/*
- *----------------------------------------------------------------------
- *
- * binary_command --
- *
- *	Implements the script-visible `[binary ...]` ensemble.
- *	Pure thin wrapper that hands the (`argc`, `argv`, `argl`)
- *	tuple off to `Th8_CallSubCommand`, which performs the
- *	usual ensemble-name-resolution against `th8BinarySub`
- *	(format, scan) and dispatches to the matching
- *	subcommand handler.
- *
- *	Diagnostics for unknown / ambiguous subcommands are
- *	emitted by `Th8_CallSubCommand` itself.
- *
- * Parameters:
- *	interp -- live interpreter.
- *	ctx    -- command context (forwarded to the subcommand).
- *	argc   -- argument count.
- *	argv   -- argument vector.
- *	argl   -- argument byte-length vector.
- *
- * Returns:
- *	The subcommand handler's return code, or `TH8_ERROR`
- *	with a diagnostic if the subcommand name is unknown.
- *
- * Side effects:
- *	Whatever the dispatched subcommand performs.
- *
- *----------------------------------------------------------------------
- */
-static int
-binary_command(
-    Th8_Interp *interp,
-    void *ctx,
-    int argc,
-    const char **argv,
-    size_t *argl)
-{
-    return Th8_CallSubCommand(interp, ctx, argc, argv, argl, th8BinarySub);
-}
 
 /*
  *----------------------------------------------------------------------
@@ -2966,7 +3705,7 @@ binary_command(
  */
 
 static Th8_CommandEntry th8BinaryCommands[] = {
-    {1, 0, "binary", binary_command},
+    {1, 0, "binary", 0}, /* pure ensemble (TH8K-025) */
 };
 
 /*
@@ -2988,13 +3727,20 @@ static Th8_CommandEntry th8BinaryCommands[] = {
  *
  *	NULL `pnCommand` is always an error.
  *
+ * Why / How:
+ *	The plugin's public entry point, matching the standard
+ *	two-call `Th8_CommandEntry` reporter contract (query the
+ *	count with a NULL buffer, then copy into a buffer of
+ *	that size).  This lets the loader size its array without
+ *	the plugin exposing its internal table directly.
+ *
  * Parameters:
  *	pCommand  -- caller-supplied output buffer or NULL to
  *		query the count only.
  *	pnCommand -- in/out count; receives the table size on
  *		query, must be >= table size on copy.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success; `TH8_ERROR` on missing `pnCommand`
  *	or insufficient `*pnCommand`.
  *
@@ -3022,6 +3768,7 @@ th8BinaryGetCommands(Th8_CommandEntry *pCommand, int *pnCommand)
 	    pCommand[i] = th8BinaryCommands[i];
 	}
     }
+    th8_binary_aSub = th8BinarySub; /* publish for ensemble population */
     return TH8_OK;
 }
 

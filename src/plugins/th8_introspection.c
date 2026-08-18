@@ -340,6 +340,14 @@ oom:
  *	`th8ResolveNsPattern`, which also splits the
  *	namespace prefix from the tail glob.
  *
+ * Why / How:
+ *	Splits into two paths so namespace scoping matches Tcl: a
+ *	qualified pattern iterates only the named namespace's command
+ *	hash (prefixing results with the namespace path), while a bare
+ *	pattern gathers the current + global namespaces and glob-filters
+ *	the flat list.  Delegating the split to `th8ResolveNsPattern`
+ *	keeps the two callers of that convention consistent.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	ctx    -- unused command context.
@@ -348,7 +356,7 @@ oom:
  *		argv[2]=optional pattern.
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` with the list as the interpreter result;
  *	`TH8_ERROR` on argument-count or allocation failure
  *	(interpreter result: diagnostic).
@@ -1243,12 +1251,19 @@ info_plugins_command(
  *	     wraps `readlink("/proc/self/exe")` on Linux,
  *	     `_NSGetExecutablePath` on macOS,
  *	     `GetModuleFileNameW` on Win32, etc.).
- *	  3. Fall back to the empty string when neither
+ *	  3. Fail with `"no executable name?"` when neither
  *	     source is available.
  *
  *	Priority 1 lets embedders force a specific identity
  *	(useful for self-tests and tools that wrap the
  *	interpreter); priority 2 covers the common case.
+ *
+ * Why / How:
+ *	The variable-override tier exists so a host can pin the
+ *	executable identity (for self-tests or wrapper tools) without a
+ *	platform call, and it takes precedence precisely so it can shadow
+ *	whatever `xGetExePath` would report.  The platform callback is
+ *	consulted only when no override is set.
  *
  * Parameters:
  *	interp -- live interpreter.
@@ -1257,9 +1272,10 @@ info_plugins_command(
  *	argv   -- argv[0]=`"info"`; argv[1]=`"nameofexecutable"`.
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` with the path as the interpreter result;
- *	`TH8_ERROR` only on wrong argument count.
+ *	`TH8_ERROR` on wrong argument count or when no override and no
+ *	platform path are available (result: `"no executable name?"`).
  *
  * Side effects:
  *	Sets the interpreter result; may allocate and free a
@@ -1417,8 +1433,18 @@ info_patchlevel_command(
  *	Return a list of breakpoint descriptions.  Each breakpoint
  *	produces three elements: ID, scriptName, lineNumber.
  *
+ * Why / How:
+ *	Delegates to `Th8_ListAppendBreakpoints`, which walks the
+ *	interpreter's breakpoint table and appends each entry as a
+ *	three-element triple, so the debugger's breakpoint state is
+ *	exposed to scripts as a flat, easily-iterated Tcl list.
+ *
  * Results:
  *	TH8_OK.  Result is a flat list of {id name line} triples.
+ *
+ * Side effects:
+ *	Sets the interpreter result; allocates and frees a temporary
+ *	list-building buffer.
  *
  *----------------------------------------------------------------------
  */
@@ -1460,8 +1486,18 @@ info_breakpoints_command(
  *	in the current namespace, optionally filtered by a glob
  *	pattern.
  *
+ * Why / How:
+ *	Delegates to `Th8_ListAppendExpansions`, forwarding the optional
+ *	glob pattern (argv[2]) so the append helper does the namespace
+ *	scoping and filtering; this command only validates arity and
+ *	publishes the result.
+ *
  * Results:
  *	TH8_OK.  Result is a list of tag names.
+ *
+ * Side effects:
+ *	Sets the interpreter result; allocates and frees a temporary
+ *	list-building buffer.
  *
  *----------------------------------------------------------------------
  */
@@ -1736,6 +1772,63 @@ info_context_command(
 
 
 /*
+ * Context for th8InfoSubCallback: builds the (optionally glob-filtered)
+ * sub-command name list in registration order.
+ */
+
+typedef struct {
+    Th8_Interp *interp;
+    const char *zPat; /* Glob pattern, or NULL for "all". */
+    size_t nPat;
+    char **pzList; /* Output list. */
+    size_t *pnList;
+    int rc; /* Set to TH8_ERROR if an append failed. */
+} th8InfoSubCtx;
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8InfoSubCallback --
+ *
+ *	Th8_HashIterateOrdered callback: append one sub-command name (the hash
+ *	key) to the [info subcommands] result, glob-filtered, in registration
+ *	order.
+ *
+ * Why / How:
+ *	The sub-command hash is keyed by name, so the entry key IS the name;
+ *	the Th8_SubCmd payload is not needed here.  Matches Tcl's ensemble
+ *	introspection: only names passing the optional glob are listed.
+ *
+ * Results:
+ *	TH8_OK to continue; TH8_ERROR to stop early on an allocation failure.
+ *
+ * Side effects:
+ *	Appends to the caller's list; may set the context's rc.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8InfoSubCallback(Th8_HashEntry *pEntry, void *pVoid)
+{
+    th8InfoSubCtx *p = (th8InfoSubCtx *)pVoid;
+
+    if (!pEntry->pData) return TH8_OK; /* skip an empty slot defensively */
+    if (p->zPat && !Th8_GlobMatch(
+                       p->interp, p->zPat, TH8_LEN(p->nPat), pEntry->zKey,
+                       pEntry->nKey)) {
+	return TH8_OK;
+    }
+    if (Th8_ListAppend(
+            p->interp, p->pzList, p->pnList, pEntry->zKey, pEntry->nKey) !=
+        TH8_OK) {
+	p->rc = TH8_ERROR;
+	return TH8_ERROR;
+    }
+    return TH8_OK;
+}
+
+/*
  *----------------------------------------------------------------------
  *
  * info_subcommands_command --
@@ -1743,16 +1836,18 @@ info_context_command(
  *	info subcommands COMMAND ?PATTERN?
  *
  * Why / How:
- *	Implements [info subcommands].  Matches the COMMAND name to
- *	its known subcommand table (info, file, string, namespace,
- *	package, array) and returns a list of subcommand names,
- *	optionally filtered by a glob pattern.  The subcommand
- *	tables are stored in global pointers (th8_info_aSub, etc.)
- *	that are populated when the ensemble dispatchers run.
+ *	Implements [info subcommands].  Resolves COMMAND and enumerates its
+ *	per-interpreter sub-command hash (th8CommandSubCommands) in registration
+ *	order, optionally filtered by a glob PATTERN.  Because this is the SAME
+ *	hash the evaluator dispatches from, the listing always matches behavior:
+ *	a dynamically added, replaced, or subsetted-out sub-command is reflected
+ *	here identically -- there is no static catalogue to drift.  Works for
+ *	every ensemble (including embedder-created ones), so no per-ensemble
+ *	special-casing is needed.
  *
  * Results:
- *	TH8_OK with a list of subcommand names, or TH8_ERROR if
- *	COMMAND is not a recognized ensemble.
+ *	TH8_OK with a list of subcommand names, or TH8_ERROR if COMMAND is
+ *	unknown or is not an ensemble.
  *
  * Side effects:
  *	None.
@@ -1768,81 +1863,36 @@ info_subcommands_command(
     const char **argv,  /* Argument values. */
     size_t *argl)  /* Argument lengths. */
 {
-    const Th8_SubCommand *pSub = 0;
+    Th8_Hash *pSubs;
+    th8InfoSubCtx c;
     char *zList = 0;
     size_t nList = 0;
-    const char *zPat = 0;
-    size_t nPat = 0;
-    int i;
 
     (void)ctx;
 
     if (argc != 3 && argc != 4) {
 	return Th8_WrongNumArgs(interp, "info subcommands command ?pattern?");
     }
-    if (argc == 4) {
-	zPat = argv[3];
-	nPat = argl[3];
-    }
 
-    /*
-     * Match the command name to its subcommand table.
-     */
-
-    if (th8StrEq(interp, argv[2], argl[2], "info")) {
-	pSub = th8_info_aSub;
-    }
-#  if defined(TH8_PLUGIN_FILE_SYSTEMS)
-    else if (th8StrEq(interp, argv[2], argl[2], "file")) {
-	pSub = th8_file_aSub;
-    }
-#  endif
-#  if defined(TH8_PLUGIN_STRINGS)
-    else if (th8StrEq(interp, argv[2], argl[2], "string")) {
-	pSub = th8_string_aSub;
-    }
-#  endif
-#  if defined(TH8_PLUGIN_MANAGEMENT)
-    else if (th8StrEq(interp, argv[2], argl[2], "namespace")) {
-	pSub = th8_namespace_aSub;
-    }
-#  endif
-#  if defined(TH8_PLUGIN_EXTENSIBILITY)
-    else if (th8StrEq(interp, argv[2], argl[2], "package")) {
-	pSub = th8_package_aSub;
-    }
-#  endif
-#  if defined(TH8_PLUGIN_VARIABLES)
-    else if (th8StrEq(interp, argv[2], argl[2], "array")) {
-	pSub = th8_array_aSub;
-    }
-#  endif
-#  if defined(TH8_ENABLE_CRYPTOGRAPHY)
-    else if (th8StrEq(interp, argv[2], argl[2], "flags")) {
-	/* Bug 35: th8_flags_aSub is owned by the harpy plugin
-	 * which is gated on TH8_ENABLE_CRYPTOGRAPHY; without
-	 * cryptography the [info subcommands flags] form is
-	 * not supported. */
-	pSub = th8_flags_aSub;
-    }
-#  endif
-
-    if (!pSub) {
+    pSubs = th8CommandSubCommands(interp, argv[2], TH8_LEN(argl[2]));
+    if (!pSubs) {
 	Th8_ErrorMessage(
 	    interp, "not an ensemble command: \"", argv[2], argl[2]);
 	return TH8_ERROR;
     }
 
-    for (i = 0; pSub[i].zName; i++) {
-	if (zPat) {
-	    if (!Th8_GlobMatch(
-	            interp, zPat, TH8_LEN(nPat), pSub[i].zName,
-	            Th8_Strlen(interp, pSub[i].zName))) {
-		continue;
-	    }
-	}
-	Th8_ListAppend(interp, &zList, &nList, pSub[i].zName, TH8_NOLEN);
+    c.interp = interp;
+    c.zPat = (argc == 4) ? argv[3] : 0;
+    c.nPat = (argc == 4) ? argl[3] : 0;
+    c.pzList = &zList;
+    c.pnList = &nList;
+    c.rc = TH8_OK;
+    (void)Th8_HashIterateOrdered(interp, pSubs, th8InfoSubCallback, &c);
+    if (c.rc != TH8_OK) {
+	Th8_Free(interp, zList);
+	return TH8_ERROR;
     }
+
     if (zList) {
 	Th8_SetResult(interp, zList, nList);
 	Th8_Free(interp, zList);
@@ -1856,16 +1906,15 @@ info_subcommands_command(
 /*
  *----------------------------------------------------------------------
  *
- * info_command --
+ * th8InfoSub --
  *
- *	Dispatcher for info sub-commands.
+ *	Catalogue of `info` sub-commands, installed into the `info` ensemble
+ *	command's per-interpreter sub-command hash at registration (TH8K-025).
  *
  * Why / How:
- *	Implements the Tcl [info] command ensemble.  Builds a static
- *	subcommand table (conditionally compiled based on enabled
- *	features) and delegates to Th8_CallSubCommand.  Also stores
- *	the table pointer in the th8_info_aSub global for
- *	[info subcommands] support.
+ *	Conditionally compiled based on enabled features.  Published as
+ *	th8_info_aSub so [info subcommands] can enumerate the available info
+ *	sub-commands.
  *
  * Results:
  *	Return code from the sub-command.
@@ -1919,53 +1968,6 @@ static const Th8_SubCommand th8InfoSub[] = {
 #  endif
     {0, 0, 0}};
 
-/*
- *----------------------------------------------------------------------
- *
- * info_command --
- *
- *	Implements the script-visible `[info ...]` ensemble.
- *	Pure thin wrapper that hands the dispatch off to
- *	`Th8_CallSubCommand` against `th8InfoSub`, the
- *	feature-gated table covering `args`, `body`,
- *	`breakpoints`, `cmdcount`, `commands`, `complete`,
- *	`context`, `default`, `exists`, `expansions`,
- *	`functions`, `globals`, `level`, `library`, `loaded`,
- *	`nameofexecutable`, `patchlevel`, `plugins`, and
- *	(when their respective features are enabled) several
- *	others.
- *
- *	Diagnostics for unknown / ambiguous subcommands are
- *	emitted by `Th8_CallSubCommand`.
- *
- * Parameters:
- *	interp -- live interpreter.
- *	ctx    -- command context (forwarded).
- *	argc   -- argument count.
- *	argv   -- argument vector.
- *	argl   -- argument byte-length vector.
- *
- * Returns:
- *	The selected subcommand handler's return code, or
- *	`TH8_ERROR` with a diagnostic if the subcommand name
- *	is unknown.
- *
- * Side effects:
- *	Whatever the dispatched subcommand performs.
- *
- *----------------------------------------------------------------------
- */
-static int
-info_command(
-    Th8_Interp *interp, /* Interpreter. */
-    void *ctx,   /* Not used. */
-    int argc,   /* Number of arguments. */
-    const char **argv,  /* Argument values. */
-    size_t *argl)  /* Argument lengths. */
-{
-    return Th8_CallSubCommand(interp, ctx, argc, argv, argl, th8InfoSub);
-}
-
 
 /*
  *----------------------------------------------------------------------
@@ -2015,7 +2017,7 @@ pid_command(
  */
 
 static Th8_CommandEntry th8IntrospectionCommands[] = {
-    {1, 0, "info", info_command},
+    {1, 0, "info", 0}, /* pure ensemble (TH8K-025) */
     {1, 0, "pid", pid_command},
 };
 

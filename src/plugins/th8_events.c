@@ -224,15 +224,20 @@ typedef struct UpdateState {
  *	the boilerplate guard at every exit edge of
  *	`update_step`.
  *
+ * Why / How:
+ *	Centralizes the one-line `Th8_Free` so `update_step`'s many
+ *	terminal edges can free the accumulator with a single call; the
+ *	NULL guard makes it safe to call unconditionally.
+ *
  * Parameters:
  *	interp -- live interpreter (for `Th8_Free`).
  *	p      -- state pointer, or NULL.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
- *	Frees the state allocation.
+ *	Frees the state allocation.  No-op when `p` is NULL.
  *
  *----------------------------------------------------------------------
  */
@@ -281,6 +286,13 @@ static int update_step(Th8_Interp *interp, void *pData[], int rc);
  *	On every terminating edge the helper frees the
  *	`UpdateState` accumulator via `update_state_free`.
  *
+ * Why / How:
+ *	Draining one event per trampoline tick (rather than a C `while`
+ *	loop) keeps the NRE chain shape coherent, so a `[yield]` inside
+ *	an event callback saves the suspended chain at a clean boundary
+ *	and a later resume continues the drain.  It re-arms itself with
+ *	`Th8_NRAddCallback` until the limit is hit or the queue drains.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	pData  -- NRE data array; `pData[0]` is the
@@ -288,7 +300,7 @@ static int update_step(Th8_Interp *interp, void *pData[], int rc);
  *	rc     -- return code from the previous callback in
  *		the NRE chain.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on continuation (re-armed), terminal `TH8_OK`
  *	on completion (drain finished or limit hit), or the
  *	propagated error from `rc` / `Th8_Ready` /
@@ -376,6 +388,14 @@ update_step(Th8_Interp *interp, void *pData[], int rc)
  *	(coroutine-resume safety and `[yield]` boundary
  *	preservation).
  *
+ * Why / How:
+ *	Validates arguments and preconditions synchronously, then hands
+ *	the actual draining to `update_step` on the NRE chain so this
+ *	command's C stack frame unwinds before any event callback runs;
+ *	that indirection is what makes a `[yield]` inside a callback
+ *	safe.  The `UpdateState` accumulator carries the limit and
+ *	processed count across ticks and is owned by the NRE chain.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	ctx    -- unused command context.
@@ -384,7 +404,7 @@ update_step(Th8_Interp *interp, void *pData[], int rc)
  *		argv[2]=N (decimal positive integer).
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` once the NRE drain is enqueued.  `TH8_ERROR`
  *	on bad arguments, missing event queue, cancellation
  *	already pending, or allocation failure (interpreter
@@ -529,15 +549,22 @@ typedef struct VWaitState {
  *	`zCap`).  NULL-safe so callers do not need a guard
  *	at every exit edge of `vwait_step`.
  *
+ * Why / How:
+ *	`vwait_step` has many terminal edges (cancel, change, timeout,
+ *	error); centralizing the frees of the two owned strings plus the
+ *	struct here, behind a NULL guard, keeps each of those edges a
+ *	single call.
+ *
  * Parameters:
  *	interp -- live interpreter (for `Th8_Free`).
  *	p      -- state pointer, or NULL.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
- *	Frees `p->zVar`, `p->zCap`, and `p` itself.
+ *	Frees `p->zVar`, `p->zCap`, and `p` itself.  No-op when `p` is
+ *	NULL.
  *
  *----------------------------------------------------------------------
  */
@@ -588,6 +615,15 @@ static int vwait_step(Th8_Interp *interp, void *pData[], int rc);
  *
  *	Gated on `TH8_ENABLE_VARIABLES`.
  *
+ * Why / How:
+ *	Polls the watched variable one slice at a time instead of
+ *	blocking: each tick drains at most one event or sleeps a bounded
+ *	`TH8_VWAIT_SLICE_MS` before re-arming, so a pending cancel or a
+ *	timeout is noticed within one slice and a `[yield]` in an event
+ *	callback can suspend the whole NRE chain cleanly.  Cached
+ *	platform callbacks are used so a mid-wait platform swap cannot
+ *	strand the wait.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	pData  -- NRE data array; `pData[0]` is the
@@ -595,7 +631,7 @@ static int vwait_step(Th8_Interp *interp, void *pData[], int rc);
  *	rc     -- return code from the previous callback in
  *		the NRE chain.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on continuation (re-armed) or on
  *	successful variable-change (interpreter result
  *	cleared).
@@ -765,6 +801,14 @@ vwait_step(Th8_Interp *interp, void *pData[], int rc)
  *
  *	Gated on `TH8_ENABLE_VARIABLES`.
  *
+ * Why / How:
+ *	Does all setup that cannot run under a coroutine resume
+ *	(callback caching, name copy, initial-value snapshot, deadline
+ *	computation) up front, then delegates the slice-by-slice wait to
+ *	`vwait_step` on the NRE chain so this frame unwinds before any
+ *	event callback runs.  The captured monotonic deadline keeps the
+ *	timeout immune to wall-clock adjustments.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	ctx    -- unused command context.
@@ -775,7 +819,7 @@ vwait_step(Th8_Interp *interp, void *pData[], int rc)
  *		argv[3]=varName (-timeout form).
  *	argl   -- argument byte-lengths.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` once the NRE wait is enqueued.  `TH8_ERROR`
  *	on bad arguments, missing event queue, missing
  *	platform callback, allocation failure, or
@@ -946,13 +990,21 @@ static Th8_CommandEntry th8EventsCommands[] = {
  *
  *	NULL `pnCommand` is always an error.
  *
+ * Why / How:
+ *	Implements the two-call reporter protocol shared by every TH8
+ *	plugin: the loader first calls with a NULL buffer to learn the
+ *	count, then again with a buffer of that size to receive the
+ *	entries.  This keeps buffer sizing on the caller and lets the
+ *	`vwait` slot compile out under `TH8_ENABLE_VARIABLES` without the
+ *	loader needing to know.
+ *
  * Parameters:
  *	pCommand  -- caller-supplied output buffer or NULL to
  *		query the count only.
  *	pnCommand -- in/out count; receives the table size on
  *		query, must be >= table size on copy.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success; `TH8_ERROR` on missing
  *	`pnCommand` or insufficient `*pnCommand`.
  *

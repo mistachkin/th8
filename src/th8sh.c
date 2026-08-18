@@ -47,6 +47,31 @@
  *	sequence.  Each step delegates to a Th8Shell_* helper or
  *	to a single Th8_* call.
  *
+ * Why / How:
+ *	Drives the stock shell as a fixed sequence of steps: optional
+ *	debugger break, early --version short-circuit, chroot pre-scan
+ *	and drop, default-platform construction (plus optional curl
+ *	xGetData wrapper), two-phase script-path resolution around
+ *	TH8 initialization, interpreter creation and language
+ *	registration, env-var feature toggles, signal handlers, CWD
+ *	anchoring and auto-path search, pledge/unveil hardening, and
+ *	finally dispatch on argv shape to -eval, a script file, or the
+ *	interactive REPL.  Cleanup runs through the shared `done` label.
+ *
+ * Results:
+ *	A process exit code: TH8_EXIT_SUCCESS on a clean run (or after
+ *	--version), TH8_EXIT_DEBUGGER when a debugger break is taken,
+ *	TH8_EXIT_PLATFORM on platform/init failures, TH8_EXIT_FAILURE on
+ *	other setup failures, or the exit code produced by the selected
+ *	-eval / file / REPL dispatch.
+ *
+ * Side effects:
+ *	Initializes the TH8 library, creates and destroys an
+ *	interpreter, may chroot/drop privileges, installs signal
+ *	handlers and pledge/unveil restrictions, changes the working
+ *	directory, evaluates user scripts, writes diagnostics to stderr,
+ *	and frees the resolved script-path allocation.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -140,7 +165,11 @@ main(int argc, char **argv)
 	rc = TH8_EXIT_FAILURE;
 	goto done;
     }
-    Th8_RegisterLanguage(interp);
+    if (Th8_RegisterLanguage(interp) != TH8_OK) {
+	fprintf(stderr, "th8sh: failed to register language\n");
+	rc = TH8_EXIT_FAILURE;
+	goto done;
+    }
 
     /*
      * Step 6: phase-2 script path resolution.

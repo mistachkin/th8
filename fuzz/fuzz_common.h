@@ -29,7 +29,15 @@ th8FuzzCreateInterp(int bRegisterLang)
 
     interp = Th8_CreateInterp(&plat);
     if (interp && bRegisterLang) {
-	Th8_RegisterLanguage(interp);
+	/* A partially-registered interpreter must not be handed to a fuzz
+	 * target: Th8_RegisterLanguage returns TH8_ERROR (leaving a partial,
+	 * inconsistent language) on any registration failure, so discard the
+	 * interpreter and return NULL rather than fuzzing partial state
+	 * (TH8K-006). */
+	if (Th8_RegisterLanguage(interp) != TH8_OK) {
+	    Th8_DeleteInterp(interp);
+	    return NULL;
+	}
     }
 
     return interp;

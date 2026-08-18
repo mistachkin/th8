@@ -107,7 +107,10 @@ typedef struct {
  *	stale policy, publicKeyToken, or algorithmName values.
  *
  * Results:
- *	None.
+ *	TH8_OK when all seven elements were reset; TH8_ERROR on the
+ *	first allocation failure (the array may be partially reset).
+ *	A TH8_ERROR MUST fail the verification so a partial security
+ *	array is never exposed to the script (TH8K-006/-020).
  *
  * Side effects:
  *	Sets every element of the ::th8_security array variable
@@ -116,10 +119,10 @@ typedef struct {
  *----------------------------------------------------------------------
  */
 
-static void
+static int
 th8PolicyResetSecurity(Th8_Interp *interp)
 {
-    Th8_ResetSecurityArray(interp);
+    return Th8_ResetSecurityArray(interp);
 }
 #  endif
 
@@ -739,8 +742,11 @@ th8PolicyCheckAnnotations(
 		return TH8_ERROR;
 	    }
 	} else {
+	    /* Default server, DNSSEC-required (1): a policy time check must
+	     * not silently accept an unvalidated answer. */
 	    bHaveRemoteTime =
-	        (th8NtpQuery(interp, NULL, 0, 5000, 0, 0, &nowSec) == TH8_OK);
+	        (th8NtpQuery(interp, NULL, 0, 5000, 0, 0, 1, &nowSec) ==
+	         TH8_OK);
 	}
 
 	/*
@@ -823,7 +829,7 @@ th8PolicyCheckAnnotations(
 static int
 th8PolicyFetchKey(
     Th8_Interp *interp,
-    const char *zToken,  /* 16-char hex token (NUL-terminated). */
+    const char *zToken, /* 16-char hex token (NUL-terminated). */
     Th8_RsaKey **ppKey)
 {
     /*
@@ -938,9 +944,9 @@ static void
 th8PolicyPopulateSecurity(
     Th8_Interp *interp,
     const Th8_RsaKey *pKey,
-    const char *zToken,  /* 16-char hex (NUL-terminated). */
-    const char *zName,  /* Verified script name. */
-    size_t nName)  /* Name length. */
+    const char *zToken, /* 16-char hex (NUL-terminated). */
+    const char *zName, /* Verified script name. */
+    size_t nName) /* Name length. */
 {
     /*
      * algorithmName: "RSA-<bits>"
@@ -1028,11 +1034,11 @@ th8PolicyPopulateSecurity(
 int
 th8PolicyVerifyData(
     Th8_Interp *interp,
-    const char *zName,  /* File name. */
-    size_t nName,  /* File name length. */
-    const char *zData,  /* Raw file data. */
-    size_t nData,  /* Raw data length. */
-    void *pCtx)   /* Th8_PolicyCtx*. */
+    const char *zName, /* File name. */
+    size_t nName, /* File name length. */
+    const char *zData, /* Raw file data. */
+    size_t nData, /* Raw data length. */
+    void *pCtx) /* Th8_PolicyCtx*. */
 {
     Th8_PolicyCtx *p = (Th8_PolicyCtx *)pCtx;
     Th8_ScriptAnnotations ann;
@@ -1265,7 +1271,17 @@ th8PolicyVerifyData(
      */
 
 #  if defined(TH8_ENABLE_VARIABLES)
-    th8PolicyResetSecurity(interp);
+    if (th8PolicyResetSecurity(interp) != TH8_OK) {
+	/*
+	 * The security array could not be cleanly reset (allocation
+	 * failure).  Reject the eval rather than expose a possibly
+	 * partial security array to the just-verified script
+	 * (TH8K-006/-020).
+	 */
+	Th8_SetResultStatic(
+	    interp, "signed-only: unable to reset security state", TH8_NOLEN);
+	goto error;
+    }
     th8PolicyPopulateSecurity(interp, pKey, zToken, zName, nName);
 
     /*
@@ -1569,7 +1585,7 @@ th8PolicyCallback(
 int
 Th8_InstallSignedPolicy(
     Th8_Interp *interp,
-    void **ppCtx)  /* OUT: opaque context (or NULL). */
+    void **ppCtx) /* OUT: opaque context (or NULL). */
 {
     Th8_PolicyCtx *p;
 
@@ -1656,7 +1672,7 @@ th8PolicyFreeKeyEntry(Th8_HashEntry *pEntry, void *pCtx)
 void
 Th8_RemoveSignedPolicy(
     Th8_Interp *interp,
-    void *pCtx)   /* The Th8_PolicyCtx* from install. */
+    void *pCtx) /* The Th8_PolicyCtx* from install. */
 {
     Th8_PolicyCtx *p = (Th8_PolicyCtx *)pCtx;
 
@@ -1901,7 +1917,7 @@ int
 Th8_EnableSignedPolicy(
     Th8_Interp *interp, /* Interpreter. */
     void **ppCtx, /* Context pointer. */
-    int bEnable)  /* 1=enable, 0=disable. */
+    int bEnable) /* 1=enable, 0=disable. */
 {
     void *pCtx = NULL;
     const unsigned char *zKeyData;
@@ -2009,11 +2025,11 @@ fail:
 
 int
 Th8_EvalFileAndRsaKeyLoad(
-    Th8_Interp *interp,  /* Parent interpreter. */
-    const char *zName,  /* Script file name. */
-    size_t nName,  /* Byte length, or TH8_NOLEN. */
-    void *pCtx,   /* Policy context (for preload). */
-    int bPreload)  /* Non-zero to preload into cache. */
+    Th8_Interp *interp, /* Parent interpreter. */
+    const char *zName, /* Script file name. */
+    size_t nName, /* Byte length, or TH8_NOLEN. */
+    void *pCtx, /* Policy context (for preload). */
+    int bPreload) /* Non-zero to preload into cache. */
 {
     const unsigned char *zData = NULL;
     size_t nData = 0;

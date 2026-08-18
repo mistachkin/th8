@@ -14,3 +14,13 @@ externals/**            linguist-vendored
 src/th8StubInit.c       linguist-generated
 src/th8InternalStubInit.c linguist-generated
 bin/Spilornis*          linguist-generated
+
+# ---------------------------------------------------------------------
+# Detached signature files (*.b64sig) are base64 with CRLF line endings
+# that are intrinsic to the signing format.  Mark them explicitly binary
+# so `git diff --check` does not report the trailing CR as a whitespace
+# error and git never rewrites their line endings (which would break the
+# signature).  This is on top of the broad `* -text` above, per the
+# TH8K-029 recommendation to exclude signature artifacts explicitly.
+# ---------------------------------------------------------------------
+*.b64sig                binary

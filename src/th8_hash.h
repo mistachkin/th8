@@ -96,7 +96,8 @@ typedef struct Th8_HashEntry Th8_HashEntry;
 
 struct Th8_Hash {
     Th8_HashEntry *aBucket[TH8_HASH_SIZE];
-    int nNextOrder;  /* Next insertion-order counter. */
+    th8_int64_t
+        nNextOrder;  /* Next insertion-order counter (64-bit; TH8K-016). */
 };
 
 struct Th8_HashEntry {
@@ -105,7 +106,8 @@ struct Th8_HashEntry {
     char *zKey;   /* Key string (owned). */
     size_t nKey;  /* Byte length of key. */
     Th8_HashEntry *pNext; /* Internal use only. */
-    int nInsertOrder;  /* Insertion sequence number. */
+    th8_int64_t
+        nInsertOrder;  /* Insertion sequence number (64-bit; TH8K-016). */
 };
 
 /*
@@ -147,10 +149,16 @@ TH8_API void Th8_HashIterate(
  * Th8_HashIterateOrdered --
  *	Like Th8_HashIterate, but visits entries in insertion order.
  *	Used by dict commands to preserve key order per Tcl semantics.
- *	Allocates a temporary sort array; falls back to unordered
- *	iteration on allocation failure.
+ *	Allocates a temporary sort array sized from the live-entry
+ *	count.  Returns TH8_OK when every entry was visited in order
+ *	(or the callback stopped early, or the hash was empty), and
+ *	TH8_ERROR if the array could not be allocated or a readiness
+ *	check cancelled the walk -- in which case NO ordered guarantee
+ *	holds and the caller must not treat the iteration as complete.
+ *	Unlike the previous behaviour, it does NOT silently fall back
+ *	to unordered iteration on allocation failure.
  */
-TH8_API void Th8_HashIterateOrdered(
+TH8_API int Th8_HashIterateOrdered(
     Th8_Interp *interp,
     Th8_Hash *pHash,
     int (*xCallback)(Th8_HashEntry *, void *),

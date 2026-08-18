@@ -48,5 +48,82 @@ runTest {test exproverflow-1.1 {
 } -result {1 1 1 1 1 1}}
 
 ###############################################################################
+#
+# Section 2 -- [expr] recursion-depth bound (TH8K-019).
+#
+# TH8 evaluates expressions with a recursive-descent tree builder and
+# evaluator, so it bounds nesting explicitly at TH8_MX_EXPR_DEPTH (1000)
+# and reports "expression nested too deeply" instead of overflowing the
+# native C stack.  These are th8-constrained: the reference Tcl uses a
+# bytecode/iterative evaluator with no such limit, so it would evaluate
+# these deep expressions rather than reject them.
+#
+###############################################################################
+
+runTest {test exproverflow-2.1 {
+  A deeply nested parenthesised expression is rejected cleanly with
+  "expression nested too deeply" (bounds th8ExprMakeTree recursion)
+  rather than crashing.
+} -constraints {
+    th8
+} -setup {
+  set deep "[string repeat ( 5000]1[string repeat ) 5000]"
+} -body {
+  list [catch {expr $deep} m] $m
+} -cleanup {
+  unset -nocomplain deep m
+} -result {1 {expression nested too deeply}}}
+
+###############################################################################
+
+runTest {test exproverflow-2.2 {
+  A long operator chain (deep evaluation/free tree) is rejected cleanly
+  with "expression nested too deeply" (bounds th8ExprEval recursion)
+  rather than overflowing the native stack.
+} -constraints {
+    th8
+} -setup {
+  set chain "1[string repeat +1 5000]"
+} -body {
+  list [catch {expr $chain} m] $m
+} -cleanup {
+  unset -nocomplain chain m
+} -result {1 {expression nested too deeply}}}
+
+###############################################################################
+
+runTest {test exproverflow-2.3 {
+  A very long operator chain (well beyond the limit) is still rejected
+  cleanly and its oversized parse tree is torn down without a stack
+  overflow (iterative th8ExprFree).
+} -constraints {
+    th8
+} -setup {
+  set chain "1[string repeat +1 100000]"
+} -body {
+  # The catch returning 1 (not a crash) demonstrates the iterative free
+  # survived a 100000-deep tree the evaluator refused to evaluate.
+  catch {expr $chain}
+} -cleanup {
+  unset -nocomplain chain
+} -result {1}}
+
+###############################################################################
+
+runTest {test exproverflow-2.4 {
+  Expressions nested just under the limit still evaluate normally, and a
+  genuine syntax error is still reported as such (the depth bound does
+  not mask ordinary parse errors).
+} -constraints {
+    th8
+} -body {
+  list [expr "[string repeat ( 900]1[string repeat ) 900]"] \
+      [expr "1[string repeat +1 900]"] \
+      [catch {expr {1 + }} m]
+} -cleanup {
+  unset -nocomplain m
+} -result {1 901 1}}
+
+###############################################################################
 
 source tests/epilogue.tcl

@@ -19,6 +19,9 @@
 
 #  include "th8_hash.h"
 #  include "th8_mem.h"
+#  include <string.h> /* memcmp, memcpy, strlen (the shims below expand to these) */
+#  include <stdlib.h> /* qsort */
+#  include <time.h> /* time (hash-seed fallback in th8SeedHash) */
 
 /*
  * Standalone shims: map TH8 APIs to the C runtime.
@@ -43,6 +46,49 @@
 #  define Th8_Qsort(interp, b, n, sz, cmp) qsort((b), (n), (sz), (cmp))
 
 /*
+ * No cooperative cancellation in standalone mode: the freestanding
+ * hash harness has no interpreter readiness state, so ordered
+ * iteration is always "ready" (0 == TH8_OK).
+ */
+#  define Th8_Ready(interp) (0)
+
+/*
+ * 64-bit signed limit (normally from th8.h) for the insertion-order
+ * saturation guard in Th8_HashFind (TH8K-016).
+ */
+#  ifndef TH8_INT64_MAX
+#    define TH8_INT64_MAX ((th8_int64_t)0x7fffffffffffffff)
+#  endif
+
+/*
+ * Return codes and overflow-checked allocation macros (normally from th8.h /
+ * th8_int.h, which standalone mode does not include).  The TH8_ALLOC* macros
+ * map onto the zero-filling Th8_Malloc shim while preserving the same overflow
+ * REJECTION as the full build -- a freestanding caller gets NULL (not a wrapped
+ * size) when the requested size overflows.
+ */
+#  ifndef TH8_OK
+#    define TH8_OK (0)
+#  endif
+#  ifndef TH8_ERROR
+#    define TH8_ERROR (1)
+#  endif
+#  define TH8_ALLOC(interp, nByte) Th8_Malloc((interp), (nByte))
+#  define TH8_ALLOC_STR(interp, nLen)                                        \
+      ((nLen) == (size_t)-1 ? (void *)0 : Th8_Malloc((interp), (nLen) + 1))
+/*
+ * (a) and (b) are size_t at every call site (nLive cast to size_t and a
+ * sizeof).  The overflow guard mirrors TH8_SAFE_MUL_SIZE exactly, so the
+ * product is only formed when it fits size_t -- and, like that macro, the
+ * multiply carries no (size_t) cast adjacent to it, keeping the size-multiply
+ * audit rule satisfied without a suppression.
+ */
+#  define TH8_ALLOC_MUL(interp, a, b)                                        \
+      (((b) != 0 && (a) > (size_t)-1 / (b))                                  \
+	   ? (void *)0                                                       \
+	   : Th8_Malloc((interp), (a) * (b)))
+
+/*
  * No global mutex in standalone mode.  The caller is responsible
  * for external synchronization if needed.
  */
@@ -58,10 +104,14 @@
 #  include "th8_int.h"
 
 /*
- * In normal (non-standalone) mode, Th8_Qsort maps to the
- * C library qsort, matching the standalone shim above.
+ * In normal (non-standalone) mode Th8_Qsort maps to th8Qsort (th8_plat.c,
+ * declared in th8_int.h), which routes sorting through the platform `xQsort`
+ * abstraction (TH8K-015) rather than the C library qsort directly, so a build
+ * with no C-library qsort (e.g. a future kernel profile) can supply its own
+ * sort.
  */
-#  define Th8_Qsort(interp, b, n, sz, cmp) qsort((b), (n), (sz), (cmp))
+#  define Th8_Qsort(interp, b, n, sz, cmp)                                   \
+      th8Qsort((interp), (b), (n), (sz), (cmp))
 
 #endif /* TH8_HASH_STANDALONE */
 
@@ -232,6 +282,7 @@ th8SeedHash(Th8_Platform *pPlatform)
  *	collision-producing strings -- a hash-DoS hardening
  *	the original Tcl 8.x hash table lacks.
  *
+ * Why / How:
  *	The implementation is the standard SipHash-2-4
  *	specification: 8-byte little-endian blocks are XOR'd
  *	into the rolling `v0..v3` state with two
@@ -244,7 +295,7 @@ th8SeedHash(Th8_Platform *pPlatform)
  *	zKey -- key bytes (not necessarily NUL-terminated).
  *	nKey -- key length in bytes.
  *
- * Returns:
+ * Results:
  *	The keyed hash, truncated to `unsigned int`.
  *
  * Side effects:
@@ -254,8 +305,8 @@ th8SeedHash(Th8_Platform *pPlatform)
  */
 static unsigned int
 th8HashKey(
-    const char *zKey,  /* Key bytes. */
-    size_t nKey)  /* Number of key bytes. */
+    const char *zKey, /* Key bytes. */
+    size_t nKey) /* Number of key bytes. */
 {
     th8_uint64_t v0, v1, v2, v3, m;
     const unsigned char *p = (const unsigned char *)zKey;
@@ -298,7 +349,7 @@ th8HashKey(
     case 3:
 	b |= ((th8_uint64_t)p[2]) << 16; /* fall through */
     case 2:
-	b |= ((th8_uint64_t)p[1]) << 8;  /* fall through */
+	b |= ((th8_uint64_t)p[1]) << 8; /* fall through */
     case 1:
 	b |= ((th8_uint64_t)p[0]);
     }
@@ -375,7 +426,7 @@ Th8_HashNew(Th8_Interp *interp) /* Interpreter for memory. */
 void
 Th8_HashDelete(
     Th8_Interp *interp, /* Interpreter for memory. */
-    Th8_Hash *pHash)  /* Hash table to destroy. */
+    Th8_Hash *pHash) /* Hash table to destroy. */
 {
     int i;
 
@@ -427,10 +478,10 @@ Th8_HashDelete(
 Th8_HashEntry *
 Th8_HashFind(
     Th8_Interp *interp, /* Interpreter for memory. */
-    Th8_Hash *pHash,  /* Hash table. */
-    const char *zKey,  /* Key bytes. */
-    size_t nKey,  /* Key length (TH8_NOLEN = NUL-term). */
-    int op)   /* <0 delete, 0 find, >0 insert. */
+    Th8_Hash *pHash, /* Hash table. */
+    const char *zKey, /* Key bytes. */
+    size_t nKey, /* Key length (TH8_NOLEN = NUL-term). */
+    int op) /* <0 delete, 0 find, >0 insert. */
 {
     unsigned int iBucket;
     Th8_HashEntry *p;
@@ -467,7 +518,21 @@ Th8_HashFind(
 	p->zKey[nKey] = 0;
 	p->nKey = nKey;
 	p->pData = 0;
-	p->nInsertOrder = pHash->nNextOrder++;
+	/* Assign the insertion-order stamp from a 64-bit history counter
+	 * (TH8K-016).  The counter increments on every insert over the hash's
+	 * LIFETIME (it is never decremented on delete), so a churning dict --
+	 * e.g. a work queue with repeated insert/delete -- would drive a 32-bit
+	 * counter to its ceiling after ~2^31 inserts (reachable in a
+	 * long-running process), whereupon later entries would share one stamp
+	 * and their relative order would become unspecified, breaking the
+	 * insertion-order contract.  At 64 bits the ceiling is ~2^63 inserts
+	 * (centuries at any real insert rate), so the saturation guard below is
+	 * defence-in-depth for defined behaviour, not a reachable path. */
+	if (pHash->nNextOrder < TH8_INT64_MAX) {
+	    p->nInsertOrder = pHash->nNextOrder++;
+	} else {
+	    p->nInsertOrder = TH8_INT64_MAX;
+	}
 	p->pNext = pHash->aBucket[iBucket];
 	pHash->aBucket[iBucket] = p;
 	return p;
@@ -537,16 +602,21 @@ Th8_HashRemove(
 void
 Th8_HashIterate(
     Th8_Interp *interp, /* Interpreter (unused). */
-    Th8_Hash *pHash,  /* Hash table. */
+    Th8_Hash *pHash, /* Hash table. */
     int (*xCb)(Th8_HashEntry *, void *),
-                                /* Callback for each entry.
+    /* Callback for each entry.
 				 * Return TH8_OK to continue,
 				 * any other value to stop. */
-    void *pCtx)   /* Context for callback. */
+    void *pCtx) /* Context for callback. */
 {
     int i;
 
     (void)interp;
+
+    /* NULL-safe like Th8_HashDelete, so a partially-constructed namespace
+     * (some hashes not yet allocated) can be torn down on an OOM rollback
+     * without a NULL dereference (TH8K-002). */
+    if (!pHash) return;
 
     for (i = 0; i < TH8_HASH_SIZE; i++) {
 	Th8_HashEntry *p = pHash->aBucket[i];
@@ -564,23 +634,91 @@ Th8_HashIterate(
 /*
  *----------------------------------------------------------------------
  *
- * th8CompareInsertOrder --
+ * th8HashSortByOrder --
  *
- *	qsort comparator for Th8_HashEntry pointers, ordering by
- *	nInsertOrder ascending.
+ *	Stable, POLLABLE ascending sort of ap[0..nEntry-1] (Th8_HashEntry
+ *	pointers) by nInsertOrder, using a bottom-up merge sort with the
+ *	caller-provided scratch array aTmp[nEntry].
+ *
+ * Why / How:
+ *	The platform Th8_Qsort is opaque and its comparator has no
+ *	interpreter context, so an attacker-sized ordered-hash walk could run
+ *	the sort to completion with no cancellation check (TH8K-009/TH8K-016).
+ *	This merge sort polls Th8_Ready every ~4096 element moves (0xFFF, the
+ *	documented interval) across the merge, leftover-drain, and copy-back
+ *	phases, each guarded by nested single-condition ifs so no compound
+ *	MC/DC decision is introduced.  Stable: on a tie the left run wins.
+ *
+ * Results:
+ *	TH8_OK when sorted, or TH8_ERROR if a readiness check fires (the
+ *	interpreter result is set by Th8_Ready); ap is left partially sorted
+ *	in that case and the caller must discard the ordered walk.
+ *
+ * Side effects:
+ *	Overwrites ap and aTmp.
  *
  *----------------------------------------------------------------------
  */
 
 static int
-th8CompareInsertOrder(const void *a, const void *b)
+th8HashSortByOrder(
+    Th8_Interp *interp,
+    Th8_HashEntry **ap,
+    Th8_HashEntry **aTmp,
+    int nEntry)
 {
-    const Th8_HashEntry *pa = *(const Th8_HashEntry *const *)a;
-    const Th8_HashEntry *pb = *(const Th8_HashEntry *const *)b;
+    int width;
+    int nOp = 0;
 
-    if (pa->nInsertOrder < pb->nInsertOrder) return -1;
-    if (pa->nInsertOrder > pb->nInsertOrder) return 1;
-    return 0;
+    for (width = 1; width < nEntry; width *= 2) {
+	int iLeft;
+	int m;
+
+	for (iLeft = 0; iLeft < nEntry; iLeft += 2 * width) {
+	    int iMid = iLeft + width;
+	    int iEnd = iLeft + 2 * width;
+	    int i, j, k;
+
+	    if (iMid > nEntry) iMid = nEntry;
+	    if (iEnd > nEntry) iEnd = nEntry;
+	    i = iLeft;
+	    j = iMid;
+	    k = iLeft;
+	    /* Merge.  The two range tests are nested single-condition ifs
+	     * (not a compound while-condition) to stay out of MC/DC. */
+	    for (;;) {
+		if (i >= iMid) break;
+		if (j >= iEnd) break;
+		if ((nOp++ & 0xFFF) == 0) {
+		    if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+		}
+		if (ap[i]->nInsertOrder <= ap[j]->nInsertOrder) {
+		    aTmp[k++] = ap[i++]; /* stable: left on tie */
+		} else {
+		    aTmp[k++] = ap[j++];
+		}
+	    }
+	    while (i < iMid) {
+		if ((nOp++ & 0xFFF) == 0) {
+		    if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+		}
+		aTmp[k++] = ap[i++];
+	    }
+	    while (j < iEnd) {
+		if ((nOp++ & 0xFFF) == 0) {
+		    if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+		}
+		aTmp[k++] = ap[j++];
+	    }
+	}
+	for (m = 0; m < nEntry; m++) {
+	    if ((nOp++ & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	    }
+	    ap[m] = aTmp[m];
+	}
+    }
+    return TH8_OK;
 }
 
 
@@ -596,10 +734,34 @@ th8CompareInsertOrder(const void *a, const void *b)
  *	Used by dict commands to preserve key insertion order.
  *	Non-dict code should use Th8_HashIterate (faster, no sort).
  *
+ * Why / How:
+ *	The temporary array is sized from a live-entry count taken by
+ *	walking the buckets, NOT from the monotonic nNextOrder history
+ *	counter (which only ever grows and, after insert/delete churn,
+ *	would over-allocate) (TH8K-016).  If that allocation fails the
+ *	function reports the failure instead of silently falling back
+ *	to unordered iteration: a caller that requested insertion order
+ *	must never receive an out-of-order visit and mistake it for
+ *	success.  The collection, sort, and callback phases are
+ *	cancellation-aware via Th8_Ready so a large ordered walk cannot
+ *	run unbounded (TH8K-016, TH8K-009).
+ *
+ * Results:
+ *	TH8_OK if every entry was visited in order (or the callback
+ *	requested an early stop, which is a normal control signal, not
+ *	an error), or the hash was empty.  TH8_ERROR if the temporary
+ *	array could not be allocated or a cancellation/readiness check
+ *	fired mid-walk; in the error case no ordered guarantee is made
+ *	and the caller should treat the ordered iteration as not done.
+ *
+ * Side effects:
+ *	Whatever the callback does.  On a readiness failure Th8_Ready
+ *	sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
-void
+int
 Th8_HashIterateOrdered(
     Th8_Interp *interp,
     Th8_Hash *pHash,
@@ -607,38 +769,79 @@ Th8_HashIterateOrdered(
     void *pCtx)
 {
     Th8_HashEntry **apEntry;
+    Th8_HashEntry **apTmp;
     int nEntry = 0;
-    int nAlloc;
+    int nLive = 0;
+    int nOp = 0; /* Poll counter for the bucket walks. */
     int i;
 
-    nAlloc = pHash->nNextOrder;
-    if (nAlloc <= 0) return;
+    /* Count live entries so the array matches the current population.  Polled:
+     * an attacker-sized hash makes this O(nLive) unpolled otherwise
+     * (TH8K-009). */
+    for (i = 0; i < TH8_HASH_SIZE; i++) {
+	Th8_HashEntry *p;
+	for (p = pHash->aBucket[i]; p; p = p->pNext) {
+	    if ((nOp++ & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	    }
+	    nLive++;
+	}
+    }
+    if (nLive <= 0) return TH8_OK;
 
     apEntry = (Th8_HashEntry **)
-        TH8_ALLOC_MUL(interp, (size_t)nAlloc, sizeof(Th8_HashEntry *));
+        TH8_ALLOC_MUL(interp, (size_t)nLive, sizeof(Th8_HashEntry *));
     if (!apEntry) {
-	Th8_HashIterate(interp, pHash, xCb, pCtx);
-	return;
+	return TH8_ERROR;
+    }
+    /* Scratch array for the stable merge sort (same bottom-up merge sort as
+     * lsort / native Tcl, made pollable -- see th8HashSortByOrder). */
+    apTmp = (Th8_HashEntry **)
+        TH8_ALLOC_MUL(interp, (size_t)nLive, sizeof(Th8_HashEntry *));
+    if (!apTmp) {
+	Th8_Free(interp, apEntry);
+	return TH8_ERROR;
     }
 
     for (i = 0; i < TH8_HASH_SIZE; i++) {
 	Th8_HashEntry *p;
 	for (p = pHash->aBucket[i]; p; p = p->pNext) {
-	    if (nEntry < nAlloc) {
+	    if ((nOp++ & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) {
+		    Th8_Free(interp, apTmp);
+		    Th8_Free(interp, apEntry);
+		    return TH8_ERROR;
+		}
+	    }
+	    if (nEntry < nLive) {
 		apEntry[nEntry++] = p;
 	    }
 	}
     }
 
+    /* Sort by insertion order with a pollable stable merge sort (the platform
+     * Th8_Qsort is opaque and its comparator cannot poll -- TH8K-009). */
     if (nEntry > 1) {
-	Th8_Qsort(
-	    interp, apEntry, (size_t)nEntry, sizeof(Th8_HashEntry *),
-	    th8CompareInsertOrder);
+	if (th8HashSortByOrder(interp, apEntry, apTmp, nEntry) != TH8_OK) {
+	    Th8_Free(interp, apTmp);
+	    Th8_Free(interp, apEntry);
+	    return TH8_ERROR;
+	}
     }
+    Th8_Free(interp, apTmp); /* scratch no longer needed before callbacks */
 
     for (i = 0; i < nEntry; i++) {
-	if (xCb(apEntry[i], pCtx) != TH8_OK) break;
+	if ((i & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		Th8_Free(interp, apEntry);
+		return TH8_ERROR;
+	    }
+	}
+	if (xCb(apEntry[i], pCtx) != TH8_OK) {
+	    break;
+	}
     }
 
     Th8_Free(interp, apEntry);
+    return TH8_OK;
 }

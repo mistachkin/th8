@@ -185,7 +185,11 @@ static const Th8InternalStubsTable th8InternalStubsTableData = {
     th8SetPlatformLibs,
     th8SignalAllStates,
     th8Step,
+#if defined(TH8_ENABLE_BIGINT)
     th8BigintCacheStore,
+#else
+    NULL, /* th8BigintCacheStore defined only with TH8_ENABLE_BIGINT */
+#endif
 #if defined(TH8_PLUGIN_FILE_SYSTEMS)
     th8IsDeviceName,
 #else
@@ -235,14 +239,24 @@ static const Th8InternalStubsTable th8InternalStubsTableData = {
     th8GetFramePaVar,
     th8GetInterpPaChannels,
     th8GetArraySearchHash,
+#if defined(TH8_ENABLE_VARIABLES)
     th8GetArrayElementHash,
+#else
+    NULL, /* th8GetArrayElementHash defined only with TH8_ENABLE_VARIABLES */
+#endif
     th8CheckExpansionPrefix,
     th8AsyncStateXorBMutexReady,
     th8AsyncStateScrubField,
     th8XchgInterpPlatform,
+#if defined(TH8_ENABLE_BIGINT)
     th8_bigint_calloc,
     th8BigintSetup,
     th8BigintTeardown,
+#else
+    NULL, /* th8_bigint_calloc defined only with TH8_ENABLE_BIGINT */
+    NULL, /* th8BigintSetup defined only with TH8_ENABLE_BIGINT */
+    NULL, /* th8BigintTeardown defined only with TH8_ENABLE_BIGINT */
+#endif
 #if defined(TH8_ENABLE_FAULT_INJECTION)
     th8FaultStrEqAscii,
     th8FaultPathMatchesBaseName,
@@ -262,13 +276,21 @@ static const Th8InternalStubsTable th8InternalStubsTableData = {
 #if defined(TH8_ENABLE_CRYPTOGRAPHY)
     th8PolicyIsHttpUri,
     th8PolicyDaysInMonth,
+#  if defined(TH8_ENABLE_VARIABLES)
     th8SecureCheckCanary,
+#  else
+    NULL, /* th8SecureCheckCanary: secure vars need CRYPTOGRAPHY && VARIABLES */
+#  endif
     th8NtpSortTimes,
     th8AfParseHexKey,
     th8RsaParseCapi,
     th8HttpsTimeVerifySignature,
     th8HttpsTimeFindField,
+#  if defined(TH8_ENABLE_VARIABLES)
     th8SecureHasMasterKey,
+#  else
+    NULL, /* th8SecureHasMasterKey: secure vars need CRYPTOGRAPHY && VARIABLES */
+#  endif
     th8PolicyResetCachedKeys,
     th8PolicyVerifyData,
     th8AfFlagSetAdd,
@@ -276,11 +298,19 @@ static const Th8InternalStubsTable th8InternalStubsTableData = {
     th8AfMapGet,
     th8TestRsaKeyClearPubBlob,
     th8TestRsaKeyRestorePubBlob,
+    th8RsaSignRawBlock,
     th8NtpValidateResponse,
 #else
-    0,
-    0,
-    0,
+    /*
+     * One 0 per crypto-branch entry whose struct field is UNCONDITIONAL
+     * (declared outside the struct's `#if defined(TH8_ENABLE_CRYPTOGRAPHY)`
+     * block).  The four entries whose struct fields live INSIDE that block
+     * -- th8_TestRsaKeyClearPubBlob, th8_TestRsaKeyRestorePubBlob,
+     * th8_RsaSignRawBlock, th8_NtpValidateResponse -- vanish entirely when
+     * cryptography is disabled, so they get NO slot here (a 0 for them would
+     * be an excess initializer that shifts th8_MemTrackDump/Reset out of
+     * alignment).  14 unconditional crypto-branch entries -> 14 zeros.
+     */
     0,
     0,
     0,
@@ -310,6 +340,7 @@ static const Th8InternalStubsTable th8InternalStubsTableData = {
  *	Public accessor for the TH8 internal stubs table.  Returns
  *	a pointer to the read-only Th8InternalStubsTable instance.
  *
+ * Why / How:
  *	The caller is expected to cast to
  *	`const Th8InternalStubsTable *` (declared in
  *	th8InternalDecls.h) and verify the magic / version fields

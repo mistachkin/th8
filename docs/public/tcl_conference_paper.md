@@ -282,12 +282,16 @@ cases where a host may need to preempt a long-running script.
 Independent of the platform layer, TH8 enforces configurable
 resource limits:
 
--   **Step counter** --- bounds total computation (instructions
-    executed).  The host can set a limit and check progress.
+-   **Step counter** --- bounds counted work-units (command and
+    loop-iteration checkpoints), not literally every CPU instruction:
+    a few inner loops are still being brought under the poll, so the
+    counter is a cooperative progress bound, not a hard cycle cap.
+    The host can set a limit and check progress.
 -   **Result size limit** --- bounds the size of any string value
     the interpreter can construct.
--   **Memory allocation limit** --- bounds total memory usage
-    across all allocations.
+-   **Memory allocation limit** --- bounds the requested bytes across
+    allocations with bounded slack (it caps what the interpreter asks
+    for, not the exact resident set the allocator holds).
 -   **Stack bounds** --- the NRE engine queries native stack bounds
     via the platform and refuses to recurse beyond a safe margin.
 -   **Integer overflow checking** --- optional strict mode that
@@ -438,6 +442,18 @@ static library --- a 27% reduction from the 697 KB full build.
 This modularity serves both the standard's three conformance
 profiles (Core requires fewer plugins than Standard) and
 embedded deployments where code size is constrained.
+
+Because these flags are public and supported, every combination of
+their values is part of the contract, so each feature's *use*-sites
+are gated on exactly the feature(s) they need --- a conjunction where
+a site depends on two (secure variables, needing both cryptography and
+the variable system, are `#if CRYPTOGRAPHY && VARIABLES`), never a
+coarse block that conditions a two-feature site on one flag.  A
+build-matrix sweep exercises each flag off in isolation and, as its
+strongest single check, the all-features-off build --- the one
+configuration in which every per-site guard must hold at once ---
+turning "the minimal configuration links and runs" from a documented
+aspiration into an enforced test (Section 6.4, Lesson 22).
 
 ### 3.9  Deferred Deletion (Pending-Delete Queue)
 
@@ -1149,6 +1165,728 @@ linking.
     comment at the site itself --- not in a design document three
     directories away --- naming the tradeoff and the test that
     enforces it.
+
+6.  **An audit aimed at a goal you will not pursue still pays for
+    itself.**  A feasibility study of running TH8 in an operating-
+    system kernel concluded the goal was far out of reach --- but the
+    same audit, forced to reason about an environment where allocation
+    fails routinely and creation must be all-or-nothing, surfaced
+    concrete user-mode defects that ordinary review had missed.  The
+    sharpest was a constructor that allocated its lookup hashes
+    eagerly under a comment reading "so that lookups never need NULL
+    checks."  That invariant is real and useful --- but only if
+    construction is all-or-nothing, which the unchecked allocations
+    quietly were not: an out-of-memory event produced an interpreter
+    whose first variable assignment dereferenced a NULL bucket array.
+    The optimization ("no NULL checks in the hot path") and the bug
+    ("no NULL checks where they were load-bearing") were the same
+    missing check seen from two ends.  Two transferable rules fell
+    out.  First, a comment that *justifies* an invariant should be
+    checked against the invariant's own failure paths: the natural
+    cleanup routine for the partial object iterated the very hashes it
+    might find NULL, so the teardown tool needed the exact safety it
+    was built to make unnecessary elsewhere (its sibling delete
+    routine was already NULL-safe; iteration was not, and became so).
+    Second, a "can't happen" path earns trust only once something
+    drives it: because the runtime's fault-injection layer wraps an
+    *existing* interpreter and so cannot fault an interpreter's own
+    construction, coverage came from a platform whose allocator was
+    overridden *before* creation to fail after N successful requests,
+    swept across N, with the heap checker turning any rollback leak or
+    double-free into a hard failure.
+
+7.  **An error code that means two opposite things cannot be fixed by
+    propagating it.**  The same kernel-feasibility audit found the
+    language-registration entry point discarding every sub-result and
+    returning success unconditionally, so an out-of-memory event during
+    registration produced a "successfully" half-built interpreter.  The
+    obvious fix --- stop discarding, propagate the failure --- was
+    wrong, because the plugin-registration primitive returned the *same*
+    error code for "this plugin is already registered" (a harmless
+    re-run during interpreter restore) as for a genuine allocation
+    failure.  Propagating it would have turned every legitimate
+    re-registration into a fatal error.  The real fix had to *separate*
+    the two conditions first --- a small "is it already present?" query
+    that lets registration skip an existing plugin but still propagate a
+    true failure --- and only then was propagation safe.  The
+    transferable rule: when a return value conflates *no-op* with
+    *failure*, an over-tolerant caller is a symptom, not the disease;
+    the cure is to make the two states distinguishable at the source,
+    because neither "keep discarding" nor "start propagating" is correct
+    while they share a code.  A corollary bit immediately: surfacing a
+    previously-swallowed failure is only half the work --- every caller
+    that had relied on the old always-succeeds contract (the shell's
+    startup, interpreter restore, child-interpreter evaluation, the
+    Fossil embedding, the Tcl bridge) had to be taught to check and
+    clean up, or the newly-visible error is simply re-buried one frame
+    higher.
+
+8.  **"Graceful degradation" that silently breaks the contract is worse
+    than a clean failure.**  The same kernel-feasibility audit found an
+    ordered-iteration routine that, when it could not allocate its
+    temporary sort buffer, fell back to *unordered* iteration and
+    returned no status at all.  On its face this is defensive
+    programming --- do something rather than fail --- but it is a trap:
+    the routine exists precisely to guarantee insertion order, and under
+    memory pressure it quietly abandoned that guarantee while reporting
+    nothing, so a caller would emit results in the wrong order and treat
+    it as success.  A degraded result that still satisfies the caller's
+    contract is graceful; one that abandons the contract's whole reason
+    for existing is a silent correctness bug wearing a safety costume.
+    The fix was to fail loudly --- return an error and make no ordered
+    claim --- rather than to succeed wrongly.  The audit also turned up a
+    subtler companion in the same routine: its scratch array was sized
+    from a monotonic insertion counter that only ever grew, so it both
+    over-allocated after churn and rested on a signed `int` that is
+    undefined behaviour to increment past its maximum.  The counter
+    feeds an order *comparison*, never an arithmetic value, so the cure
+    was neither a wider type nor an expensive renumbering but simple
+    saturation: at the ceiling the stamp stops advancing, which leaves
+    every earlier ordering intact and merely makes the (unreachable)
+    edge defined instead of undefined.  The transferable pair: when a
+    fallback cannot honour the contract, surface an error instead of a
+    plausible wrong answer; and when a counter's *relative* order is all
+    that matters, saturation is a legitimate overflow guard where its
+    absolute value would not be.
+
+9.  **A cluster of leaks across many exit paths is a "centralise the
+    cleanup" signal, not a call to sprinkle more frees.**  The list-sort
+    command inlined its comparison logic --- mode dispatch, sub-element
+    extraction, custom-script evaluation --- into the innermost loop of
+    an insertion sort, so every one of a dozen early error returns was
+    individually responsible for freeing the scratch buffers that
+    sub-element extraction had allocated.  Several forgot, leaking on the
+    conversion- and evaluation-error paths.  Patching each exit to add
+    the missing frees would have been endless whack-a-mole; the durable
+    fix was to lift the comparison into a single helper with one cleanup
+    point that frees on every return, after which the leaks were
+    structurally impossible.  The same refactor incidentally fixed two
+    further defects that the inline form had made easy to overlook: a
+    dictionary comparison that compared embedded numbers by accumulating
+    digits into a fixed-width integer --- undefined behaviour, and simply
+    wrong, once a run exceeded about ten digits, which is not an edge
+    case --- replaced by comparing digit runs by significant length; and
+    an O(n^2) sort that, while cancellable because it polled once per
+    comparison, still burned an entire step budget on a million-element
+    list, a denial-of-service lever that "it can be cancelled" does not
+    excuse.  A stable O(n log n) merge sort was a drop-in once the
+    comparison was a callable function.  The lessons compound: **inlining
+    a concern that has its own resources and failure modes into a hot
+    loop multiplies the places that must each get cleanup, numeric
+    correctness, and complexity right; extracting it makes each provable
+    once.**  A closing note on regression tests: verifying the new
+    error-reporting against a reference Tcl caught a test that pinned a
+    *deliberate* divergence (the runtime treats an out-of-range index
+    leniently where Tcl errors), a reminder that a regression test should
+    freeze intended behaviour, not accidentally ratify a known,
+    intentional departure from the reference.
+
+10. **A comment that names a safety mechanism which does not exist is
+    worse than no comment.**  The expression engine's source --- and the
+    security model document --- stated that expression recursion was
+    "bounded by the evaluation-depth counter."  It was not: nothing in
+    the expression parse, evaluate, or free path ever touched that
+    counter.  The only thing between a hostile `((((...))))` or
+    `1+1+...+1` and a native-stack overflow was a host-specific stack
+    probe that cannot be relied upon for a portable depth proof.  A
+    missing comment would have invited the question "what actually bounds
+    this?"; the confidently wrong comment closed it, and an audit reading
+    the site in isolation believed the bound existed.  When a comment
+    says "safe because X," X has to be true and checkable at that site.
+    Fixing it surfaced a second, subtler hazard: the tree *teardown* was
+    recursive and completely unguarded.  The evaluator at least polled at
+    each node, so a too-deep expression errored cleanly --- but the free
+    ran afterward on the tree that had already been built, and an
+    operator chain builds a tree whose depth equals its length, so the
+    safest input for the evaluator (rejected immediately) still handed
+    the recursive free a structure deep enough to blow the stack tearing
+    it down.  Cleanup paths inherit the depth of the structures they
+    walk; a recursive destructor is exactly as dangerous as a recursive
+    evaluator and easier to overlook because it does no "work."  The fix
+    made the free iterative (freeing a binary tree in constant stack via
+    left-rotation) and replaced the imaginary bound with real ones placed
+    where the recursion actually lives --- a builder that bounds
+    parenthesis nesting, a per-interpreter counter that bounds the
+    evaluator at every call site, both snapshotted across coroutine
+    switches.  The general lesson: bound the recursion that exists, at
+    the site it exists, and never let documentation stand in for a
+    mechanism.
+
+11. **A test whose assertion is true for both the pass and the fail case
+    is not a test.**  The sandbox resource suite was meant to prove that
+    abusive inputs (regular-expression bombs, string amplification, list
+    bombs) are stopped by a resource limit.  Several tests asserted only
+    that the sandbox returned *some* status code, or merely that it
+    returned a non-zero one --- predicates satisfied whether the limit
+    fired, the input happened to finish, or an unrelated bug swallowed
+    the error.  Such a test confirms the process did not crash and
+    nothing more.  The remedy was to instrument first: a throwaway probe
+    printed the real outcome of each scenario --- return code, message,
+    step count, bytes allocated --- before a single assertion was
+    written, so each test could then pin the *specific* mechanism that
+    terminated the attack and the boundary it fired at.  Instrumenting
+    first paid for itself immediately by exposing what the vague
+    assertions had hidden: one test's stated premise was simply false
+    (the regex bomb is bounded by a dedicated regex-complexity limit, not
+    the step counter it claimed, and regex backtracking does not
+    increment that counter at all), and another was a silent no-op that
+    looped over an operation which, for its inputs, did nothing and so
+    exercised none of the behavior it named.  A test that green-lights a
+    mechanism it never runs is worse than no test, because it reads as
+    coverage.  The transferable discipline: dump the real observable
+    state before asserting on it, and make every assertion
+    discriminating enough that the fail case would actually fail it.
+
+12. **The same bug class recurs in every subsystem with an
+    attacker-controlled recursion --- and a bound on one construction
+    path does not bound an equivalent path.**  Lesson 6 fixed an
+    unguarded recursive teardown of the expression tree.  Weeks later,
+    evaluating a finding the kernel audit had filed as "kernel-only"
+    (make teardown iterative for tiny kernel stacks) for its user-mode
+    value, we found the *identical* defect in a different subsystem: the
+    namespace tree.  Deleting a deeply nested namespace recurses once per
+    level in the destructor and overflows the stack --- crashing even the
+    8 MiB main-thread stack once nesting reached tens of thousands, and a
+    worker-thread stack far sooner.  What made it evade the earlier sweep
+    is the sharper half of the lesson.  The obvious way to nest
+    namespaces --- writing `namespace eval a { namespace eval b { ... } }`
+    --- *was* bounded, because each body is a nested evaluation and the
+    evaluation-depth limit caught it.  But the *same* structure could be
+    built by a single command with a deeply qualified name
+    (`namespace eval a::a::...::z {}`), which creates one level per name
+    component in one evaluation and so slips past the depth limit
+    entirely.  A resource bound placed on the intuitive construction path
+    is not a bound on the resource; it is a bound on that path.  When a
+    structure can be built more than one way, the limit has to live where
+    the structure is *used* (here, a depth field on the namespace itself,
+    checked at every creation, mirroring the expression-depth cap), not
+    on any single builder.  Two compounding morals: audit for a fixed bug
+    *class*, not the fixed bug --- every place the codebase recurses over
+    attacker-shaped data is a suspect until checked; and never let a
+    finding's stated environment ("kernel-only") decide its relevance
+    before asking whether the underlying defect is environment-specific.
+    This one was a real, reachable, main-stack crash in the shipping
+    user-mode interpreter, hiding inside a "kernel" finding.
+
+13. **A feature flag that every build enables tests only half the
+    code; the configuration nobody compiles has zero coverage, and it
+    is usually the one shipped.**  TH8's signed-script tests need a key
+    to sign with, so every debug, MC/DC, and test recipe passes
+    `ENABLE_TEST_KEY=1`.  Convenient --- and it meant the entire matrix
+    compiled one side of every `#if TH8_ENABLE_TEST_KEY`.  A
+    crypto-*with*-test-key build and a crypto-*without*-test-key build
+    are different programs, and only the former was ever built.  So
+    when the authenticated-time verifier began calling the
+    test-key-only accessor `Th8_GetEmbeddedKeyTest` unconditionally
+    --- against a symbol declared and defined solely under that flag
+    --- nothing in our own CI noticed: the flag that would have exposed
+    the break was set in every job.  It surfaced only when the
+    amalgamation was regenerated for a downstream embedding (Ladybird)
+    that runs the genuine production configuration --- cryptography on
+    for signature verification, no test key --- i.e. at the vendor, not
+    the source.  The sharp edge is that the *test-only convenience*
+    flag (a test key, a fault-injection shim, a debug hook) is exactly
+    the one whose *absence* deserves its own build, because production
+    ships with it off: the more universally a flag is set "to make the
+    tests work," the more completely its off-arm escapes testing.  The
+    durable fix was not the one-line guard that stopped the bleeding
+    but treating the build matrix as part of the test suite: we added a
+    dedicated `check-amal-notestkey` gate that regenerates the
+    amalgamation and compiles it with cryptography on and the test key
+    explicitly off --- the precise configuration no other job builds
+    --- so the next unconditional reference to a test-key-gated symbol
+    fails at the source instead of in a consumer's tree.  A
+    reverted-fix run confirmed the gate reproduces the original
+    compile error.  The general moral: a configuration that no job
+    compiles has zero coverage no matter how green the suite looks, and
+    "it builds for us" is never evidence it builds for the consumer who
+    flips the flag the other way.
+
+14. **A fault injector that fails-and-stays-failed cannot find the bugs
+    that need the allocator to recover.**  To exercise out-of-memory
+    handling we had a construction-time injector that returned NULL for
+    a chosen allocation *and every allocation after it*.  It swept the
+    trip point across the constructor and caught crashes, double-frees,
+    and leaks under a debug allocator --- and it passed.  But a
+    persistent failure hides an entire bug class: once allocation N
+    fails, allocation N+1 fails too, so any code that checks N+1 rolls
+    back and exits before the damage from an unchecked N can manifest.
+    A skeptical re-audit demanded a *one-shot* injector --- fail exactly
+    one allocation, then resume normal service --- to model a genuine
+    transient OOM.  With that change the very first sweep crashed: the
+    constructor ignored the return value of the routine that pushes the
+    global call frame, which allocates the frame's variable table and,
+    on failure, returns an error *without* installing the frame.  Under
+    the persistent injector the next allocation (the global namespace)
+    also failed and its own check rolled construction back cleanly, so
+    the unchecked frame push was never reached; under the one-shot
+    injector the allocator recovered, construction marched on with a
+    NULL frame, and global-variable setup dereferenced it.  The bug was
+    real, reachable, and had been sitting behind a green out-of-memory
+    test suite.  Two morals: an OOM test is only as strong as the
+    *shape* of the failure it injects --- persistent and one-shot
+    (and, ideally, fail-the-Nth-only) find different defects --- and a
+    coverage drive that merely runs the rollback path without asserting
+    the resulting status or state will report success while a partial,
+    corrupt object escapes.  We now assert, for every injected trip,
+    that a surviving object is *complete*, not merely non-crashing.
+
+15. **Persistent and one-shot fault injection are complementary --- and the
+    assertion has to match the tool.**  Lesson 14 showed a one-shot
+    injector finding a crash a persistent one masks.  Hardening a second
+    entry point --- the routine that registers the built-in language ---
+    showed the converse and completed the picture.  A one-shot fault
+    (fail exactly one allocation, then resume) is a *crash finder*: with
+    the allocator recovering, execution runs past an unchecked failure
+    into the dereference of the resulting null pointer, which is exactly
+    how it surfaced a family of unchecked hash-insert dereferences in the
+    package commands.  But the natural one-shot invariant "if a fault
+    fired, the operation must report failure" is simply *false* for any
+    subsystem with legitimately recoverable allocations: a single
+    transient failure that the code tolerates --- a fallback, an optional
+    or retried allocation --- completes with a correct, complete result.
+    Registration had roughly five hundred such trips, none of them bugs;
+    asserting the one-shot sweep with a failure-required invariant
+    produced five hundred false alarms.  The all-or-nothing *assertion*
+    instead wants a *persistent* fault (fail this allocation and every
+    later one): a persistent failure cannot be recovered, so "fired
+    implies error" becomes a clean invariant, and any success is a real
+    partial-success defect.  That persistent sweep flagged two genuine
+    ones --- an unchecked string duplication, and a system-variable
+    declarator that returned success after failing to mark the variable,
+    leaving the security-policy array writable from scripts behind a
+    registration that reported complete.  The discipline that falls out:
+    injectors have a *shape*, assertions have a *shape*, and they must be
+    paired --- one-shot with "no survivor is partial and nothing
+    crashes," persistent with "every fire is an error."  A subtler trap
+    on the same theme: a fault injector's "it fired" signal must mean an
+    allocation was actually failed, not merely that its trip counter
+    reached zero, or the very last allocation of a run reads as a
+    spurious violation.
+
+16. **A thread-safety claim on the box is a synchronization obligation ---
+    and only a concurrency test with a sanitizer proves you met it.**  One
+    API was documented callable from any thread, and it did set its
+    "canceled" bit atomically.  But the accompanying error MESSAGE was
+    published through two separate `volatile` fields, a pointer and a
+    length.  `volatile` orders a single location on real hardware; it does
+    not make a two-field update atomic.  Two threads cancelling at once
+    could interleave so the reader adopted one thread's pointer with the
+    other's length --- a heap over-read hiding behind an API that
+    advertised thread safety.  The lesson is first that an atomic flag is
+    not thread safety when the payload is multi-field: either narrow the
+    contract to a single producer, or publish the whole request as one
+    unit under a lock; a bag of `volatile` fields does neither.  The
+    second, sharper half is about the *test*.  The existing "concurrency"
+    test started one canceller and joined it before inspecting the result
+    --- its own comment observed that the join made the outcome
+    deterministic, which is to say it exercised no race whatsoever.  We
+    replaced it with a stress that launches several cancellers
+    simultaneously behind an atomic start gate while the owner races them,
+    and checks message coherence on every observation.  Run under
+    ThreadSanitizer it immediately reported one race we had not reasoned
+    through by hand: a lock-free fast-path read of the "request pending"
+    flag, the classic double-checked-locking hazard where an atomic read
+    races a non-atomic write.  Making that single flag fully atomic
+    cleared it, and the sanitizer then certified the whole path.  A
+    concurrency claim you cannot demonstrate under a race detector, with
+    genuinely simultaneous actors, is a claim you have not tested ---
+    however carefully you reasoned about the code.
+
+17. **A poll before a loop is not a poll in the loop; an opaque library
+    sort is a cancellation black hole; and "it already polls" is a claim
+    about every loop, not every function.**  A scripting engine that runs
+    untrusted input must stay interruptible, so its long loops check a
+    readiness flag periodically.  We believed that work was done, and a
+    skeptical re-audit found three ways the belief was wrong --- each the
+    same illusion, that a function which *mentions* the readiness check is
+    interruptible everywhere it iterates.  The merge sort polled before
+    every comparison, which looks thorough, but when one run is already
+    ordered it drains the other and copies back with no comparisons at all,
+    and those copy loops had no poll --- roughly a million uninterruptible
+    iterations at the ceiling.  The ordered hash iterator polled once and
+    then handed the entire attacker-sized array to the C library's sort,
+    whose comparator has no way to reach the interpreter and so cannot
+    poll: the sort itself was uncancellable, and no amount of polling
+    *around* the call could fix it --- the remedy was to own the sort, a
+    pollable merge sort (the same stable algorithm the language's own list
+    sort and native Tcl use) that checks readiness inside its own loops.
+    And the string-split command did not merely fail to poll; on
+    cancellation it jumped to a shared exit that replaced the pending error
+    with the partial result it had built so far and returned success ---
+    reporting truncated output as if it were complete.  The checker that
+    was supposed to guard all this verified only that each listed function
+    contained the text of the readiness call *somewhere* in its body, which
+    is not the same as the poll being inside each loop, on a bounded
+    interval, with its failure propagated rather than swallowed.  Three
+    rules fall out, and they are the ones a reviewer should carry into any
+    interruptible interpreter: put the check in every loop that an
+    adversary can make long, not just the one that dominates the typical
+    case; never delegate attacker-sized work to a comparator or callback
+    the cancellation signal cannot reach --- own the loop; and treat a
+    readiness failure as an error to propagate, never as a shorter answer
+    to return.
+
+    Closing the finding taught two more lessons that the first three did
+    not.  The first is that *enforcing a hand-written list and discovering
+    what the list forgot are different guarantees, and a serious audit ships
+    both.*  We strengthened the checker so it no longer accepts the mere
+    presence of the readiness call: it now parses each listed function and
+    fails unless the poll sits inside a `for`/`while` scope on a bounded
+    interval --- exactly the placement error it had been blind to.  But a
+    checker over a list can only prove that the loops you already named still
+    poll; it is silent about the loop you never added.  So we wrote a second
+    tool that sweeps the entire attacker-reachable command surface and reports
+    every function containing a loop that is neither polled nor recorded, with
+    a documented reason, as bounded --- and made a zero-unaccounted result a
+    build gate.  That sweep immediately found loops the careful named audit
+    had missed: several string operations iterated over the *value* of their
+    argument, byte by byte, with no poll.  Which surfaced the distinction that
+    makes the whole inventory tractable: a loop over a command's argument
+    *vector* is bounded by the parse that produced those arguments and needs
+    no poll, but a loop over an argument's *value* --- an attacker-sized
+    string or list --- is unbounded and must.  Conflating the two is what let
+    the gaps hide in plain sight.  The second lesson is about the test: "it
+    eventually stops" is not a latency bound.  A binary did-it-cancel assertion
+    cannot tell a one-millisecond overshoot from a ten-second one, and it is
+    the *number* that the poll interval is supposed to guarantee.  We added a
+    measurement that runs a compute-bound infinite loop under a real
+    wall-clock deadline and returns the actual elapsed time, then asserts it
+    against a bound; a hundred-millisecond deadline that overshoots by about a
+    millisecond is evidence, where "it returned an error" is only an anecdote.
+
+    The most instructive part of the closure was that these two new tests
+    caught a poll *we ourselves had just added in the wrong place*.  In the
+    zeal to leave no loop uninterruptible, we had put a readiness check inside
+    the parser --- the routine that scans a single word, and the one behind the
+    "is this script complete" query.  Both regressed immediately.  The measured
+    step-ceiling test failed because the parser runs on every word of every
+    command, so a check that increments the step counter once per word inflated
+    a legitimate fifty-thousand-iteration workload past a limit it used to fit
+    under with room to spare.  And the suspend/resume test failed because the
+    parser is also on the debugger's path: when a breakpoint freezes the
+    interpreter, the readiness call returns a distinguished "suspended" status,
+    and the parser --- which has no way to save and resume its position
+    mid-word --- treated that status as a fatal error and abandoned the rest of
+    the script on resume.  The fix was to *remove* the polls and record the
+    parser as bounded: scanning input is a linear pass whose length is bounded
+    by the size of the input the attacker already had to supply (or, for the
+    completeness query, by the size of a value that already occupies
+    memory) --- there is no amplification to interrupt, and cancellation of the
+    surrounding work belongs to the evaluation loop, which polls once per
+    command.  The lesson generalizes past this codebase: a readiness poll is not
+    free instrumentation you can scatter everywhere, because it is a *semantic*
+    act --- it consumes a unit of the very budget it guards, and it can observe
+    states (suspended, step-exhausted) that the enclosing code may not be
+    structured to handle.  A loop that is already bounded, or that sits on a
+    path where the cancellation signal has a meaning the code cannot honor,
+    should be *dispositioned* bounded with a written reason, not reflexively
+    polled.  Distinguishing the two requires exactly the pairing this finding
+    forced into existence: an inventory that makes you justify every loop, and
+    probative tests --- one that measures the resource ceiling, one that
+    exercises suspend and resume --- sharp enough to tell a helpful poll from a
+    harmful one.
+
+18. **Harden the WRITE to a resource counter, not just the comparison that
+    guards it; and when a counter can only err one way, pick the safe way.**  A
+    sandboxed interpreter caps the memory one script may consume by comparing a
+    running byte counter against a limit before each allocation.  We had already
+    made that *comparison* overflow-safe --- rewriting `used + request > limit`
+    as a subtraction so the sum could not wrap past the check.  The defect was
+    one line later, in the counter's own *update*: after a successful
+    allocation the counter was incremented by the allocator's reported *usable*
+    size, which on real allocators exceeds the requested size by rounding, with
+    a plain `+=`.  That add could wrap the machine word, and once it did the
+    counter became small, every later comparison passed, and the cap silently
+    ceased to exist --- for an ordinary, non-malicious allocator.  A correct
+    guard in front of an unchecked write buys nothing; the write is as much a
+    part of the invariant as the check.  The fix routes every update through one
+    helper that adds with an overflow test and, on overflow, *saturates* the
+    counter at its maximum --- which makes every future check fail, poisoning the
+    interpreter locally, rather than wrapping or aborting the process.  The
+    subtler half is a design choice the fix forced us to reason about out loud.
+    The finding asked us to keep the counter at or below the limit at all times,
+    and the tidy way to do that is to clamp the running total down to the limit
+    whenever an allocation's rounding would push it over.  That clamp is
+    *unsound*: the matching free subtracts the block's real usable size, and
+    subtracting a real size from a clamped total drives the counter *below* the
+    true outstanding bytes --- understating memory pressure, the dangerous
+    direction, and over repeated allocate/free cycles at the boundary it lets
+    real usage drift past the cap.  We instead keep the accounting *exact* and
+    saturate only against wrap, accepting that honest rounding can leave the
+    total a single allocation's rounding *above* the limit.  That is the safe
+    direction: the next check is merely stricter and rejects a moment sooner,
+    and the overshoot is erased the instant the block is freed.  The general
+    rule for any monotonic resource counter that can only be slightly wrong:
+    prefer the formulation that over-counts (rejects sooner) to the one that
+    under-counts (admits more), even when the under-counting one satisfies the
+    literal invariant more neatly.  A bound that always errs safe beats an
+    equality that sometimes errs dangerous.
+
+19. **"Unreachable in practice" is a claim about the counter's lifetime, not the
+    collection's size --- and an unreachable guard is still worth *driving*, not
+    waiving.**  Our ordered dictionaries preserve insertion order by stamping
+    each entry with a monotonically increasing sequence number and sorting on
+    it.  The stamp was a 32-bit integer, and a comment reassured the reader that
+    it could not overflow "under the element ceilings in practice" --- a
+    dictionary is limited to some millions of entries, and millions fit in 32
+    bits with room to spare.  The reassurance confused two different quantities.
+    The stamp counter is not bounded by how many entries are *live*; it advances
+    on every insert and is never rolled back on a delete, so it is bounded by the
+    *total inserts over the structure's lifetime*.  A dictionary used as a work
+    queue --- push an item, pop an item, repeat --- holds a handful of entries at
+    any instant yet drives the counter through two billion in a session that runs
+    long enough, and at that point every later entry gets the same stamp and the
+    order the API promises silently degrades to arbitrary.  Reasoning about a
+    lifetime counter from the size of the collection is the trap; the quantity
+    that matters is the integral of increments over time, which for an
+    insert-stamped structure is unbounded by the live size.  The fix is
+    unglamorous --- widen the counter to 64 bits, where the ceiling recedes to
+    centuries of continuous churn --- but the testing choice is the more general
+    lesson.  A 64-bit ceiling is now genuinely unreachable by any workload, so
+    the branch that handles saturation looks like dead code a coverage tool can
+    only be told to ignore.  Instead of waiving it, we drove it: a test primes a
+    throwaway table's counter to one below the ceiling through the public API and
+    inserts across the boundary, asserting that the last distinct entry still
+    sorts first, that entries at the ceiling tie, and that the counter does not
+    roll past its maximum.  That single test both colors the "impossible" branch
+    covered and freezes the boundary's semantics as a regression --- two things a
+    waiver cannot do.  Whenever an unreachable branch guards a field you can set,
+    priming the field beats excusing the branch.
+
+20. **A resource test must assert the quantity that distinguishes correct from
+    plausibly-wrong: the peak, not the residual; the exact boundary, not an
+    inequality; the terminated instance, not a fresh one.**  A sandbox that
+    bounds an untrusted script's memory, steps, and time is only as trustworthy
+    as the tests that pin those bounds, and a recurring weakness is tests that
+    assert a direction where the interesting fact is a number or a state.  Three
+    examples from tightening ours.  First, the sandbox reported the *current*
+    bytes allocated, so a test could not tell a script that briefly built a
+    large structure and freed it from one that never grew --- the residual after
+    cleanup is near zero for both, which is precisely the quantity a memory
+    bound is not about.  The fix was a high-water gauge that records the maximum
+    ever held; notably it cost almost nothing because an earlier change had
+    already routed every allocation through a single accounting helper, so the
+    peak update was one comparison in one place --- consolidation paying a
+    dividend a second time.  Second, the step-limit tests asserted that a bomb
+    burned *more than* the million-step limit, a condition every runaway also
+    meets; because the counter is checked once per step, termination lands
+    deterministically one step past the ceiling, so the test now asserts exactly
+    that count and thereby proves the limit is a precise ceiling rather than a
+    loose upper bound.  Third, the "does the system survive a limit breach" test
+    ran the next script in a *fresh* interpreter, which shows the host is
+    unharmed but says nothing about the interpreter that was terminated; a
+    same-instance test reuses that interpreter and shows it stays bounded until
+    its counter is reset and then works again --- distinguishing "contained" from
+    "permanently broken," a distinction a fresh instance cannot witness.  The
+    through-line, and the reason these belong beside the coverage lessons: a
+    probative test chooses the *observable* that separates right from
+    almost-right --- peak versus current, equality versus inequality,
+    same-instance versus fresh --- which is the measurement analogue of driving a
+    decision's exact arm instead of merely reaching the code.  An assertion that
+    a wrong implementation would also satisfy is not evidence, however green it
+    runs.
+
+21. **When a system already expresses a capability one way everywhere, the
+    cheapest place to extend it is the lone spot that does it differently ---
+    conforming the outlier often deletes code instead of adding it.**  We needed
+    per-interpreter control over which ensemble sub-commands (`string toupper`,
+    `file delete`, and ~120 others) an untrusted interpreter may call.  The
+    reflexive design is a gate: a per-interpreter allowlist consulted on every
+    dispatch.  We built that prototype --- a per-ensemble bitmask checked in the
+    shared dispatcher --- and discarded it, because it answered the wrong
+    question.  Every other slice of the command surface --- top-level commands,
+    math functions, system variables --- was already a *per-interpreter registry*,
+    and "may this interpreter use X?" was already answered by "is X registered in
+    this interpreter?"  Sub-commands were the single exception: a process-global
+    `const` table dispatched through one file-static chokepoint.  So the feature
+    did not need a new mechanism; it needed the exception to stop being one.
+    Promoting sub-commands to a per-interpreter hash on the command record ---
+    availability modeled as mere presence, the way the rest of the system already
+    worked --- let the dispatcher, the introspection path (`info subcommands`),
+    and the "unknown subcommand: must be a, b, or c" error all read one structure,
+    so they cannot disagree by construction, and it required no permission word on
+    the hot path.  Two dividends fell out.  First, the eleven trivial per-ensemble
+    delegator functions and the shared dispatcher they fed all became dead code
+    and were deleted: the feature's foundation shipped as a *smaller* codebase.
+    Second, unifying the outlier exposed a latent bug it had been hiding --- four
+    of the eleven ensembles kept their sub-command tables function-local, so the
+    introspection command had a silent blind spot for exactly those four, which
+    the conformance work fixed as a side effect rather than a separate task.  The
+    general lesson for both human and LLM designers: before adding a gate, ask
+    whether the thing you are gating is the one component that is not already
+    shaped like its siblings; making it conform is frequently a net-negative diff
+    that removes an entire class of "two views of one truth" bugs at the same time.
+
+22. **Every public, supported knob must be safe across arbitrary combinations of
+    its values --- and the all-features-off build is the single test that proves
+    it.**  If a build-time flag is documented and supported, then every combination
+    of its values with every other supported flag is part of the contract, whether
+    or not any build exercises it.  The architecture claimed --- in this paper and
+    in the portability guide --- that any optional feature could be compiled out,
+    down to a minimal build with everything disabled.  A cross-configuration sweep
+    that toggled each feature and each plugin off, one at a time, found five
+    configurations that did not so much as link.  None were regressions; they were
+    standing gaps that the default build --- which enables everything --- had simply
+    never exercised, the same blind spot Lesson 13 describes for the test-key flag
+    but generalized to the whole feature matrix: a supported knob whose off-position
+    nobody compiles has zero coverage, a modularity guarantee is worth exactly the
+    build that enforces it, and documentation cannot stand in for a compile.  The
+    breaks came in two shapes worth separating.  The common one was a *coarse* guard:
+    a use-site that depended on two features but was conditioned on one.  Secure
+    variables need both cryptography and the variable system, yet their sites read
+    `#if CRYPTOGRAPHY` alone, so the cryptography-on / variables-off corner broke; a
+    test driver sat inside a cryptography block but called the fault-injection API
+    without guarding it, so it broke only in the narrow cryptography-on / fault-off
+    corner.  A one-feature guard cannot express a two-feature dependency, and a
+    feature block that wraps "everything crypto-ish" hides which of its lines
+    actually need which capability.  The fix is to push the condition down to the
+    site and make it a conjunction where the site needs two --- `#if CRYPTOGRAPHY &&
+    VARIABLES` --- which is also the only form under which each dependency is
+    independently removable.  The rarer shape was the mirror image: general test
+    infrastructure parked inside a feature's block for proximity, not dependency, so
+    disabling that feature took out unrelated machinery; one un-gating cleared a
+    dozen phantom breaks.  A latent offender underneath both was a hand-maintained
+    pair of stub tables that list which symbols are feature-gated --- exactly the
+    drift-prone parallel list Lesson 21's sibling finding warns against --- where one
+    gated public API missing from the list referenced its symbol unconditionally and
+    went undefined the instant the feature was off; the durable answer was not to fix
+    the one entry but to add a gate that re-derives each symbol's guard from the
+    header's own `#if` context and fails if the list omits it.  The capstone is the
+    build with *every* feature off at once: each single-feature-off build proves only
+    that one flag's dependencies are gated, but the all-off build forces every
+    per-site guard to hold simultaneously and so surfaces any remaining ungated
+    dependency in a single pass --- it is the closest a discrete matrix comes to
+    proving safety over *all* combinations at once.  We moved that build out of the
+    prose and into the build matrix as a first-class phase that runs on every sweep.
+    The transferable rule for any project that exposes configuration: the set of
+    supported values is a promise that every combination of them works, so the
+    minimal configuration is a test rather than a footnote --- put it in the matrix,
+    gate each dependency at the site that has it, and use a conjunction the moment a
+    site needs two features rather than one.
+
+23. **A scope that resets a global counter for a "fresh start" owns restoring the
+    truth at scope exit, not the snapshot it took --- and you cannot test one
+    component's fault handling through collaborators that mishandle the same
+    fault.**  The `[try]`/`[finally]` command grants its cleanup block a fresh
+    memory budget so that finally can run even when the try body has exhausted the
+    allocation limit: it saves the byte counter, zeroes it, runs the block, and
+    restores the saved value.  That restore was the bug.  Any memory the finally
+    block left *live* --- a global it set, a channel it opened --- vanished from the
+    accounting the instant the saved value was written back, so a script could hold
+    memory far past its cap while the counter read near zero (a direct probe
+    retained tens of megabytes under a sixteen-megabyte ceiling reporting under a
+    hundred bytes), and the next allocation sailed through.  The whole apparatus of
+    a single-owner memory limit was defeated by one plugin restoring a stale
+    snapshot.  The fix is exact rather than approximate: because the counter was
+    zeroed for the block, its value *after* the block is precisely the block's live
+    residue, so restoring `saved + residue` (saturating) both preserves the
+    fresh-budget behavior during the block and charges what the block kept.  The
+    general rule: **a snapshot taken before a scope is only a correct thing to
+    restore if the scope leaks nothing --- which is exactly what a cleanup block
+    exists to not promise; a scope that resets shared state must reconstruct the
+    truth on exit, not reinstate the past.**  The same recheck found the neighbours
+    this class always travels with --- a save that *moved* an owned buffer out of
+    the interpreter but forgot to free it on the path that discards it, and a result
+    copy-and-restore that ignored allocation failure in three places and so reported
+    success with a silently emptied result --- each the same shape as Lesson 6's and
+    Lesson 8's unchecked hand-offs, and each fixed by routing every exit through one
+    checked helper.  But the sharpest lesson came from *testing* the result-loss
+    fix.  The natural probe --- sweep a one-shot allocation failure across a
+    `try { produce a known result } finally { ... }` and assert the command never
+    returns success with the wrong result --- reported failures that were not the
+    try machinery's fault at all: the body commands themselves (`format`, `string
+    repeat`) degrade silently under memory pressure, returning success with an empty
+    string, which `[try]` then faithfully propagated.  The harness was measuring its
+    own instruments.  Isolating the component under test required abandoning the
+    command sweep for a deterministic allocation limit sized so the body's result
+    materializes exactly once but the machinery's *copy* of it cannot --- making the
+    copy the only thing that can fail.  The transferable half: **you cannot validate
+    that component X handles a fault correctly by observing it through collaborators
+    that handle the same fault incorrectly; the test must drive the fault into X
+    alone, or X's correct behavior and a collaborator's bug are indistinguishable in
+    the output.**  (That the built-in commands degrade silently under OOM is a real,
+    separate defect the exercise surfaced and the project logged for its own sweep.)
+
+24. **A return value that every caller ignores is a return value that does not
+    exist --- so nearly the entire command surface reported success with an empty
+    result under memory pressure, and only a differential oracle could see it.**
+    The sweep Lesson 23 promised found that the silent OOM degradation was not two
+    commands but essentially all of them.  The mechanism was uniform and dull:
+    roughly three hundred call sites end a command with `SetResult(...); return
+    OK;`, and the result setter *copies* its argument --- a fresh allocation, which
+    is why the caller frees its buffer right after --- so on out-of-memory it clears
+    the result and returns an error that no one reads.  The compiler cannot warn:
+    the return type is honored, the value is simply dropped.  A command that
+    "cannot fail" fails silently the instant the allocator does, and a sandboxed
+    script that hit its memory limit would march on with an empty string where it
+    expected data.  Two things make this lesson worth more than "check your return
+    values."  The first is *why the existing tests could not see it.*  The runtime
+    had a substantial out-of-memory test suite --- a fault-injection layer,
+    per-call-site filters, dozens of sweeps --- and it certified the wrong property.
+    Every one of those tests asked "did we reach this branch under fault without
+    crashing or leaking," never "is the answer the command returned correct or an
+    honest error"; two of them even carried comments declaring the silent
+    truncation acceptable *because the goal was reaching the branch.*  A
+    fault-injection suite that only proves reachability is measuring coverage and
+    calling it correctness, and no number of such tests would ever have flagged an
+    empty-but-successful result.  The test that finds this class is *differential*
+    and it must be written as an oracle rather than as per-command assertions,
+    because three hundred hand-written checks is not a thing anyone maintains: run
+    each command once cleanly to capture a baseline, then sweep a single allocation
+    failure across every allocation it makes, and flag any trip where the fault
+    fired, the command claimed success, yet the result differs from the baseline
+    (list-aware, so a `{a} b` requoting of `a b` is recognized as the same list, not
+    a regression).  That harness turned an untestable folk belief ("we handle OOM")
+    into a build gate.  The second is *the shape of the fix.*  The instinct is three
+    hundred edits; the right move is one chokepoint, and it was already built.  The
+    dispatcher every command is invoked through sets a per-interpreter "a result
+    build failed" flag from the handful of result-producing primitives, clears it
+    before each command, and promotes a would-be success to an out-of-memory error
+    when the flag is set --- saved and restored around the call so nested commands
+    neither mask nor are masked.  Five edits, and the entire surface conforms; the
+    full suite, exercising the hottest evaluation paths, passed unchanged, which is
+    the evidence that the scoping is right.  This is Lesson 21's "conform the
+    outlier" inverted: there, one component differed from a uniform surface and the
+    cure was to make it conform; here, a uniform *mistake* spanned the surface and
+    the cure was to enforce the missing invariant at the one point they all pass
+    through.  The closing note is that an ignored allocation-failure return is a
+    silent wrong answer in the best case and a memory-safety bug in the worst: the
+    same sweep found a command that ignored its list-append failures, left its
+    accumulator truncated to an odd length, and then read that list as key/value
+    pairs --- an out-of-bounds index and a hard crash --- which is the identical
+    defect (a dropped failure return) that had merely been returning wrong strings
+    everywhere else.  Only a test that drives the fault and inspects the *observable
+    outcome*, not the branch reached, tells any of these apart.
+
+25. **A guard with one structurally-dead arm is permanently capped at 50% MC/DC,
+    and "50%" looks the same whether the covered pair is the meaningful one or the
+    dead one --- so the waiver decision must be read from the per-decision vectors,
+    not guessed, and the live arm must still be driven for the waiver to be honest.**
+    Lesson 19 is about the branch you *can* reach if you set the field: drive it,
+    because a waiver cannot pin the boundary.  Its mirror is the branch you
+    *cannot* reach because the two conditions of a compound guard are correlated ---
+    a validated-key modulus pointer that is never non-NULL with a zero length, a
+    timestamp field pre-validated as fixed-width digits so its value can never fall
+    below zero or need a fifth digit, a "not before" that a prior check already
+    rejected against the same clock.  For these the honest move is the opposite of
+    Lesson 19 --- waive --- but only after establishing two facts from evidence.
+    First, *which* independence pair is unformable: the tool's per-decision output
+    ("C1-Pair covered, C2-Pair not covered") plus the source invariant that pins C2
+    at a constant, because a rebuild spent driving the *dead* arm proves nothing and
+    a blanket "decision unreachable" waiver over a guard whose live arm is a real
+    boundary is simply a lie.  Second, that the live arm *is* exercised: the four
+    timestamp guards each cap at 50%, but the covered half is a genuine
+    out-of-range certificate (year 1969, hour 25) that a fixture drives on purpose,
+    so the waiver excuses only the truly-dead half.  Two mechanical traps flank the
+    judgment.  The waiver's classification tag is a closed vocabulary the gate
+    validates --- an invented tag fails with "unknown class," not a soft warning ---
+    and its file column must be the path the coverage map records (from the source
+    root, not a bare basename), or the waiver silently matches nothing and leaves
+    the decision in debt while itself reading as stale: a double failure one error
+    can mask the other of.  The gate re-reads waivers without a rebuild, so the
+    discipline is cheap: edit, re-run the gate, and refuse to proceed until the
+    stale-waiver count is zero.
 
 ### 6.5  Case Study: The Spilornis Buffer Overflow
 
@@ -3975,6 +4713,311 @@ plus `th8.h`) simplifies integration into host applications.
 The public header chain requires no platform-specific system
 headers (`<windows.h>` is not included; `CRITICAL_SECTION` is
 defined inline in `th8_plat.h`).
+
+
+### 6.31  Case Study: A Flaky-Looking Test That Unmasked a Security Weakness
+
+The most consequential security hardening in this project did not begin as a
+security task.  It began as a single test — `coverage8-10.1`, a `clock ntp`
+check — failing *only* on the Linux CI runner, twice in a row.  The reflexive
+diagnosis was "network flake."  It was not.
+
+Pulling the thread revealed a real, deterministic defect (documented as Bug
+78): the NTP client resolved the server with `getaddrinfo(AF_UNSPEC)` but only
+ever contacted the *first* address it returned.  glibc orders IPv6 first
+(RFC 3484), and the Linux runner had no working IPv6 egress, so the client
+dead-ended on a black-holed address and never tried the reachable IPv4 ones —
+while silently defeating the round-robin server's fault tolerance.  macOS
+ordered the addresses differently and "worked," which is exactly what made it
+look like a flake.
+
+Fixing that meant reading the *adjacent* resolution and validation code — and
+that reading is where the real discovery happened.  The DNSSEC validation we
+believed protected `clock ntp` turned out to be a **gate that was decoupled
+from the connection**: it validated the name, checked only a `bogus` verdict
+(never a positive `secure` one, so an *unsigned* or *no-anchor* answer sailed
+through), then **threw the validated addresses away** and re-resolved via an
+unvalidated `getaddrinfo` for the actual socket — over IPv4 records only, while
+the connection could use never-validated IPv6.  Every individual piece was
+present; none of it was load-bearing.  The code was not as secure as everyone,
+including its authors, assumed.
+
+So a one-line test failure became an end-to-end hardening: return a `secure`
+flag from the resolver, **require** it, connect only to the DNSSEC-validated
+A *and* AAAA addresses, bundle a signature-verified IANA root trust anchor so
+validation works out of the box, and require any operator-supplied anchor to
+be signed as well.  And in *verifying* that, one more layer peeled back: the
+DNSSEC-signed mirror we switched the default to was fronted by a CDN that does
+not carry NTP, so the now-correct client correctly reported that a signed name
+pointed at hosts that could not answer — a deployment truth the old,
+never-really-validating client had been too lax to expose.
+
+Then the hardening bit back.  With the validating path in place, the client
+began failing with the *generic* quorum message ("insufficient server
+responses").  On request we **un-masked** it — made the multi-server layer
+preserve the specific per-server diagnostic instead of overwriting it — and the
+un-masking paid for itself within a single command: the real error was "cannot
+securely resolve," for *every* name, including `iana.org`, on a host that could
+otherwise do DNSSEC.  A fail-**closed** security check had turned a broken
+*dependency* into what looked like a security *refusal*: "this name isn't
+secure" actually meant "our resolver can't resolve anything."  When a
+fail-closed path fires on every input, the mechanism is the suspect, not the
+inputs.
+
+The mechanism was our own hardening.  Two options we had enabled "to be safe"
+were incompatible with reality.  `harden-referral-path` — experimental and
+non-RFC — issues extra infrastructure queries that SERVFAIL in a one-shot
+embedded resolver with a small outgoing-range: total failure.  `use-caps-for-id`
+(DNS 0x20 case randomisation) was rejected by Cloudflare, which fronts the
+signed name and does not preserve query-name case: **intermittent** failure, a
+different shape that pointed at a per-server-path option rather than a universal
+one.  Because the embedded library was (correctly) silenced, both surfaced only
+as "no addresses."  The diagnosis came from reproducing *outside* the silence —
+stock `unbound-host` validated the same name with the same anchor — and then a
+standalone context harness with leave-one-out bisection that *measured* each
+option's failure rate (7/12 with 0x20 on, 12/12 off) instead of reasoning about
+whether it "should" be safe.  Neither option was load-bearing: DNSSEC validation
+is the actual anti-spoof, so removing them cost no security and restored
+resolution.  A last thread, pulled by the same "don't assume" instinct that
+started the arc: the client had been willing to try an IPv6 address on a host
+with no IPv6 egress — so it now probes each resolved address's routability with
+a packet-free `connect()` and assumes *neither* family reachable.
+
+The lessons compound.  A test that fails "only sometimes, only on one platform"
+is a hypothesis about an address-ordering or environment divergence, not a coin
+that landed badly — treat it as signal.  A bug investigation is a licence to
+audit its neighbourhood: the surrounding code is exactly where latent security
+assumptions go unchallenged precisely because nothing has forced anyone to look
+at it.  Hardening is not monotonically safer — an option that is real hardening
+in a full recursive server can be a total or intermittent outage in an embedded
+stub or against a specific provider, so each must be verified against the actual
+deployment shape, not its name.  And a fail-closed guard can *disguise* a broken
+dependency as a policy refusal, so keep the most specific diagnostic and, when a
+silenced library "returns nothing," reproduce outside the silence before
+blaming the inputs.  The failing test did not just have a fix; it had a security
+review — and a resolver-reliability review — attached, if we were willing to
+keep reading.
+
+
+### 6.32  Case Study: What "All-Or-Nothing" Actually Means
+
+A project-wide rule was adopted mid-development: every state-mutating API must be
+*transactional* — on any failure it rolls back all incomplete changes and leaves
+state exactly as before.  The first API put under that lens was `Th8_CreateInterp`,
+via a new test that swept a one-shot allocation fault across the whole constructor
+and asserted the obvious-looking invariant: **whenever the fault fired,
+construction must return NULL.**  The test failed immediately and dramatically —
+of 152 construction allocation trips, 62 fired the fault yet still returned a live
+interpreter.  Read literally, that said the constructor tolerated 62 allocation
+failures, and the natural next step was a large refactor to make every one of them
+fatal.
+
+That refactor would have been a mistake, and the reason is the whole lesson.
+Backtracing the 62 survived trips showed every one routing through the same place:
+the interpreter builds two list-valued globals (`tcl_platform(source)` and
+`(compileOptions)`), and the list/string machinery consults the
+internal-representation cache to memoise the parsed form.  The cache — by explicit
+contract — returns `NULL` on out-of-memory, and every caller is written to proceed
+with the correct, uncached value.  So a fault on a cache-warming (or transient
+scratch) allocation resumes, the list is built correctly, the global is set
+correctly, and the interpreter that emerges is byte-for-byte complete, differing
+only in that a cache is cold — a state it would have occupied anyway before its
+first use.  None of those 62 "tolerated failures" left any observable residue.
+
+The defect was in the invariant, not the constructor.  "The allocation failed
+somewhere inside the call" is not the same event as "observable state is
+truncated," and a transactional gate that conflates them will fire on every
+optimisation a system deliberately degrades under memory pressure.  The corrected
+test asserts the *right* property — **complete-or-nothing**: on every fired trip,
+the constructor must return either NULL or a *fully complete* interpreter, and it
+verifies completeness by introspecting observable state (both list globals have
+their exact element counts, a global can be set and read back, a command can be
+registered).  It passes with zero violations, which is a stronger and truer result
+than the original: not "faults yield NULL" but "no published interpreter is ever
+partial."  This mirrors, from the opposite side, an earlier lesson that a resource
+test must assert the *quantity* and not a mere inequality (§6 on the sandbox step
+counter): there the proxy was too weak and missed a real gap; here the proxy was
+too strong and manufactured a phantom one.  Both fail for the same reason — they
+check something adjacent to the property instead of the property.
+
+The audit was not fruitless.  The same sweep surfaced one genuine gap the cache
+noise had to be cleared away to see: secure-variable initialisation, whose
+allocation failure was silently discarded, producing an interpreter that lacked
+secure-variable support without saying so.  Unlike a cold cache, missing a
+*capability* is observable state, so that failure was made fatal.  The discriminator
+that separated the 62 false alarms from the one real bug is exactly the one the
+project rule now codifies: does the incomplete change alter anything a script can
+see?  Caches, lookaside pools, and scratch buffers do not and need not roll back; a
+missing command, namespace, variable, channel, or capability does and must.  The
+rule is not "never tolerate an allocation failure" — it is "never let one become
+*visible*."
+
+The generalisable lessons.  A transactional invariant has to name the state it
+governs, and the right boundary is observability, not allocation: internal,
+idempotent state (a memoisation cache) is a valid complete state even when cold, so
+demanding its rollback is not stricter correctness, it is a robustness regression
+that fails operations the system could have survived.  When a plausible invariant
+makes a correct system look broken at scale (62 of 152 trips), suspect the
+invariant before the system — and let the counter-examples classify themselves: the
+backtrace that keeps landing in the same failure-tolerant helper is telling you the
+allocation was optional.  Finally, a too-strong gate is not harmless: it would have
+driven a large, actively harmful refactor, and only reclassifying the 62 as benign
+kept the real one-line capability bug in view.
+
+
+### 6.33  Case Study: You Cannot Test a Rollback by Re-Running One-Shot Setup
+
+The companion to §6.32 concerns the *other* half of transactional construction:
+the process-global `Th8_Initialize`, whose two failable lifecycle callbacks
+(`xInitialize`, `xSetCwd`) must, on failure, undo every completed stage in reverse
+order.  The natural test writes itself: fail the callback, assert the init failed,
+then call `Th8_Initialize` again and assert it now *succeeds* — a clean recovery
+proving the rollback left no leftover state.  It crashed on the second init, deep
+in the allocator's per-thread setup.
+
+The crash was not the rollback's fault, and understanding why it wasn't is the
+lesson.  `Th8_Initialize`'s rollback is written to mirror `Th8_Finalize`, and
+`Th8_Finalize` unregisters the *main* thread from the allocator.  So the rollback
+does too — and this allocator's main thread is special: once torn down, it cannot
+be re-initialized in the same process, so a `Th8_Initialize` / `Th8_Finalize` /
+`Th8_Initialize` cycle crashes just as surely as the failure path did.  The library
+is once-per-process by contract; the "recovery" oracle was asserting a capability
+that does not exist, and its crash carried no information about whether the undo was
+correct.
+
+The generalisable point is a testing one: **a rollback defined as the inverse of
+teardown cannot be validated by re-running setup, when teardown is itself
+one-shot.**  Inferring "the undo worked" from "a later redo succeeded" only holds if
+redo is supported; when it is not, the inference is vacuous at best and, as here,
+crashes on a path unrelated to the property under test.  The oracle must observe the
+undo *directly*.  The working harness instruments each lifecycle callback with a
+counter that chains to the real implementation, runs exactly one failing init, and
+reads the counts: the earliest failure leaves every later stage untouched (nothing
+to undo), while the deepest failure shows each completed stage — the initialize
+hook and the mutex stage — undone exactly once, in reverse order.  No
+re-initialization is involved.
+
+The investigation did not merely leave a sharp edge documented; it turned one up
+and fixed it.  Building the "recovery" oracle is what first crashed the library on a
+second initialization, and although that oracle was the wrong way to *verify the
+rollback*, the crash it exposed was a genuine public-API defect: a library that
+SIGSEGVs rather than errors when re-initialized.  The root cause was the
+initializer's teardown calling the allocator's per-thread `thread_done` on the main
+thread, which frees thread-local state the allocator keeps alive until process exit
+(worker threads are reclaimed by a thread-exit hook; the main thread is not).  Both
+the finalizer and the failed-init rollback ran on the main thread, so a subsequent
+initialize dereferenced freed state.  The fix restricts `thread_done` to confirmed
+worker threads.  With it, the same `recover` (failed-then-clean init) and `reinit`
+(repeat init/finalize) sequences that crashed now succeed, and reverting the guard
+reproduces the crash on demand.  The compounded lesson: a bad oracle can still be a
+good bug detector -- the discipline is to separate the two, keep the real fix, and
+discard only the flawed inference.  "The contract says once per process" is a
+description of intended use, not a licence to crash when the use is stretched.
+
+
+### 6.34  Case Study: One Owner for an Invariant, and a Test That Measured Absence
+
+A sandbox memory limit is only as strong as the paths that respect it.  TH8's
+per-interpreter allocation limit was enforced on the normal path, but a
+"second-chance" recovery hook -- invoked when an allocation fails so the embedder
+can free caches and retry -- could satisfy a request the limit had just refused,
+allocating straight past the ceiling.  The defect and its fix are a small lesson in
+where an invariant should live, and the test that "verified" the fix is a sharper
+lesson still.
+
+The invariant -- check the limit, then account the bytes -- was implemented in two
+places: the core allocator and the second-chance path.  The second copy accounted
+the recovered block but omitted the limit check (and double-counted against any
+caller that had already accounted).  Two hand-maintained copies of one rule drift,
+and they drift first exactly where coverage is thinnest.  The repair was not to add
+a third check inside the recovery hook -- which would have been a third copy, this
+time inside embedder-supplied code that cannot even see the internal counters -- but
+to collapse to a single owner: the core allocator does the limit check, the
+zero-fill, and the accounting, once; the recovery path reclaims memory and then
+routes the retry back through that same core.  With one owner, "the recovery path
+respects the limit" is true by construction rather than by vigilance, and the
+callback contract can stay simple: return a block the core will use as-is, obtained
+by delegating to a real allocation entry point (so it is accounted) -- or a raw
+block from a private reserve, explicitly opting that block out.  A recovery hook is
+not a policy escape hatch; freeing caches to make a request fit is legitimate,
+answering a policy rejection with a raw allocation is not, and re-entering the one
+checked path is what distinguishes them.
+
+Then the test.  The first version created child interpreters, set a tiny limit,
+asked for far more, and confirmed the request was refused -- green.  It was green
+because the children had no recovery hook at all: the default platform does not
+install the memory-recovery layer, so there was nothing to bypass and nothing to
+test.  The check was measuring the *absence* of the feature, not the *presence* of
+the fix.  The tell was quiet but unmistakable in hindsight: applying and reverting
+the fix produced identical results.  A change that does not move its own test is a
+test that is not reaching the changed code.  Once the test explicitly installed the
+recovery layer onto the child -- opting into the exact configuration the finding is
+about -- the path finally ran, and reverting the fix flipped the outcome.  Only then
+did the test discriminate between the fixed and broken code, which is the only
+property that makes a regression test worth keeping.  The generalisable pair: put a
+cross-cutting invariant in one place so it cannot be half-applied, and make a test
+fail before you trust it to pass -- especially a test whose subject is an optional
+capability the default build leaves switched off.
+
+
+### 6.35  Case Study: Designing Out a Race Instead of Locking Around It
+
+`Th8_CancelEval` is the interpreter's one cross-thread lever: any thread, or a
+signal handler, may ask the running script to stop.  Getting its concurrency
+right went through three shapes, and the arc is instructive precisely because the
+middle shape *looked* finished.
+
+The original code stored the cancel request as several ordinary `volatile`
+fields -- a message pointer, a length, a flags word -- and set an atomic bit last.
+`volatile` is not synchronisation in C, so two foreign cancellers could tear the
+pointer/length pair and the owner could observe a pointer from one publisher with
+a length from another.  The audit flagged it as a real data race.
+
+The second shape wrapped the whole multi-field request in a bounded lock-free
+critical section: publishers wrote the request under a CAS try-spinlock, and the
+owner adopted it under a try-acquire that never blocked the evaluator.  It passed
+the existing contract test and a first ThreadSanitizer run.  It was still wrong,
+and the thing that exposed it was strengthening the *stress* test rather than
+writing new code.  The audit's standing charge against the old evidence -- that a
+test which spawns one worker, joins it, then inspects state proves "no crash," not
+"no race" -- applied verbatim to our own test.  Once the stress test actually
+drove foreign non-signal messages with the allocator's own instrumentation
+enabled, TSan pointed at the byte-accounting counters.  The lock had guarded "the
+request," but the publish path also *touched* the owner-only allocation
+accounting, because the foreign thread built its message buffer through the
+accounted allocator.  A critical section guards what you put inside it; it does
+nothing about the side effects you forgot were part of the operation, and the
+mere presence of a lock invites the belief that the whole operation is covered.
+
+The third shape removed the lock entirely by changing the *shape of the data* so
+there was nothing left to serialise.  Two moves did it.  First, the entire request
+STATE -- the canceled bit and every flag -- collapsed into a single machine word,
+OR-published atomically; a value that fits in one atomic word cannot be torn, so
+there is no multi-field object to protect.  Second, the message became a
+self-describing buffer, `[length][bytes][NUL]`, handed off through one atomic
+pointer exchange.  Because the length lives *inside* the buffer the published
+pointer addresses, no reader can ever pair one publisher's pointer with another's
+length -- the original defect is impossible by construction, not merely guarded
+against.  The exchange also settles ownership unambiguously: whoever swaps a
+non-NULL pointer out is the one who frees it, which removes leaks, double-frees,
+and use-after-free without a single reference count.
+
+Two further points fell out of the redesign rather than being bolted on.  A
+signal handler cannot allocate, so a signal-mode cancel necessarily carries no
+message and publishes only the atomic word, with the interpreter reporting a fixed
+"eval canceled via signal."  Being *forced* into a message-free signal path
+clarified the whole precedence rule: state is always safe to publish; a message
+is an optional extra the owner adopts, first-writer-wins.  And the coordination
+buffer is deliberately allocated from the *raw* platform allocator, never the
+accounted one -- because "which allocator" is exactly the boundary between what a
+non-owner thread may and may not write.  The correctness fix even restored a
+capability the "safe" middle version had abandoned: foreign threads had been
+dropping custom cancel messages as un-copyable, and the pointer-swap hand-off
+brought them back.  The general lesson is the oldest one in concurrent
+programming, relearned concretely: when a shared object is hard to lock correctly,
+the winning move is usually to reshape it into something that needs no lock -- an
+indivisible word for state, a self-describing single-owner payload for the rest --
+rather than to make the lock cleverer.
 
 
 ---

@@ -171,6 +171,12 @@ string_compare_command(
 	    unsigned char a = (unsigned char)argv[iArg][j];
 	    unsigned char b = (unsigned char)argv[iArg + 1][j];
 
+	    /* -nocase compares the argument VALUES byte by byte, so poll every
+	     * 4096 bytes to stay interruptible on huge string values
+	     * (TH8K-009). */
+	    if ((j & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	    }
 	    if (a >= 'A' && a <= 'Z') a += ('a' - 'A');
 	    if (b >= 'A' && b <= 'Z') b += ('a' - 'A');
 	    if (a != b) {
@@ -284,6 +290,11 @@ string_equal_command(
 	    unsigned char a = (unsigned char)argv[iArg][j];
 	    unsigned char b = (unsigned char)argv[iArg + 1][j];
 
+	    /* -nocase byte compare over the argument VALUES; poll every 4096
+	     * bytes for interruptibility on huge values (TH8K-009). */
+	    if ((j & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	    }
 	    if (a >= 'A' && a <= 'Z') a += ('a' - 'A');
 	    if (b >= 'A' && b <= 'Z') b += ('a' - 'A');
 	    if (a != b) {
@@ -663,17 +674,21 @@ string_repeat_command(
     nLen = TH8_LEN(argl[2]);
 
     /*
-     * Security: bound the output size against both the hard
-     * maximum AND the per-interpreter result size limit.
-     * The check is overflow-safe: dividing the limit by nLen
-     * cannot overflow, and rejects any iCount that would push
-     * iCount * nLen past the limit.
+     * Security: bound the output size against the per-interpreter
+     * result size limit AND the dedicated [string repeat] hard cap
+     * (TH8_MX_STRING_REPEAT, TH8K-009), whichever is smaller.  The hard
+     * cap bounds the uninterruptible doubling fill below to ~1 MiB so a
+     * single [string repeat] cannot make the interpreter unresponsive,
+     * even when the result limit is the full 100 MiB default.  The check
+     * is overflow-safe: dividing the limit by nLen cannot overflow, and
+     * it rejects any iCount that would push iCount * nLen past the limit.
      */
 
     {
 	size_t nLimit = Th8_GetResultLimit(interp);
 
 	if (nLimit == 0) nLimit = TH8_MX_STRLEN;
+	if (nLimit > TH8_MX_STRING_REPEAT) nLimit = TH8_MX_STRING_REPEAT;
 	if (nLen > 0 && (size_t)iCount > nLimit / nLen) {
 	    Th8_SetResultStatic(interp, "string too long", TH8_NOLEN);
 	    return TH8_ERROR;
@@ -814,6 +829,9 @@ string_trim_command(
 	    size_t j;
 	    int found = 0;
 
+	    if ((iLeft & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	    }
 	    for (j = 0; j < nChars; j++) {
 		if (zStr[iLeft] == zChars[j]) {
 		    found = 1;
@@ -829,6 +847,9 @@ string_trim_command(
 	    size_t j;
 	    int found = 0;
 
+	    if ((iRight & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	    }
 	    for (j = 0; j < nChars; j++) {
 		if (zStr[iRight - 1] == zChars[j]) {
 		    found = 1;
@@ -881,7 +902,7 @@ string_is_command(
     size_t nStr;
     int iResult = 1;
     int bStrict = 0;
-    int iClass;  /* argv index of the class name */
+    int iClass; /* argv index of the class name */
     int iString; /* argv index of the string value */
 
     /*
@@ -932,6 +953,11 @@ string_is_command(
 	size_t i;
 
 	for (i = 0; i < nStr; i++) {
+	    /* [string is CLASS] scans the value byte by byte; poll every 4096
+	     * bytes for interruptibility on huge values (TH8K-009). */
+	    if ((i & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	    }
 	    if (!th8IsAlnum((unsigned char)argv[iString][i])) {
 		iResult = 0;
 		break;
@@ -941,6 +967,11 @@ string_is_command(
 	size_t i;
 
 	for (i = 0; i < nStr; i++) {
+	    /* [string is CLASS] scans the value byte by byte; poll every 4096
+	     * bytes for interruptibility on huge values (TH8K-009). */
+	    if ((i & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	    }
 	    if (!th8IsAlpha((unsigned char)argv[iString][i])) {
 		iResult = 0;
 		break;
@@ -950,6 +981,11 @@ string_is_command(
 	size_t i;
 
 	for (i = 0; i < nStr; i++) {
+	    /* [string is CLASS] scans the value byte by byte; poll every 4096
+	     * bytes for interruptibility on huge values (TH8K-009). */
+	    if ((i & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	    }
 	    if (!th8IsDigit((unsigned char)argv[iString][i])) {
 		iResult = 0;
 		break;
@@ -959,6 +995,11 @@ string_is_command(
 	size_t i;
 
 	for (i = 0; i < nStr; i++) {
+	    /* [string is CLASS] scans the value byte by byte; poll every 4096
+	     * bytes for interruptibility on huge values (TH8K-009). */
+	    if ((i & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	    }
 	    if (!th8IsSpace((unsigned char)argv[iString][i])) {
 		iResult = 0;
 		break;
@@ -975,6 +1016,9 @@ string_is_command(
 	size_t i;
 
 	for (i = 0; i < nStr; i++) {
+	    if ((i & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	    }
 	    if ((unsigned char)argv[iString][i] > 127) {
 		iResult = 0;
 		break;
@@ -1005,6 +1049,9 @@ string_is_command(
 	for (i = 0; i < nStr; i++) {
 	    char c = argv[iString][i];
 
+	    if ((i & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	    }
 	    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
 	          (c >= 'A' && c <= 'F'))) {
 		iResult = 0;
@@ -1217,7 +1264,7 @@ string_map_command(
     size_t i;
     int rc;
     int bNoCase = 0;
-    int iArg = 2;  /* Index of MAPPING argument. */
+    int iArg = 2; /* Index of MAPPING argument. */
 
     (void)ctx;
 
@@ -1513,8 +1560,15 @@ string_totitle_command(
     Th8_Memcpy(interp, zOut, zStr, nStr);
 
     for (i = 0; i < nStr; i++) {
-	unsigned char c = (unsigned char)zOut[i];
-	int iChar = Th8_Utf8Len(zStr, i);
+	unsigned char c;
+	int iChar;
+
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    return TH8_ERROR;
+	}
+	c = (unsigned char)zOut[i];
+	iChar = Th8_Utf8Len(zStr, i);
 
 	if (iChar == iFirst) {
 	    /* Title case: uppercase the first char in range. */
@@ -1582,7 +1636,10 @@ string_wordend_command(
     if (iIdx >= nChars) iIdx = nChars - 1;
 
     for (i = iIdx; i < nChars; i++) {
-	const char *p = Th8_Utf8Index(argv[2], argl[2], i);
+	const char *p;
+
+	if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	p = Th8_Utf8Index(argv[2], argl[2], i);
 
 	if (ALWAYS(p) && !th8IsAlnum((unsigned char)*p) &&
 	    ALWAYS(*p != '_')) {
@@ -1594,7 +1651,34 @@ string_wordend_command(
 
 
 /*
- * string_wordstart_command -- see string_wordend_command above.
+ *----------------------------------------------------------------------
+ *
+ * string_wordstart_command --
+ *
+ *	string wordstart STRING INDEX
+ *
+ *	Return the index of the first character of the word containing
+ *	the character at INDEX.  A "word" is a contiguous run of word
+ *	characters (alphanumeric or underscore).  This is the
+ *	backward-scanning mirror of `string_wordend_command`.
+ *
+ * Why / How:
+ *	Clamps INDEX into range (via th8ParseIndex, honoring "end"
+ *	syntax), then scans toward the start of the string, testing the
+ *	character before the cursor and stopping at the first non-word
+ *	character; the loop index left standing is the word's first
+ *	character.  Polls `Th8_Ready` each step so a scan over a long
+ *	string stays cancelable.
+ *
+ * Results:
+ *	TH8_OK with the boundary character index as the result;
+ *	TH8_ERROR on wrong argument count, a bad index, or a pending
+ *	cancel.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -1620,7 +1704,10 @@ string_wordstart_command(
     if (iIdx >= nChars) iIdx = nChars - 1;
 
     for (i = iIdx; i > 0; i--) {
-	const char *p = Th8_Utf8Index(argv[2], argl[2], i - 1);
+	const char *p;
+
+	if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
+	p = Th8_Utf8Index(argv[2], argl[2], i - 1);
 
 	if (ALWAYS(p) && !th8IsAlnum((unsigned char)*p) &&
 	    ALWAYS(*p != '_')) {
@@ -1717,8 +1804,12 @@ string_reverse_command(
     nChars = Th8_Utf8Len(argv[2], argl[2]);
 
     for (i = nChars - 1; i >= 0; i--) {
-	const char *p = Th8_Utf8Index(argv[2], argl[2], i);
-	const char *pNext = Th8_Utf8Index(argv[2], argl[2], i + 1);
+	const char *p;
+	const char *pNext;
+
+	if (Th8_Ready(interp) != TH8_OK) goto oom;
+	p = Th8_Utf8Index(argv[2], argl[2], i);
+	pNext = Th8_Utf8Index(argv[2], argl[2], i + 1);
 
 	if (!pNext) pNext = argv[2] + argl[2];
 	if (p) {
@@ -1831,6 +1922,14 @@ string_case_command(
     for (i = (size_t)(zFirst - argv[2]); i < (size_t)(zLast - argv[2]); i++) {
 	unsigned char c = (unsigned char)zOut[i];
 
+	/* [string toupper/tolower/totitle] rewrites the value; poll every 4096
+	 * bytes and free the output buffer on cancellation (TH8K-009). */
+	if ((i & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		Th8_Free(interp, zOut);
+		return TH8_ERROR;
+	    }
+	}
 	if (bToLower) {
 	    if (c >= 'A' && c <= 'Z') {
 		zOut[i] = (char)(c + ('a' - 'A'));
@@ -1852,10 +1951,12 @@ string_case_command(
 /*
  *----------------------------------------------------------------------
  *
- * string_command --
+ * th8StringSub --
  *
- *	Dispatcher for string sub-commands.  Uses the standard
- *	Th8_SubCommand table pattern with Th8_CallSubCommand.
+ *	Catalogue of `string` sub-commands.  At registration these are
+ *	installed into the `string` ensemble command's per-interpreter
+ *	sub-command hash (Th8_CreateSubCommand); the core dispatches them
+ *	from that hash -- there is no `string` delegator function.
  *
  *	Sub-commands: compare, first, index, is, last, length, map,
  *	match, range, repeat, tolower, toupper, trim, trimleft,
@@ -1868,17 +1969,16 @@ string_case_command(
  *	at runtime.
  *
  * Why / How:
- *	Implements the Tcl [string] command ensemble.  Builds a
- *	static subcommand table and delegates to Th8_CallSubCommand,
- *	which handles subcommand lookup, abbreviation matching, and
- *	error reporting.  Also stores the table pointer in the
- *	th8_string_aSub global for [info subcommands] support.
+ *	Published as th8_string_aSub so [info subcommands] can enumerate the
+ *	available string sub-commands.  The core resolves argv[1] against the
+ *	ensemble's per-interpreter sub-command hash and reports unknown
+ *	sub-commands.
  *
  * Results:
- *	Return code from the sub-command.
+ *	None (data table).
  *
  * Side effects:
- *	Determined by the sub-command.
+ *	None.
  *
  *----------------------------------------------------------------------
  */
@@ -1907,49 +2007,6 @@ static const Th8_SubCommand th8StringSub[] =
      {0, "bytelength", string_bytelength_command},
      {0, "reverse", string_reverse_command},
      {0, 0, 0}};
-
-/*
- *----------------------------------------------------------------------
- *
- * string_command --
- *
- *	Implements the script-visible `[string ...]` ensemble
- *	(`bytelength`, `compare`, `equal`, `first`, `index`,
- *	`is`, `last`, `length`, `map`, `match`, `range`,
- *	`repeat`, `replace`, `reverse`, `tolower`, `totitle`,
- *	`toupper`, `trim`, `trimleft`, `trimright`,
- *	`wordstart`, `wordend`, ...).  Thin dispatcher into
- *	`th8StringSub` via `Th8_CallSubCommand`.
- *
- *	Diagnostics for unknown / ambiguous subcommands are
- *	emitted by `Th8_CallSubCommand`.
- *
- * Parameters:
- *	interp -- live interpreter.
- *	ctx    -- command context (forwarded).
- *	argc   -- argument count.
- *	argv   -- argument vector.
- *	argl   -- argument byte-length vector.
- *
- * Returns:
- *	The selected subcommand's return code, or `TH8_ERROR`
- *	with a diagnostic if the subcommand name is unknown.
- *
- * Side effects:
- *	Whatever the dispatched subcommand performs.
- *
- *----------------------------------------------------------------------
- */
-static int
-string_command(
-    Th8_Interp *interp, /* Interpreter. */
-    void *ctx,   /* Not used. */
-    int argc,   /* Number of arguments. */
-    const char **argv,  /* Argument values. */
-    size_t *argl)  /* Argument lengths. */
-{
-    return Th8_CallSubCommand(interp, ctx, argc, argv, argl, th8StringSub);
-}
 
 
 /*
@@ -2114,7 +2171,9 @@ oom:
 static Th8_CommandEntry th8StringsCommands[] = {
     {1, 0, "base64", base64_command},
     {1, 0, "concat", concat_command},
-    {1, 0, "string", string_command},
+    {1, 0, "string", 0}, /* pure ensemble: sub-commands populated at
+			    * registration; the core dispatches from the
+			    * per-interp sub-command hash (no delegator). */
 };
 
 /*

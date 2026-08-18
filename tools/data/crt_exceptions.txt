@@ -57,6 +57,7 @@ prefix bestline
 prefix mimalloc_static
 prefix th8sh
 prefix th8_shell
+prefix th8_lifecycle_fail
 prefix sqlite3
 prefix th8_amal
 

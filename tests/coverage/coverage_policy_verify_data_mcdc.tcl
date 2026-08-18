@@ -91,4 +91,45 @@ runTest {test policyverifydata-2.1 {
 
 ###############################################################################
 
+runTest {test policyverifydata-3.1 {
+  th8_policy.c token guard `if (!zToken || Th8_Strlen(...) != 16)`
+  (F,T) -- a signature whose parsed public-key token is present but
+  not 16 characters long.  The `badtoken` mode reads the coverage
+  fixture tests/helpers/badtoken.tcl.b64sig (line-3 token "ABCD"),
+  so Th8_HarpySigLoad returns a non-NULL 4-char token and the guard
+  drives C2=T.  Expect TH8_ERROR with "missing public key token".
+  Pairs with the (F,F) baseline of every real signed load to close
+  the C2-Pair.
+} -constraints {
+    th8 crypto_enabled
+} -setup {
+} -body {
+  set r [th8testlib::policyverifydata badtoken]
+  list [lindex $r 0] [string match "*missing public key token*" [lindex $r 1]]
+} -cleanup {
+  unset -nocomplain r
+} -result {1 1}}
+
+###############################################################################
+
+runTest {test policyverifydata-3.2 {
+  th8_policy.c token guard `if (!zToken || Th8_Strlen(...) != 16)`
+  (T,-) -- a signature file with no public-key token at all.  The
+  `notoken` mode reads tests/helpers/notoken.tcl.b64sig, whose line 3
+  omits the "-- TOKEN" pattern, so Th8_HarpySigLoad returns a NULL
+  token and the guard drives C1=T (short-circuit).  Expect TH8_ERROR
+  with "missing public key token".  Closes the C1-Pair; together with
+  3.1 and the (F,F) baseline the token guard reaches 100% MC/DC.
+} -constraints {
+    th8 crypto_enabled
+} -setup {
+} -body {
+  set r [th8testlib::policyverifydata notoken]
+  list [lindex $r 0] [string match "*missing public key token*" [lindex $r 1]]
+} -cleanup {
+  unset -nocomplain r
+} -result {1 1}}
+
+###############################################################################
+
 source tests/epilogue.tcl

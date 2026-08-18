@@ -1,0 +1,64 @@
+src/plugins/th8_strings.c	string_totitle_command	O(n) char loop with per-iter Utf8Len rescan
+src/plugins/th8_strings.c	string_wordend_command	O(n) char loop with per-iter Utf8Index rescan
+src/plugins/th8_strings.c	string_wordstart_command	O(n) char loop with per-iter Utf8Index rescan
+src/plugins/th8_strings.c	string_reverse_command	O(n) char loop with per-iter Utf8Index rescan
+src/plugins/th8_formatting.c	format_command	[format] driver over attacker format string
+src/plugins/th8_formatting.c	scan_command	[scan] driver over attacker format+input
+src/plugins/th8_binary.c	th8BinaryFormatBits	per-bit b/B field fill (count up to ~1.07B)
+src/plugins/th8_binary.c	th8BinaryFormatHex	per-nibble h/H field fill
+src/plugins/th8_binary.c	binary_format_command	c*/i*/w*/f*/d* list pack + j/J byte reverse
+src/plugins/th8_binary.c	th8BinaryAssignIntList	[binary scan] i*/w* list build over data
+src/plugins/th8_binary.c	th8BinaryScanBits	[binary scan] B* bit-string build
+src/plugins/th8_binary.c	th8BinaryScanHex	[binary scan] H* hex-string build
+src/plugins/th8_binary.c	th8BinaryAssignDoubleList	[binary scan] f*/d* list build over data
+src/plugins/th8_lists.c	join_command	[join] output build over list elements
+src/plugins/th8_lists.c	lindex_command	index-list token scan
+src/plugins/th8_lists.c	lrange_command	[lrange] output build over elements
+src/plugins/th8_lists.c	linsert_command	[linsert] element copy loops
+src/plugins/th8_lists.c	lreplace_command	[lreplace] element copy loops
+src/plugins/th8_lists.c	lsort_command	[lsort] result-build loop (sort itself already polls)
+src/plugins/th8_lists.c	lassign_command	[lassign] rest-list build
+src/plugins/th8_lists.c	lremove_command	[lremove] element scan
+src/plugins/th8_lists.c	lreverse_command	[lreverse] element loop
+src/plugins/th8_lists.c	th8DictRebuildWith	dict pair rebuild (dict set/unset/incr)
+src/plugins/th8_lists.c	dict_filter_command	dict pair key/value filter
+src/plugins/th8_lists.c	dict_keys_command	dict keys enumeration
+src/plugins/th8_lists.c	dict_merge_command	dict merge pair loops (O(n^2) via th8DictFind)
+src/plugins/th8_lists.c	dict_remove_command	dict pair scan
+src/plugins/th8_lists.c	dict_replace_command	dict pair scan
+src/plugins/th8_lists.c	dict_values_command	dict values enumeration
+src/plugins/th8_lists.c	dict_append_command	dict pair rebuild
+src/plugins/th8_lists.c	dict_incr_command	dict pair rebuild
+src/plugins/th8_lists.c	dict_lappend_command	dict pair rebuild
+src/plugins/th8_lists.c	dict_update_command	dict writeback loop
+src/plugins/th8_lists.c	dict_with_command	dict set-vars + saved-keys read-back
+src/plugins/th8_variables.c	array_get_command	[array get] output build over array size
+src/plugins/th8_variables.c	array_set_command	[array set] over input list elements
+src/plugins/th8_variables.c	array_unset_command	[array unset] over array size
+src/plugins/th8_variables.c	array_statistics_command	[array statistics] over array size
+src/plugins/th8_variables.c	variable_command	variable-name tail byte scan (TIGHT)
+src/plugins/th8_control.c	switch_command	switch brace-list pair scan
+src/plugins/th8_looping.c	foreach_step	inner per-variable bind loop
+src/plugins/th8_control.c	th8SwitchMatch	switch -nocase pattern/string byte fold + compare (TIGHT)
+src/plugins/th8_filesystems.c	file_dirname_command	path byte scans (TIGHT)
+src/plugins/th8_filesystems.c	file_join_command	path component strip (TIGHT)
+src/plugins/th8_filesystems.c	file_split_command	path split per-component + sep scans
+src/plugins/th8_filesystems.c	file_tail_command	path byte scans (TIGHT)
+src/plugins/th8_filesystems.c	file_extension_command	path byte scans (TIGHT)
+src/plugins/th8_filesystems.c	file_nativename_command	path conversion scan (TIGHT)
+src/plugins/th8_filesystems.c	file_rootname_command	path byte scans (TIGHT)
+src/plugins/th8_filesystems.c	file_separator_command	path separator scan (TIGHT)
+src/plugins/th8_io.c	read_command	[read] in-memory channel drain
+src/plugins/th8_lists.c	split_command	[split] per-position poll + failure propagation
+src/plugins/th8_lists.c	lsearch_command	[lsearch] per-element list scan
+src/plugins/th8_lists.c	th8LsortMergeSort	[lsort] merge sort: compare + drain + copy-back loops
+src/plugins/th8_strings.c	string_first_command	[string first] substring search scan
+src/plugins/th8_strings.c	string_last_command	[string last] reverse substring search scan
+src/plugins/th8_strings.c	string_map_command	[string map] per-position key-match scan
+src/plugins/th8_strings.c	string_compare_command	[string compare -nocase] per-byte value compare
+src/plugins/th8_strings.c	string_equal_command	[string equal -nocase] per-byte value compare
+src/plugins/th8_strings.c	string_is_command	[string is CLASS] per-char value classification
+src/plugins/th8_strings.c	string_trim_command	[string trim] left/right per-char value scan
+src/plugins/th8_strings.c	string_case_command	[string toupper/tolower/totitle] per-char value rewrite
+src/th8_hash.c	Th8_HashIterateOrdered	ordered-hash bucket walk (dict for/keys/values)
+src/th8_hash.c	th8HashSortByOrder	pollable stable merge sort for ordered-hash iteration

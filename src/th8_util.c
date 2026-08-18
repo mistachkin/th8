@@ -16,6 +16,14 @@
  *
  *	Compare a sized string against a NUL-terminated literal.
  *
+ * Why / How:
+ *	TH8 strings carry an explicit length (and a taint bit in the
+ *	high bits of that length) rather than relying on NUL
+ *	termination, so a plain strcmp cannot be used.  This measures
+ *	the literal, compares the taint-stripped length via TH8_LEN,
+ *	and only then does a byte compare -- giving callers a cheap,
+ *	taint-safe keyword test.
+ *
  * Results:
  *	1 if equal, 0 if not.
  *
@@ -47,6 +55,14 @@ th8StrEq(
  * th8ParseIndex --
  *
  *	Parse an index that may be "end", "end-N", or plain integer.
+ *
+ * Why / How:
+ *	List-style commands accept the Tcl end-relative index syntax
+ *	as well as absolute integers; centralizing that here keeps the
+ *	three forms consistent.  "end" maps to nCount-1, "end-N"
+ *	subtracts the parsed offset from the last index, and anything
+ *	else is delegated to Th8_ToInt as an absolute index.  (Bounds
+ *	clamping is left to the caller, which knows the valid range.)
  *
  * Results:
  *	TH8_OK on success, TH8_ERROR on failure.

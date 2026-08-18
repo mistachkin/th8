@@ -146,9 +146,10 @@ clock_seconds_command(
 /*
  *----------------------------------------------------------------------
  *
- * clock_command --
+ * th8ClockSub --
  *
- *	Dispatcher for clock sub-commands.
+ *	Catalogue of `clock` sub-commands, installed into the `clock` ensemble
+ *	command's per-interpreter sub-command hash at registration (TH8K-025).
  *
  *	The "seconds" subcommand is built-in.  The "ntp" and "https"
  *	subcommands are provided by the Harpy plugin via internal
@@ -157,42 +158,31 @@ clock_seconds_command(
  *	subsystem at the source level.
  *
  * Why / How:
- *	Implements the Tcl [clock] command as an ensemble dispatcher.
- *	Uses Th8_CallSubCommand with a static subcommand table so
- *	that adding new subcommands requires only a table entry.
- *	The "ntp" and "https" subcommands are conditionally compiled
- *	under TH8_ENABLE_CRYPTOGRAPHY and reference non-static
- *	functions from the Harpy plugin, keeping the compile-time
+ *	Published as th8_clock_aSub so [info subcommands] can enumerate the
+ *	available clock sub-commands.  The "ntp" and "https" sub-commands are
+ *	conditionally compiled under TH8_ENABLE_CRYPTOGRAPHY and reference
+ *	non-static functions from the Harpy plugin, keeping the compile-time
  *	dependency optional.
  *
  * Results:
- *	Returns the result of the dispatched subcommand, or
- *	TH8_ERROR if the subcommand is not recognized.
+ *	None (data table).
  *
  * Side effects:
- *	Depends on the subcommand invoked.
+ *	None.
  *
  *----------------------------------------------------------------------
  */
 
-static int
-clock_command(
-    Th8_Interp *interp,
-    void *ctx,
-    int argc,
-    const char **argv,
-    size_t *argl)
-{
-    static const Th8_SubCommand aSub[] =
-        {{0, "seconds", clock_seconds_command},
-#  if defined(TH8_ENABLE_CRYPTOGRAPHY)
-         {0, "https", th8HarpyClockHttpsCommand},
-         {0, "ntp", th8HarpyClockNtpCommand},
-#  endif
-         {0, 0, 0}};
+/* Published for th8_lang.c ensemble population (TH8K-025). */
+const Th8_SubCommand *th8_clock_aSub;
 
-    return Th8_CallSubCommand(interp, ctx, argc, argv, argl, aSub);
-}
+static const Th8_SubCommand th8ClockSub[] =
+    {{0, "seconds", clock_seconds_command},
+#  if defined(TH8_ENABLE_CRYPTOGRAPHY)
+     {0, "https", th8HarpyClockHttpsCommand},
+     {0, "ntp", th8HarpyClockNtpCommand},
+#  endif
+     {0, 0, 0}};
 
 
 /*
@@ -294,7 +284,7 @@ oom:
 
 static Th8_CommandEntry th8TimekeepingCommands[] = {
     {1, 0, "after", after_command},
-    {1, 0, "clock", clock_command},
+    {1, 0, "clock", 0}, /* pure ensemble (TH8K-025) */
     {1, 0, "time", time_command},
 };
 
@@ -341,6 +331,8 @@ th8TimekeepingGetCommands(Th8_CommandEntry *pCommand, int *pnCommand)
 	    pCommand[i] = th8TimekeepingCommands[i];
 	}
     }
+    th8_clock_aSub =
+        th8ClockSub; /* publish for ensemble population (TH8K-025) */
     return TH8_OK;
 }
 #endif /* TH8_PLUGIN_TIMEKEEPING */

@@ -69,6 +69,25 @@
  *	NULL checks ALL zones, but TH8's libc allocator lives in the
  *	default (initial) zone.
  *
+ * Why / How:
+ *	On the first call it resolves the sampling interval once from the
+ *	TH8_HEAP_CHECK_EVERY environment variable (falling back to the
+ *	compile-time default) and caches it in a static.  A static call
+ *	counter then selects every Nth call for an actual
+ *	malloc_zone_check of the default zone; the cheap counter test
+ *	skips the O(heap) scan on the other calls.  A failed check is
+ *	treated as unrecoverable heap corruption, so it reports the
+ *	operation and call number to stderr and abort()s.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Reads the TH8_HEAP_CHECK_EVERY environment variable once;
+ *	advances a static counter; on the sampled calls scans the default
+ *	malloc zone and, if corruption is detected, writes to stderr and
+ *	calls abort().
+ *
  *----------------------------------------------------------------------
  */
 
@@ -236,12 +255,17 @@ th8LibcFree(Th8_Interp *interp, void *pCtx, void *p)
  *	`malloc_size(p)`.  NULL pointer reports 0 (consistent
  *	with the BSD / Win32 variants below).
  *
+ * Why / How:
+ *	This is the macOS variant, selected at compile time.  It
+ *	delegates to Apple's malloc_size(), guarding NULL up front so a
+ *	NULL block reports 0 rather than being passed to the OS routine.
+ *
  * Parameters:
  *	interp -- ignored.
  *	pCtx   -- ignored.
  *	p      -- allocation, or NULL.
  *
- * Returns:
+ * Results:
  *	Allocation size in bytes, or 0 for NULL.
  *
  * Side effects:
@@ -269,12 +293,17 @@ th8LibcMemorySize(Th8_Interp *interp, void *pCtx, void *p)
  *	system `malloc`.  Routes through glibc /
  *	BSD `malloc_usable_size(p)`.  NULL pointer reports 0.
  *
+ * Why / How:
+ *	This is the Linux / BSD variant, selected at compile time.  It
+ *	delegates to malloc_usable_size(), guarding NULL up front so a
+ *	NULL block reports 0 rather than being passed to the OS routine.
+ *
  * Parameters:
  *	interp -- ignored.
  *	pCtx   -- ignored.
  *	p      -- allocation, or NULL.
  *
- * Returns:
+ * Results:
  *	Allocation size in bytes, or 0 for NULL.
  *
  * Side effects:
@@ -301,12 +330,17 @@ th8LibcMemorySize(Th8_Interp *interp, void *pCtx, void *p)
  *	system `malloc`.  Routes through MSVC's `_msize(p)`.
  *	NULL pointer reports 0.
  *
+ * Why / How:
+ *	This is the Win32 / MSVC variant, selected at compile time.  It
+ *	delegates to _msize(), guarding NULL up front so a NULL block
+ *	reports 0 rather than being passed to the CRT routine.
+ *
  * Parameters:
  *	interp -- ignored.
  *	pCtx   -- ignored.
  *	p      -- allocation, or NULL.
  *
- * Returns:
+ * Results:
  *	Allocation size in bytes, or 0 for NULL.
  *
  * Side effects:

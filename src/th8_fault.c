@@ -100,11 +100,31 @@ Th8_FaultConfig *th8FaultActiveCfg = NULL;
  */
 
 /*
+ *----------------------------------------------------------------------
+ *
  * th8FaultStrEqAscii --
+ *
  *	NUL-terminated byte-equality check used to compare a
  *	filter file name against the current allocation site's
  *	__FILE__ string.  Avoids the <string.h> dependency in
  *	core/fault code (project convention).
+ *
+ * Why / How:
+ *	Compares two NUL-terminated byte strings one byte at a time,
+ *	returning as soon as a mismatch is found or the common NUL
+ *	terminator is reached.  A hand-rolled loop is used instead of
+ *	strcmp() to keep the fault layer free of <string.h>.  Two NULL
+ *	pointers (or the identical pointer) compare equal, and a single
+ *	NULL compares unequal, so callers need not pre-check for NULL.
+ *
+ * Results:
+ *	1 if the two strings are byte-for-byte equal (including two
+ *	NULLs or the same pointer); 0 otherwise.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
  */
 
 int
@@ -126,7 +146,10 @@ th8FaultStrEqAscii(const char *a, const char *b)
 }
 
 /*
+ *----------------------------------------------------------------------
+ *
  * th8FaultPathMatchesBaseName --
+ *
  *	Returns non-zero when zPath ends with the path component
  *	zBase, where the boundary preceding zBase is either a path
  *	separator ('/' or '\\') or the start of the string.  Used so
@@ -134,6 +157,23 @@ th8FaultStrEqAscii(const char *a, const char *b)
  *	match an __FILE__ value of "src/plugins/th8_control.c".
  *	An exact match (zPath equals zBase) also returns non-zero.
  *	Both arguments must be non-NULL.
+ *
+ * Why / How:
+ *	Measures both strings, rejects the match if zBase is empty or
+ *	longer than zPath, then compares the trailing nBase bytes of
+ *	zPath against zBase.  A suffix match alone is not enough: the
+ *	byte immediately preceding the matched suffix must be a path
+ *	separator (or the suffix must begin at offset 0), so that
+ *	"control.c" does not spuriously match "th8_control.c".
+ *
+ * Results:
+ *	1 when zBase is a whole trailing path component of zPath (or
+ *	equals zPath); 0 otherwise.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
  */
 
 int
@@ -169,12 +209,33 @@ th8FaultPathMatchesBaseName(const char *zPath, const char *zBase)
 }
 
 /*
+ *----------------------------------------------------------------------
+ *
  * th8FaultMatchFilter --
+ *
  *	Return non-zero if the current allocation site (pCfg->zCurFile,
  *	pCfg->nCurLine) matches at least one entry in the filter list.
  *	If the filter list is empty (nFilter == 0), every allocation
  *	matches (back-compat with the count-only mode).  Increments
  *	the matching filter's nHit counter.
+ *
+ * Why / How:
+ *	An empty (or NULL) filter list means "match everything", so the
+ *	filter is transparent unless a test explicitly narrows it.  Each
+ *	filter entry may constrain the file (exact string or basename
+ *	match, via th8FaultStrEqAscii / th8FaultPathMatchesBaseName) and
+ *	an inclusive line range [nLineFrom, nLineTo]; entries whose
+ *	constraints fail are skipped.  The first entry that matches wins
+ *	and its per-entry nHit counter is bumped for test assertions.
+ *
+ * Results:
+ *	1 if the current allocation site matches (or the list is empty);
+ *	0 if a non-empty filter list has no matching entry.
+ *
+ * Side effects:
+ *	Increments the nHit counter of the first matching filter entry.
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -238,10 +299,20 @@ th8FaultMatchFilter(Th8_FaultConfig *pCfg)
  *	`pCfg->nAllocFailCount` so script-side tests can
  *	verify the fault actually fired.
  *
+ * Why / How:
+ *	Non-matching allocations return early via
+ *	th8FaultMatchFilter without touching any counter, so
+ *	the filter stays transparent.  Matching allocations
+ *	advance nAllocCount and compare it against the
+ *	nAllocFailAfter threshold; once past the threshold the
+ *	nAllocFailInterval modulus decides which subsequent
+ *	allocations also fail, producing the one-shot or
+ *	repeating OOM pattern used by stress tests.
+ *
  * Parameters:
  *	pCfg -- live fault config.
  *
- * Returns:
+ * Results:
  *	1 if the caller should treat this allocation as
  *	failed; 0 otherwise.
  *
@@ -1022,6 +1093,21 @@ fi_xRandomBytes(Th8_Interp *i, void *c, void *pBuf, size_t nByte)
  *	compounds across the math/expr layer without nulling the
  *	slot (which would short-circuit at C2 instead).
  *
+ * Why / How:
+ *	Keeping the slot non-NULL (unlike th8FaultApplyNullCallbacks)
+ *	forces the callback to be invoked and fail at the return-value
+ *	check rather than being short-circuited by the "slot present"
+ *	guard, so the failure arm downstream of a successful presence
+ *	check becomes reachable for MC/DC.
+ *
+ * Results:
+ *	TH8_ERROR when bFailMathFunc is set or the real callback is
+ *	absent; otherwise the value returned by the real xMathFunc.
+ *
+ * Side effects:
+ *	When delegating, whatever the real xMathFunc does (typically
+ *	writes the computed value through pResult).
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1054,6 +1140,20 @@ fi_xMathFunc(
  *	Th8_GetCwd (pwd_command and friends) without actually
  *	stat-failing the filesystem.
  *
+ * Why / How:
+ *	Synthesizes a getcwd failure at the wrapper boundary so tests
+ *	can exercise the caller's NULL-handling path deterministically,
+ *	without needing to manipulate the real working directory or the
+ *	underlying filesystem.
+ *
+ * Results:
+ *	NULL when bFailGetCwd is set or the real callback is absent;
+ *	otherwise the working-directory string returned by the real
+ *	xGetCwd.
+ *
+ * Side effects:
+ *	When delegating, whatever the real xGetCwd does.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1077,6 +1177,20 @@ fi_xGetCwd(Th8_Interp *i, void *c)
  *	delegates.  Used to drive clock-failure error arms in
  *	[clock milliseconds] and other Th8_GetTimeMs consumers.
  *
+ * Why / How:
+ *	Synthesizes a clock-read failure at the wrapper boundary so the
+ *	otherwise-rare error arm of time consumers can be exercised
+ *	deterministically, without depending on an actually failing
+ *	platform clock.
+ *
+ * Results:
+ *	TH8_ERROR when bFailTimeMs is set or the real callback is
+ *	absent; otherwise the value returned by the real xTimeMs.
+ *
+ * Side effects:
+ *	When delegating, whatever the real xTimeMs does (writes the
+ *	current time through pMs).
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1099,6 +1213,18 @@ fi_xTimeMs(Th8_Interp *i, void *c, th8_int64_t *pMs)
  *	Returns NULL when bFailGetEnv is set; otherwise delegates.
  *	Used to drive `if (zVal == NULL)` error arms in Th8_GetEnv
  *	consumers (env-array initialization, [info env], etc.).
+ *
+ * Why / How:
+ *	Synthesizes a "variable not found" result at the wrapper
+ *	boundary so consumers' missing-variable arms can be exercised
+ *	deterministically, independent of the real process environment.
+ *
+ * Results:
+ *	NULL when bFailGetEnv is set or the real callback is absent;
+ *	otherwise the value string returned by the real xGetEnv.
+ *
+ * Side effects:
+ *	When delegating, whatever the real xGetEnv does.
  *
  *----------------------------------------------------------------------
  */
@@ -1453,6 +1579,15 @@ static const struct th8FaultSlotEntry th8FaultCallbackSlots[] =
  *	The lookup is linear over a ~67-entry table, which is fine
  *	for the test-only use case.  If this list grows, consider
  *	sorting the table and switching to bsearch.
+ *
+ * Results:
+ *	TH8_OK on success (including when the null-callback list is
+ *	empty or NULL); TH8_ERROR if a requested name matches no known
+ *	slot, in which case *pzBadName (when non-NULL) is set to the
+ *	offending name.
+ *
+ * Side effects:
+ *	Overwrites each matched callback slot in *pF with NULL.
  *
  *----------------------------------------------------------------------
  */

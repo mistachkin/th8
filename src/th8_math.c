@@ -1115,20 +1115,64 @@ Th8_ListAppendMathFunctions(
 /*
  *----------------------------------------------------------------------
  *
+ * th8RegisterMathFuncEntry --
+ *
+ *	Register one built-in math function from its th8BuiltinMathFuncs[] entry.
+ *
+ * Why / How:
+ *	Shared by th8RegisterMathFuncs (all) and th8RegisterOneMathFunc (by name,
+ *	for named command subsets).  Assigns the direct callback or the generic
+ *	th8MathTranscendental dispatcher (with the opcode+arity packed as
+ *	context), matching the original inline loop body.
+ *
+ * Results:
+ *	TH8_OK, or TH8_ERROR on a real registration failure (e.g. OOM).
+ *
+ * Side effects:
+ *	Creates a math-function entry in the interpreter's hash table.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8RegisterMathFuncEntry(Th8_Interp *interp, const Th8_MathFuncInit *p)
+{
+    Th8_MathFuncProc xProc = p->xProc;
+    void *pCtx = 0;
+
+    if (p->opcode) {
+	/* Pass opcode (low 16 bits) + arity (next 8 bits) as context for
+	 * dispatcher callbacks (Bug 22 fix 2026-06-07: arity is needed so the
+	 * dispatcher can reject NULL operands when arity > 0, instead of
+	 * silently treating them as 0.0). */
+	pCtx = TH8_INT2PTR(TH8_MATH_CTX_PACK(p->nArg, p->opcode));
+    }
+    if (!xProc) {
+	/* No direct callback: use transcendental dispatcher. */
+	xProc = th8MathTranscendental;
+    }
+    return Th8_CreateMathFunc(
+        interp, p->zName, Th8_Strlen(interp, p->zName), p->nArg, xProc, pCtx);
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8RegisterMathFuncs --
  *
  *	Register all built-in math functions from the static
  *	th8BuiltinMathFuncs[] table into the interpreter.
  *
  * Why / How:
- *	Called once per interpreter from Th8_RegisterLanguage.
- *	Iterates the init table, assigning either the direct
- *	callback (for abs, int, bool, etc.) or the generic
- *	th8MathTranscendental dispatcher (for sin, cos, etc.)
- *	with the TH8_MATH_* opcode encoded as the context pointer.
+ *	Called once per interpreter from Th8_RegisterLanguage (and from the
+ *	"expressions" plugin subset).  Iterates the init table via
+ *	th8RegisterMathFuncEntry.
  *
  * Results:
- *	None.
+ *	TH8_OK if every built-in math function is registered; TH8_ERROR
+ *	on a real registration failure (e.g. OOM), propagated so the
+ *	language is not reported complete with missing math functions
+ *	(TH8K-006).
  *
  * Side effects:
  *	Creates math function entries in the interpreter's hash table.
@@ -1136,31 +1180,88 @@ Th8_ListAppendMathFunctions(
  *----------------------------------------------------------------------
  */
 
-void
+int
 th8RegisterMathFuncs(Th8_Interp *interp)
 {
     const Th8_MathFuncInit *p;
 
     for (p = th8BuiltinMathFuncs; p->zName; p++) {
-	Th8_MathFuncProc xProc = p->xProc;
-	void *pCtx = 0;
-
-	if (p->opcode) {
-	    /* Pass opcode (low 16 bits) + arity (next 8 bits) as
-	     * context for dispatcher callbacks (Bug 22 fix
-	     * 2026-06-07: arity is needed so the dispatcher can
-	     * reject NULL operands when arity > 0, instead of
-	     * silently treating them as 0.0). */
-	    pCtx = TH8_INT2PTR(TH8_MATH_CTX_PACK(p->nArg, p->opcode));
+	if (th8RegisterMathFuncEntry(interp, p) != TH8_OK) {
+	    return TH8_ERROR;
 	}
-	if (!xProc) {
-	    /* No direct callback: use transcendental dispatcher. */
-	    xProc = th8MathTranscendental;
-	}
-	Th8_CreateMathFunc(
-	    interp, p->zName, Th8_Strlen(interp, p->zName), p->nArg, xProc,
-	    pCtx);
     }
+    return TH8_OK;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8FindMathFunc --
+ *
+ *	Return 1 if zName is a built-in math function (pure lookup, no
+ *	mutation), else 0.  Used by the subset resolver to validate a FUNCTION
+ *	member up front, so an unknown member registers nothing.
+ *
+ * Why / How:
+ *	Linear scan of th8BuiltinMathFuncs[] comparing the name.
+ *
+ * Results:
+ *	1 if found, else 0.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
+
+int
+th8FindMathFunc(Th8_Interp *interp, const char *zName, size_t nName)
+{
+    const Th8_MathFuncInit *p;
+
+    for (p = th8BuiltinMathFuncs; p->zName; p++) {
+	if (Th8_Strlen(interp, p->zName) == nName &&
+	    Th8_Memcmp(interp, p->zName, zName, nName) == 0) {
+	    return 1;
+	}
+    }
+    return 0;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8RegisterOneMathFunc --
+ *
+ *	Register one built-in math function by name (for a FUNCTION subset
+ *	member), assuming the caller validated it with th8FindMathFunc.
+ *
+ * Why / How:
+ *	Linear scan of th8BuiltinMathFuncs[] for the name, then
+ *	th8RegisterMathFuncEntry on the match.
+ *
+ * Results:
+ *	TH8_OK if registered (or the name is unknown -- a no-op), TH8_ERROR on
+ *	OOM.
+ *
+ * Side effects:
+ *	Creates a math-function entry in the interpreter's hash table.
+ *
+ *----------------------------------------------------------------------
+ */
+
+int
+th8RegisterOneMathFunc(Th8_Interp *interp, const char *zName, size_t nName)
+{
+    const Th8_MathFuncInit *p;
+
+    for (p = th8BuiltinMathFuncs; p->zName; p++) {
+	if (Th8_Strlen(interp, p->zName) == nName &&
+	    Th8_Memcmp(interp, p->zName, zName, nName) == 0) {
+	    return th8RegisterMathFuncEntry(interp, p);
+	}
+    }
+    return TH8_OK; /* Unknown name: caller validated with th8FindMathFunc. */
 }
 
 #endif /* TH8_ENABLE_EXPRESSIONS */

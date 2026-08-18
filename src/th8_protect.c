@@ -84,6 +84,18 @@ static const unsigned char th8ProtectCanary[8] = {0x77, 0x73, 0x5A, 0x9F,
  *	are applied when available.  A canary pattern is written at
  *	the start of the data page for corruption detection.
  *
+ * Results:
+ *	TH8_OK with *pRegion populated on success; TH8_ERROR on a NULL
+ *	pRegion or on VirtualAlloc/mmap failure (a trace message is
+ *	logged).  mlock/VirtualLock failure is non-fatal and still
+ *	returns TH8_OK (degraded, unlocked region).
+ *
+ * Side effects:
+ *	Allocates three pages of virtual memory and installs two
+ *	PROT_NONE/PAGE_NOACCESS guard pages around the data page;
+ *	pins the data page into physical memory (best-effort); writes
+ *	the canary pattern; may emit trace messages.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -243,6 +255,17 @@ th8ProtectGetPageSize(void)
  *
  *	Mirror of the Win32 implementation later in this file.
  *
+ * Why / How:
+ *	Sensitive scratch (decrypted plaintext, key material) must not
+ *	leak via swap, core dumps, forked children, or adjacent-buffer
+ *	over/underflow.  A single `mmap` of three contiguous pages
+ *	laid out `[guard][data][guard]` provides bracketing guard
+ *	pages (flipped to `PROT_NONE` so any stray access traps);
+ *	`mlock` keeps the data page out of swap; Linux `madvise`
+ *	flags exclude it from dumps and wipe it on fork.  The best-
+ *	effort hardening steps are non-fatal so the region still works
+ *	(degraded) on kernels lacking a given feature.
+ *
  * Parameters:
  *	interp  -- live interpreter (for trace messages only;
  *		the helper itself does not allocate through
@@ -251,7 +274,7 @@ th8ProtectGetPageSize(void)
  *		`pRegion`, `nRegion`, `pPage`, and
  *		`nPageSize` fields are populated.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success; `TH8_ERROR` on NULL `pRegion`
  *	or `mmap` failure (trace message logged).
  *

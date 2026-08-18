@@ -83,6 +83,14 @@
  *	default in production builds, which is the right behaviour
  *	for trace-level messages.
  *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Emits zMsg to logcat via __android_log_print at
+ *	ANDROID_LOG_DEBUG severity.  Does nothing if zMsg is NULL or
+ *	the empty string.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -117,6 +125,17 @@ th8AndroidEmitTrace(Th8_Interp *interp, void *pCtx, const char *zMsg)
  *	truncation marker if the message is over 1023 bytes -- logcat
  *	itself imposes a per-line cap around 4 KiB but our buffer cap
  *	keeps stack usage bounded.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Emits a message to logcat via __android_log_print at
+ *	ANDROID_LOG_FATAL severity: either a fixed "panic (no message)"
+ *	string if zMsg is NULL, or "panic: " followed by up to 1020
+ *	bytes of zMsg (with a "..." truncation marker appended when
+ *	nMsg exceeds the stack buffer).  Does not call abort() or
+ *	otherwise terminate the process.
  *
  *----------------------------------------------------------------------
  */
@@ -167,6 +186,13 @@ th8AndroidPanic(Th8_Interp *interp, void *pCtx, const char *zMsg, size_t nMsg)
  *	this slot NULL.  Filling it on Android gives TH8's allocation
  *	accounting the same precision it has on macOS.
  *
+ * Results:
+ *	The usable size, in bytes, of the allocation at p as reported
+ *	by malloc_usable_size(); 0 if p is NULL.
+ *
+ * Side effects:
+ *	None.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -201,6 +227,16 @@ th8AndroidMemorySize(Th8_Interp *interp, void *pCtx, void *p)
  *	When a partial read happens (which is rare but spec-permitted
  *	for buffers > 256 bytes), the loop continues until the buffer
  *	is filled or an error other than EINTR occurs.
+ *
+ * Results:
+ *	TH8_OK on success (pBuf fully filled, or nByte is 0); TH8_ERROR
+ *	if pBuf is NULL and nByte is nonzero, or if getrandom() fails
+ *	with an error other than EINTR, or returns 0 (EOF-like
+ *	condition that should never happen for this source).
+ *
+ * Side effects:
+ *	Fills pBuf with nByte random bytes obtained from the kernel via
+ *	the getrandom(2) syscall; may retry internally on EINTR.
  *
  *----------------------------------------------------------------------
  */
@@ -388,6 +424,23 @@ static Th8_Platform th8AndroidPlatformData = {
  *	before passing to Th8_CreateInterp.  Do NOT merge with
  *	Th8_GetMacOSPlatform() -- the Apple malloc zone APIs are not
  *	available on Bionic.
+ *
+ * Why / How:
+ *	th8AndroidPlatformData is a static, file-scope table that fills
+ *	in only the slots where Bionic diverges from plain POSIX/libc
+ *	(xEmitTrace, xPanic, xMemorySize, and, on API 28+, xRandomBytes);
+ *	every other slot is left 0 (NULL) so that a subsequent
+ *	Th8_MergePlatform() call with the POSIX and libc platforms
+ *	supplies it.  Returning the address of a static table (rather
+ *	than a heap-allocated copy) means callers must copy it before
+ *	mutating it in place, as shown in the file-header Usage example.
+ *
+ * Results:
+ *	A pointer to the static th8AndroidPlatformData table; never
+ *	NULL.
+ *
+ * Side effects:
+ *	None.
  *
  *----------------------------------------------------------------------
  */

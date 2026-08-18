@@ -122,11 +122,21 @@ th8_bigint_malloc(size_t n)
  *	  *  `nmemb * size` overflow -- libtommath sees
  *	     `MP_MEM`.
  *
+ * Why / How:
+ *	libtommath's XCALLOC hook takes no user-data pointer, so the
+ *	interp is threaded in through the thread-local
+ *	th8_bigint_interp set by th8BigintSetup.  The explicit
+ *	nmemb/size overflow test is redundant with TH8_ALLOC_MUL's
+ *	internal check but kept as a belt-and-suspenders guard;
+ *	together with the NULL-interp and not-ready guards every
+ *	failure funnels to a NULL return that libtommath reads as
+ *	MP_MEM.  Plain guards, not NEVER(), per the Bug 26 family.
+ *
  * Parameters:
  *	nmemb -- element count.
  *	size  -- bytes per element.
  *
- * Returns:
+ * Results:
  *	Zeroed allocation of `nmemb * size` bytes on success;
  *	NULL on any failure (libtommath maps to `MP_MEM`).
  *
@@ -166,12 +176,22 @@ th8_bigint_calloc(size_t nmemb, size_t size)
  *	return NULL the same way as `th8_bigint_malloc` /
  *	`th8_bigint_calloc`; same Bug 26 reasoning applies.
  *
+ * Why / How:
+ *	Bridges libtommath's XREALLOC to TH8_ATTEMPT_REALLOC so a
+ *	failed grow returns NULL without aborting: libtommath's
+ *	mp_grow keeps the original a->dp valid on failure and
+ *	mp_clear frees it later, matching the ANSI C realloc
+ *	contract.  oldsize is part of the hook signature but unused
+ *	(the per-interp allocator tracks sizes itself).  NULL-interp
+ *	and not-ready guards return NULL the same Bug 26 way as the
+ *	sibling allocators.
+ *
  * Parameters:
  *	mem     -- existing buffer (may be NULL on first call).
  *	oldsize -- previous buffer size (unused).
  *	newsize -- requested new size.
  *
- * Returns:
+ * Results:
  *	The (possibly relocated) buffer on success;
  *	NULL on failure (caller retains ownership of `mem`).
  *
@@ -215,11 +235,19 @@ th8_bigint_realloc(void *mem, size_t oldsize, size_t newsize)
  *	The `size` parameter is part of libtommath's
  *	allocator signature but unused by TH8.
  *
+ * Why / How:
+ *	Bridges libtommath's XFREE to Th8_Free through the
+ *	thread-local interp.  size is part of the hook signature but
+ *	unused.  A NULL th8_bigint_interp makes this a no-op that
+ *	leaks the buffer rather than crashing -- the known
+ *	late-shutdown mode after th8BigintTeardown -- again a plain
+ *	guard, not NEVER(), per Bug 26.
+ *
  * Parameters:
  *	mem  -- buffer to free, or NULL.
  *	size -- buffer size (unused).
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -251,10 +279,18 @@ th8_bigint_free(void *mem, size_t size)
  *	(libtommath's allocator hooks take no user-data
  *	parameter, hence the thread-local convention).
  *
+ * Why / How:
+ *	libtommath's allocator hooks take no user-data argument, so
+ *	every bigint operation must publish its interp somewhere the
+ *	bridge callbacks can find it: this stamps it into the
+ *	thread-local th8_bigint_interp.  On builds without native TLS
+ *	it also takes the global bigint mutex first, so setup/teardown
+ *	bracket every operation as a critical section.
+ *
  * Parameters:
  *	interp -- interpreter to install.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -281,10 +317,17 @@ th8BigintSetup(Th8_Interp *interp)
  *	helper on its way out, even on error paths, so the
  *	mutex never deadlocks subsequent callers.
  *
+ * Why / How:
+ *	The inverse of th8BigintSetup: clears the thread-local interp
+ *	pointer and releases the global bigint mutex.  Every bigint
+ *	operation must reach it on the way out -- including error
+ *	paths -- or a later caller would deadlock on the still-held
+ *	mutex.
+ *
  * Parameters:
  *	(none)
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -323,6 +366,28 @@ struct Th8_Bigint {
  *
  *	Look up a cached mp_int for the given string.  Returns the
  *	mp_int pointer (cache-owned, read-only borrow) or NULL on miss.
+ *
+ * Why / How:
+ *	th8IsBigint memoises parsed values in the interpreter's
+ *	TH8_CACHE_BIGINT internal-rep cache keyed by (z, n); this is
+ *	the read side, letting the arithmetic/compare paths reuse an
+ *	already-parsed mp_int instead of re-scanning the string.  A
+ *	hit requires the slot to exist, be marked iValid, and carry a
+ *	non-NULL pBigint (the "is a bigint" memo, versus the
+ *	iValid+NULL "not a bigint" memo).  The NULL-interp guard and
+ *	nested pCached test are plain guards (Bug 26/28 family), not
+ *	NEVER/ALWAYS, so an OOM miss or omitted safety check degrades
+ *	to a cache miss.
+ *
+ * Results:
+ *	A borrowed, cache-owned mp_int pointer on a hit; NULL on a
+ *	miss, a NULL interp, or an OOM cache lookup.  The caller must
+ *	not free or retain it past the cache entry's lifetime.
+ *
+ * Side effects:
+ *	No value is written by this function, but the underlying
+ *	Th8_FindInCache probe may create or evict a slot in the
+ *	interpreter's bigint cache.
  */
 
 static mp_int *
@@ -360,6 +425,27 @@ th8BigintCacheGet(Th8_Interp *interp, const char *z, size_t n)
  *	Store a parsed mp_int in the cache.  The cache takes ownership
  *	of a COPY of the mp_int.  Also sets iValid so th8IsBigint
  *	cache hits work.
+ *
+ * Why / How:
+ *	The write side paired with th8BigintCacheGet: th8IsBigint
+ *	calls it once it has confirmed a string is a bigint, so later
+ *	arithmetic can reuse the value.  It finds (or creates) the
+ *	(z, n) cache slot and, only when the slot is fresh (defensive
+ *	ALWAYS guards on !iValid / !pBigint), allocates a Th8_Bigint
+ *	and stores an mp_init_copy of pSrc -- the cache owns its own
+ *	copy, not the caller's mp_int.  The copy is bracketed by
+ *	th8BigintSetup/Teardown so libtommath allocates through the
+ *	interp.  NULL interp/pSrc are plain guards (Bug 26 family).
+ *
+ * Results:
+ *	None (void).  On OOM at any step it simply leaves the entry
+ *	unpopulated.
+ *
+ * Side effects:
+ *	May allocate a Th8_Bigint and an mp_int copy owned by the
+ *	interpreter's bigint cache and populate the (z, n) slot
+ *	(possibly creating/evicting it via Th8_FindInCache); briefly
+ *	takes the bigint mutex.
  */
 
 TH8_INTERNAL void
@@ -418,6 +504,19 @@ th8BigintCacheStore(
  *	Free a Th8_Bigint and its internal mp_int.  Called from
  *	th8CacheEntryFree (in th8_cache.c) when a bigint cache
  *	entry is evicted.
+ *
+ * Why / How:
+ *	The destructor for a cached Th8_Bigint.  It brackets mp_clear
+ *	with th8BigintSetup/Teardown so libtommath frees the mp_int
+ *	digits through the interp allocator, then frees the wrapper
+ *	itself.  A NULL pBigint is a no-op.
+ *
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
+ *	Frees the mp_int's digits and the Th8_Bigint wrapper via the
+ *	per-interp allocator; briefly takes the bigint mutex.
  */
 
 void
@@ -467,8 +566,24 @@ th8BigintDestroy(Th8_Interp *interp, Th8_Bigint *pBigint)
  *	Parse a string as an mp_int.  Handles decimal, hex (0x),
  *	octal (0o), and binary (0b) prefixes.
  *
+ * Why / How:
+ *	The one string->mp_int parser shared by every bigint entry
+ *	point.  It hand-scans leading whitespace and an optional sign,
+ *	recognises 0x/0o/0b radix prefixes (defaulting to decimal),
+ *	copies the remaining digits into a fixed 512-byte stack buffer
+ *	so it can NUL-terminate for libtommath's mp_read_radix, then
+ *	applies mp_neg for a negative sign.  Oversized inputs are
+ *	truncated to the buffer, and the copy runs through the
+ *	thread-local interp's Th8_Memcpy.
+ *
  * Results:
- *	MP_OKAY on success.
+ *	MP_OKAY on success; the mp_err from mp_read_radix or mp_neg on
+ *	failure.
+ *
+ * Side effects:
+ *	Writes the parsed value into *a (which the caller must have
+ *	mp_init'd), growing it through libtommath's interp-routed
+ *	allocator; uses a 512-byte stack buffer.
  *
  *----------------------------------------------------------------------
  */
@@ -543,6 +658,24 @@ th8BigintFromStr(mp_int *a, const char *z, size_t n)
  *	Convert an mp_int to a decimal string and set it as the
  *	interpreter result.
  *
+ * Why / How:
+ *	The shared render step: every arithmetic/scan path funnels
+ *	its result mp_int through here.  It sizes a buffer from
+ *	mp_count_bits/3 plus slop, renders base-10 with mp_to_radix,
+ *	and publishes it through Th8_SetResult (which copies), then
+ *	frees the scratch buffer.  Assumes the bracketing
+ *	th8BigintSetup is already active so the allocation routes
+ *	through the interp.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to the decimal string;
+ *	TH8_ERROR (result set to an error message) on allocation
+ *	failure or an mp_to_radix conversion error.
+ *
+ * Side effects:
+ *	Allocates and frees a scratch buffer via the interp allocator
+ *	and sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -576,9 +709,91 @@ th8BigintToResult(Th8_Interp *interp, const mp_int *a)
 /*
  *----------------------------------------------------------------------
  *
+ * th8ScanBignum --
+ *
+ *	Parse a (possibly signed and radix-prefixed) integer string as
+ *	an arbitrary-precision value and set the interpreter result to
+ *	its decimal representation.
+ *
+ * Why / How:
+ *	The `scan` command's `ll` size modifier stores a value with no
+ *	width limit (BigInt).  scan stages every converted value through
+ *	the interpreter result and then reads it back, so this helper
+ *	fits that model: it brackets the libtommath work with
+ *	th8BigintSetup/Teardown, parses via th8BigintFromStr (which
+ *	understands `0x`/`0o`/`0b` prefixes and a leading sign), and
+ *	renders decimal via th8BigintToResult.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to the decimal string;
+ *	TH8_ERROR (with an error result) if the value cannot be parsed.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+
+int
+th8ScanBignum(Th8_Interp *interp, const char *zStr, size_t n)
+{
+    mp_int a;
+    mp_err err;
+    int rc;
+
+    th8BigintSetup(interp);
+    if (mp_init(&a) != MP_OKAY) {
+	th8BigintTeardown();
+	Th8_SetResultStatic(interp, "bigint init failed", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    err = th8BigintFromStr(&a, zStr, n);
+    if (err != MP_OKAY) {
+	mp_clear(&a);
+	th8BigintTeardown();
+	Th8_SetResultStatic(
+	    interp, "scan: invalid arbitrary-precision integer", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    rc = th8BigintToResult(interp, &a);
+    mp_clear(&a);
+    th8BigintTeardown();
+    return rc;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8BigintArith --
  *
  *	Perform a bigint binary arithmetic operation.
+ *
+ * Why / How:
+ *	The evaluator dispatches every bigint binary operator here.
+ *	It mp_init_multi's three temporaries, loads each operand
+ *	(reusing a cached mp_int from th8BigintCacheGet when present,
+ *	else parsing via th8BigintFromStr, guarded by defensive
+ *	ALWAYS since binary ops always have two operands), then a
+ *	switch on eOp calls the matching libtommath primitive.
+ *	Arithmetic/bitwise ops render their result with
+ *	th8BigintToResult; the comparison ops (LT..NE) instead set a
+ *	0/1 integer result from mp_cmp.  Divide/modulus by zero and
+ *	negative shift/exponent counts are caught explicitly.  The
+ *	whole body is bracketed by th8BigintSetup/Teardown and a
+ *	single mp_clear_multi cleanup.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to the decimal result
+ *	string (or "0"/"1" for a comparison); TH8_ERROR with an error
+ *	message for a bad operand, divide-by-zero, negative
+ *	shift/exponent, unsupported op, out-of-memory, or arithmetic
+ *	error.
+ *
+ * Side effects:
+ *	Sets the interpreter result; allocates and frees libtommath
+ *	temporaries via the per-interp allocator; takes and releases
+ *	the bigint mutex.
  *
  *----------------------------------------------------------------------
  */
@@ -770,6 +985,24 @@ done:
  *
  *	Perform a unary bigint operation.
  *
+ * Why / How:
+ *	The unary counterpart to th8BigintArith.  It loads the single
+ *	operand (cache hit or th8BigintFromStr), switches on eOp for
+ *	unary minus, unary plus, bitwise-not (mp_complement), and
+ *	logical-not (1 iff the value is zero), then renders the
+ *	result with th8BigintToResult.  Bracketed by
+ *	th8BigintSetup/Teardown with an mp_clear_multi cleanup.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to the decimal result;
+ *	TH8_ERROR with an error message for a non-integer operand, an
+ *	unsupported op, out-of-memory, or a libtommath error.
+ *
+ * Side effects:
+ *	Sets the interpreter result; allocates and frees libtommath
+ *	temporaries via the per-interp allocator; takes and releases
+ *	the bigint mutex.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -844,6 +1077,25 @@ done:
  *
  *	Compare two bigint string values.
  *
+ * Why / How:
+ *	Provides a three-way comparison for callers that need an
+ *	ordering rather than a rendered result.  It loads both
+ *	operands (cache hit or th8BigintFromStr), calls mp_cmp, and
+ *	maps MP_LT/MP_GT/MP_EQ to -1/1/0 in *pCmp.  Unlike the
+ *	arith/unary helpers it does NOT set the interpreter result on
+ *	success -- only on error.  Bracketed by
+ *	th8BigintSetup/Teardown.
+ *
+ * Results:
+ *	TH8_OK with *pCmp set to -1, 0, or 1; TH8_ERROR (interpreter
+ *	result set to an error message) if either operand is not an
+ *	integer or on out-of-memory.
+ *
+ * Side effects:
+ *	Writes *pCmp; allocates and frees libtommath temporaries via
+ *	the per-interp allocator; sets the interpreter result only on
+ *	error; takes and releases the bigint mutex.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -904,6 +1156,29 @@ bad:
  *
  *	Check if a string represents a valid integer that exceeds
  *	th8_int64_t range.
+ *
+ * Why / How:
+ *	The gate the evaluator uses to decide whether a token needs
+ *	the bigint path at all: a value is a bigint only if it parses
+ *	as an integer AND needs more than 63 bits.  It first consults
+ *	the TH8_CACHE_BIGINT memo (iValid+pBigint = yes, iValid+NULL =
+ *	no); on a miss it parses with th8BigintFromStr, checks
+ *	mp_count_bits > 63, and caches the outcome either way -- a
+ *	positive result stashes the parsed mp_int via
+ *	th8BigintCacheStore so later arithmetic skips re-parsing, a
+ *	negative result records the iValid+NULL "not a bigint" memo.
+ *	The plain pCached guards and ALWAYS interp guard are Bug 26/28
+ *	family (OOM-tolerant, TH8_OMIT-safe).
+ *
+ * Results:
+ *	1 if the string is a valid integer exceeding 63 bits;
+ *	0 otherwise (including non-integer strings and OOM).
+ *
+ * Side effects:
+ *	Populates the interpreter's bigint internal-rep cache (a memo
+ *	and, for a true result, a copied mp_int); allocates libtommath
+ *	temporaries via the per-interp allocator; takes and releases
+ *	the bigint mutex.  Does not set the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -1002,6 +1277,23 @@ cache_result:
  *
  *	Convert a bigint string to double.
  *
+ * Why / How:
+ *	Backs the exact-to-double coercion used when a bigint operand
+ *	meets a floating-point one.  It loads the value (cache hit or
+ *	th8BigintFromStr) and calls libtommath's mp_get_double,
+ *	writing the (possibly rounded or overflowed-to-inf) result to
+ *	*pVal.  Bracketed by th8BigintSetup/Teardown.
+ *
+ * Results:
+ *	TH8_OK with *pVal set to the double approximation; TH8_ERROR
+ *	(interpreter result set to an error message) if the string is
+ *	not an integer or on out-of-memory.
+ *
+ * Side effects:
+ *	Writes *pVal; allocates and frees a libtommath temporary via
+ *	the per-interp allocator; sets the interpreter result only on
+ *	error; takes and releases the bigint mutex.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1050,6 +1342,28 @@ th8BigintToDouble(Th8_Interp *interp, const char *z, size_t n, double *pVal)
  *	Returns TH8_ERROR with the "integer value too large for
  *	j/J field" message when the value does not fit in the
  *	field's representable range.
+ *
+ * Why / How:
+ *	Implements the binary format j/J field writer.  It parses the
+ *	value, builds mod = 2^(nBytes*8) and half = 2^(nBytes*8-1),
+ *	range-checks against the signed interval [-half, half), and
+ *	for negatives adds mod to form the unsigned two's-complement
+ *	pattern.  It emits big-endian bytes right-aligned and
+ *	zero-padded into pBuf via mp_to_ubin, then reverses them in
+ *	place when little-endian is requested.  Bracketed by
+ *	th8BigintSetup/Teardown.
+ *
+ * Results:
+ *	TH8_OK with nBytes written into pBuf; TH8_ERROR (interpreter
+ *	result set) for a NULL/zero-width field, a non-integer value,
+ *	an out-of-range value ("integer value too large for j/J
+ *	field"), or an out-of-memory / conversion error.
+ *
+ * Side effects:
+ *	Writes nBytes into the caller's pBuf; allocates and frees
+ *	libtommath temporaries via the per-interp allocator; sets the
+ *	interpreter result on error; takes and releases the bigint
+ *	mutex.
  *
  *----------------------------------------------------------------------
  */
@@ -1188,6 +1502,25 @@ done:
  *	bBigEndian, else LSB-first) into a decimal integer string
  *	and set the interp result.
  *
+ * Why / How:
+ *	The inverse decoder: it reads nBytes of two's-complement
+ *	binary (byte-reversing an LSB-first buffer into a scratch copy
+ *	so the core always works MSB-first), reconstructs the
+ *	magnitude with mp_from_ubin, and if the top sign bit is set
+ *	subtracts 2^(nBytes*8) to recover the negative value, then
+ *	renders it with th8BigintToResult.  A zero-width field decodes
+ *	to "0".  Bracketed by th8BigintSetup/Teardown.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to the decoded decimal
+ *	integer (or "0" for nBytes == 0); TH8_ERROR (result set) on
+ *	out-of-memory or a libtommath conversion error.
+ *
+ * Side effects:
+ *	Sets the interpreter result; may allocate and free a scratch
+ *	byte buffer plus libtommath temporaries via the per-interp
+ *	allocator; takes and releases the bigint mutex.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1277,6 +1610,26 @@ done:
  *	  v < 0      -> if |v| is an exact power of 2, fits in
  *	               mp_count_bits(|v|) bits (e.g. -128 = 0x80);
  *	               else ceil((mp_count_bits(|v|) + 1) / 8).
+ *
+ * Why / How:
+ *	Lets the binary formatter pick the smallest j/J field that
+ *	holds a value.  It parses the value, then works from
+ *	mp_count_bits(|v|): zero needs 1 byte; a positive value needs
+ *	one extra sign bit (bits+1); a negative value needs bits when
+ *	|v| is an exact power of two (detected via mp_cnt_lsb ==
+ *	bits-1, e.g. -128 = 0x80) and bits+1 otherwise.  The bit count
+ *	is rounded up to whole bytes.  Bracketed by
+ *	th8BigintSetup/Teardown.
+ *
+ * Results:
+ *	TH8_OK with *pNeeded set to the minimum byte width; TH8_ERROR
+ *	(interpreter result set to an error message) if the string is
+ *	not an integer or on out-of-memory.
+ *
+ * Side effects:
+ *	Writes *pNeeded; allocates and frees libtommath temporaries
+ *	via the per-interp allocator; sets the interpreter result only
+ *	on error; takes and releases the bigint mutex.
  *
  *----------------------------------------------------------------------
  */

@@ -47,8 +47,8 @@ R-04287-59267
 :   The `::th8_security` array SHALL be declared as a system variable (read-only from scripts).
 R-50169-65270
 :   Scripts SHALL NOT be able to modify `::th8_security` via `set`, `unset`, `append`, `incr`, `lappend`, or `array set`.
-R-39227-63501
-:   `Th8_ResetSecurityArray` SHALL set all seven elements of the `::th8_security` array to `"none"`.
+R-31220-39790
+:   `Th8_ResetSecurityArray` SHALL set all seven elements of the `::th8_security` array to `"none"` and return `TH8_OK`; on the first allocation failure it SHALL stop and return `TH8_ERROR`, in which case the array MAY be left partially reset.  A caller that receives `TH8_ERROR` SHALL treat the security state as indeterminate and abort the current evaluation (discarding the interpreter or rejecting the eval) rather than exposing the partial array to a script, so a partial array is never observable by running script code.
 
 #### 29.1a  Script Annotations
 
@@ -135,8 +135,8 @@ R-34935-39021
 :   The [info nameofexecutable] command in a sandbox SHALL return a base-relative path, not an absolute path.
 R-55895-04504
 :   The [pwd] command in a sandbox SHALL return "." (the base directory).
-R-47394-37015
-:   Resource exhaustion attacks (regexp bombs, string amplification, list bombs, format abuse) SHALL be bounded by the sandbox step limit and memory allocation limit.
+R-24231-13066
+:   Resource exhaustion attacks (regexp bombs, string amplification, list bombs, format abuse) SHALL be bounded by the sandbox step limit, memory allocation limit, and -- for pathological regular expressions -- the regex complexity limit.
 R-27789-36268
 :   Integer overflow in sandbox [expr] operations SHALL produce an error when overflow checking is enabled.
 R-26649-55462
@@ -378,15 +378,7 @@ R-55340-20582
 
 #### 32.7  Platform Struct Versioning
 
-(This section previously specified `nVersion == 2` for a rationalized
-callback ordering.  That intermediate version was never released;
-subsequent revisions added `xKeyValue` (version 3, also never
-released as a standalone version) and the manual-reset event
-callbacks (`xEventCreate` / `xEventDestroy` / `xEventSet` /
-`xEventReset` / `xEventWait`).  The current shipping value is
-`nVersion == 4`; see §33.9 for the normative statement.  This
-section is retained as a placeholder so the section numbering
-remains stable across revisions.)
+(This section previously specified `nVersion == 2`, then `== 4`, for callback additions that were mistakenly documented as ABI version bumps.  TH8 in fact uses a SINGLE pre-RTM platform ABI: `nVersion` is `TH8_PLATFORM_VERSION` (1), and callbacks added during development (`xKeyValue`, the manual-reset event callbacks) were added within version 1.  See §33.9 for the normative statement.  This section is retained as a placeholder so the section numbering remains stable across revisions.)
 
 #### 32.8  Internal Platform Wrappers (moved)
 
@@ -557,8 +549,8 @@ R-00313-45995
 
 #### 33.9  Platform Version
 
-R-16823-25281
-:   The `Th8_Platform` struct `nVersion` field SHALL be 4 to reflect the addition of the `xKeyValue` callback field (version 3 delta) and the manual-reset event callbacks `xEventCreate`, `xEventDestroy`, `xEventSet`, `xEventReset`, `xEventWait` (version 4 delta).  All platform static initializers under `Th8_GetPosixPlatform`, `Th8_GetWin32Platform`, `Th8_GetMacOSPlatform`, `Th8_GetIosPlatform`, `Th8_GetAndroidPlatform`, `Th8_GetCosmopolitanPlatform`, `Th8_GetLibcPlatform`, `Th8_GetNullIoPlatform`, `Th8_GetCurlPlatform`, `Th8_GetEnvPlatform`, `Th8_GetMemPlatform`, and `Th8_GetMimallocPlatform` SHALL use `nVersion = 4`.  `Th8_MergePlatform` SHALL reject version mismatches between source and destination platforms.
+R-63201-54280
+:   The `Th8_Platform` struct `nVersion` field SHALL be 1 (the value of `TH8_PLATFORM_VERSION`).  TH8 uses a single platform ABI version prior to RTM: callbacks added during development -- including `xKeyValue` and the manual-reset event callbacks `xEventCreate`, `xEventDestroy`, `xEventSet`, `xEventReset`, `xEventWait` -- were added within version 1 rather than bumping it.  All platform static initializers under `Th8_GetPosixPlatform`, `Th8_GetWin32Platform`, `Th8_GetMacOSPlatform`, `Th8_GetIosPlatform`, `Th8_GetAndroidPlatform`, `Th8_GetCosmopolitanPlatform`, `Th8_GetLibcPlatform`, `Th8_GetNullIoPlatform`, `Th8_GetCurlPlatform`, `Th8_GetEnvPlatform`, `Th8_GetMemPlatform`, and `Th8_GetMimallocPlatform` SHALL use `nVersion = 1`.  `Th8_MergePlatform` SHALL reject version mismatches between source and destination platforms.
 
 #### 33.10  EXISTS2 Operation
 
@@ -870,6 +862,11 @@ R-10851-48859
 :   assertion SHALL have no effect.  On a host whose platform
 :   provides no `xGetThreadId`, the owning-thread identifier is
 :   0 and affinity SHALL NOT be enforced.
+
+#### 37a.4  `Th8_CancelEval` cross-thread contract
+
+R-27036-22988
+:   `Th8_CancelEval` SHALL be callable from any thread.  When called from a thread other than the interpreter's owning thread, it SHALL NOT mutate the owning thread's multi-field cancel-message state nor touch the owning thread's per-interpreter memory accounting.  A signal cancellation (`TH8_CANCEL_SIGNAL`), which MAY originate in a signal handler, SHALL publish only the atomic cancellation request -- the cancel bit OR'd with the flag bits as one indivisible word -- with no allocation and no message; when no custom message is present the owner SHALL report a fixed "eval canceled via signal" text.  A non-signal cancellation from a foreign thread MAY hand off a copied message, published as a self-describing length-prefixed buffer through a single atomic pointer exchange and allocated from the raw platform allocator (never the accounted allocator), which the owning thread adopts at its next cancellation poll; a message already installed on the owner takes precedence (first-writer-wins), and when no message is present the owner reports the default "eval canceled".
 
 
 ### 38  Fault Injection Testing
@@ -1227,8 +1224,8 @@ R-11879-05897
 
 #### 47.1  Th8_GetMemPlatform
 
-R-41372-31985
-:   `Th8_GetMemPlatform()` SHALL return a static platform struct whose only non-NULL callback is `xNeedMemory`.  When invoked, the callback SHALL clear the interpreter's IR cache, reject requests exceeding `TH8_MX_ALLOC` bytes, and retry allocation via the interpreter's current `xMalloc`.
+R-44164-55088
+:   `Th8_GetMemPlatform()` SHALL return a static platform struct whose only non-NULL callback is `xNeedMemory`.  When invoked, the callback SHALL clear the interpreter's IR cache to reclaim memory and then satisfy the request through the interpreter's single limit-checked, zero-filled, accounted allocation core, so a returned block respects `Th8_SetAllocLimit` and is accounted exactly once; it SHALL NOT allocate past the limit.
 
 
 ### 48  Sensitive Interpreter Result
@@ -1477,9 +1474,6 @@ authoritative contract for a catalog entry.
 * **`Th8_ByteToUtf16Col`** -- Convert a byte offset nByte within the line zLine (nLine bytes)
   Prototype: `TH8_API int Th8_ByteToUtf16Col(const char *zLine, size_t nLine, int nByte);`
 
-* **`Th8_CallSubCommand`** -- Dispatch to a sub-command.  argv[1] is matched against the zName
-  Prototype: `TH8_API int Th8_CallSubCommand( Th8_Interp *interp, void *ctx, int argc, const char **argv, size_t *argl, const Th8_S...;`
-
 * **`Th8_ClonePlatform`** -- Allocate a new mutable copy of a const platform table.
   Prototype: `TH8_API Th8_Platform *Th8_ClonePlatform(const Th8_Platform *pSrc);`
 
@@ -1498,6 +1492,15 @@ authoritative contract for a catalog entry.
 * **`Th8_CreateMathFunc`** -- Register a math function for use in [expr].  The function is
   Prototype: `TH8_API int Th8_CreateMathFunc( Th8_Interp *interp, const char *zName, size_t nName, int nArg, Th8_MathFuncProc xProc...;`
 
+* **`Th8_CreateSubCommand`** -- Register (or replace) a sub-command of a command.  The first
+  sub-command gives the command a sub-command OVERLAY: the core dispatches "cmd sub ..." to the
+  sub-command's xProc (which receives the full argv) when argv[1] names a registered sub-command;
+  anything unmatched falls back to the command's own handler (a pure ensemble -- NULL handler --
+  instead reports the standard "must be ..." error).  Transactional: on failure nothing is
+  registered.  A unique token is written to *pToken (if non-NULL) for Th8_DeleteSubCommand /
+  Th8_GetSubCommandInfo.
+  Prototype: `TH8_API int Th8_CreateSubCommand( Th8_Interp *interp, const char *zCmdName, const char *zSubName, Th8_CommandProc xProc...;`
+
 * **`Th8_DataExists`** -- Test whether named data exists via the platform's xDataExists
   Prototype: `TH8_API int Th8_DataExists( Th8_Interp *interp, const char *zName, size_t nName, int *pAttrs);`
 
@@ -1509,6 +1512,12 @@ authoritative contract for a catalog entry.
 
 * **`Th8_DeleteMathFunc`** -- Remove a math function from the interpreter.
   Prototype: `TH8_API int Th8_DeleteMathFunc(Th8_Interp *interp, const char *zName, size_t nName);`
+
+* **`Th8_DeleteSubCommand`** -- Delete a sub-command by its token (from Th8_CreateSubCommand or
+  Th8_GetSubCommandInfo).  O(1) via the interpreter's sub-command token index; runs the sub-command's
+  xDel.  When the last sub-command of a command is removed, the command reverts to a plain command (or
+  a bare ensemble shell if it had no handler).
+  Prototype: `TH8_API int Th8_DeleteSubCommand(Th8_Interp *interp, th8_uint64_t token);`
 
 * **`Th8_DnsResolve`** -- DNSSEC-validating DNS lookup.  Wraps the platform's
   Prototype: `TH8_API int Th8_DnsResolve( Th8_Interp *interp, const char *zName, size_t nName, int eType, Th8_DnsResult **ppResult);`
@@ -1558,6 +1567,10 @@ authoritative contract for a catalog entry.
 * **`Th8_GetAllocBytes`** -- Returns the current total bytes allocated by this interp.
   Prototype: `TH8_API size_t Th8_GetAllocBytes(Th8_Interp *interp);`
 
+* **`Th8_GetAllocPeak`** -- Returns the high-water mark of Th8_GetAllocBytes over this interp's
+  life (the maximum transient memory demanded; persists after blocks are freed; 0 for a new interp).
+  Prototype: `TH8_API size_t Th8_GetAllocPeak(Th8_Interp *interp);`
+
 * **`Th8_GetAllocLimit`** -- Returns the current allocation limit (0 = unlimited).
   Prototype: `TH8_API size_t Th8_GetAllocLimit(Th8_Interp *interp);`
 
@@ -1573,6 +1586,14 @@ authoritative contract for a catalog entry.
 * **`Th8_GetCommandInfo`** -- Look up the command named zName (nName bytes, or TH8_NOLEN)
   Prototype: `TH8_API int Th8_GetCommandInfo( Th8_Interp *interp, const char *zName, size_t nName, Th8_CommandProc *pxProc, void **...;`
 
+* **`Th8_GetSubCommandInfo`** -- Query a sub-command's current binding: fill any of the OUT parameters
+  (all may be NULL) with the registered xProc, pContext, xDel, and token.  The captured xProc/pContext
+  are directly callable, supporting save-and-restore (capture, replace via Th8_CreateSubCommand, later
+  restore) and sub-classing/wrapping (a wrapper whose pContext holds the capture and calls back into the
+  original for pre-/post-processing).  Returns TH8_ERROR if the command is unknown, is not an ensemble,
+  or has no such sub-command.
+  Prototype: `TH8_API int Th8_GetSubCommandInfo( Th8_Interp *interp, const char *zCmdName, size_t nCmd, const char *zSubName, size_t nSub...;`
+
 * **`Th8_GetCosmopolitanPlatform`** -- Return a Th8_Platform for Cosmopolitan Libc (Actually Portable
   Prototype: `TH8_API const Th8_Platform *Th8_GetCosmopolitanPlatform(void);`
 
@@ -1584,6 +1605,10 @@ authoritative contract for a catalog entry.
 
 * **`Th8_GetCwd`** -- Return the current working directory via the platform's
   Prototype: `TH8_API char *Th8_GetCwd(Th8_Interp *interp);`
+
+* **`Th8_GetDeadline`** -- Return the interpreter's absolute monotonic-microsecond
+  wall-clock deadline, or 0 if none is set.
+  Prototype: `TH8_API th8_int64_t Th8_GetDeadline(Th8_Interp *interp);`
 
 * **`Th8_GetData`** -- Retrieve named data via the platform's xGetData callback.
   Prototype: `TH8_API int Th8_GetData( Th8_Interp *interp, const char *zName, size_t nName, char **pzOut, size_t *pnOut, int flags);`
@@ -1697,7 +1722,7 @@ authoritative contract for a catalog entry.
   Prototype: `TH8_API void Th8_HashIterate( Th8_Interp *interp, Th8_Hash *pHash, int (*xCallback)(Th8_HashEntry *, void *), void *p...;`
 
 * **`Th8_HashIterateOrdered`** -- (see `src/th8.h` for the header comment)
-  Prototype: `TH8_API void Th8_HashIterateOrdered( Th8_Interp *interp, Th8_Hash *pHash, int (*xCallback)(Th8_HashEntry *, void *), ...;`
+  Prototype: `TH8_API int Th8_HashIterateOrdered( Th8_Interp *interp, Th8_Hash *pHash, int (*xCallback)(Th8_HashEntry *, void *), ...;`
 
 * **`Th8_HashNew`** -- (see `src/th8.h` for the header comment)
   Prototype: `TH8_API Th8_Hash *Th8_HashNew(Th8_Interp *interp);`
@@ -1826,7 +1851,33 @@ authoritative contract for a catalog entry.
   Prototype: `TH8_API int Th8_RegisterExpansion( Th8_Interp *interp, const char *zTag, size_t nTag, Th8_ExpansionProc xProc, void *...;`
 
 * **`Th8_RegisterLanguage`** -- Register the built-in TH8 language commands ([if], [while],
+  the math functions, and the statically-linked plugins). Returns `TH8_OK` on
+  success or `TH8_ERROR` if any registration step fails (for example, an
+  out-of-memory condition); on failure the interpreter is left partially
+  registered and the caller should discard it (delete the interpreter) rather
+  than continue using it. Idempotent re-registration (as performed by
+  `Th8_RestoreInterp`) is not an error.
   Prototype: `TH8_API int Th8_RegisterLanguage(Th8_Interp *interp);`
+
+* **`Th8_RegisterSubsets`** -- Register only the named command SUBSETS (an allowlist) instead of the
+  whole language, so an embedder can withhold Turing-completeness (the "looping"/"procedures" subsets)
+  and grant untrusted scripts only a safe slice.  A subset name is a built-in plugin (membership = its
+  command table + ensemble sub-commands) or a curated subset (a manifest of individual COMMAND /
+  FUNCTION / SUBCOMMAND members).  Additive, idempotent, order-independent; an unknown name registers
+  NOTHING and returns `TH8_ERROR` (transactional).  A later OOM leaves a partial language and the caller
+  must discard the interpreter (same contract as `Th8_RegisterLanguage`).
+  Prototype: `TH8_API int Th8_RegisterSubsets( Th8_Interp *interp, const char *const *azNames, int nNames);`
+
+* **`Th8_ListSubsets`** -- Set the interpreter result to a list of the subset names valid for
+  `Th8_RegisterSubsets` (every plugin plus every curated subset), so allowlist code can validate its
+  configuration.  Returns `TH8_OK`.
+  Prototype: `TH8_API int Th8_ListSubsets(Th8_Interp *interp);`
+
+* **`Th8_GetSubsetMembers`** -- Set the interpreter result to the resolved members of one subset (each
+  element `"<type> <name>"`, sub-commands as `"subcommand <ensemble> <name>"`) -- an audit of exactly
+  what that subset grants.  Resolving validates the manifest, so a stale member fails here.  Returns
+  `TH8_ERROR` for an unknown subset name.
+  Prototype: `TH8_API int Th8_GetSubsetMembers(Th8_Interp *interp, const char *zName);`
 
 * **`Th8_RemoveSignedPolicy`** -- Remove the signed-only policy callback and free the
   Prototype: `TH8_API void Th8_RemoveSignedPolicy(Th8_Interp *interp, void *pCtx);`
@@ -1894,11 +1945,34 @@ authoritative contract for a catalog entry.
 * **`Th8_SameFile`** -- Test whether two paths refer to the same physical file via
   Prototype: `TH8_API int Th8_SameFile( Th8_Interp *interp, const char *zName1, size_t nName1, const char *zName2, size_t nName2);`
 
+* **`Th8_SetAllocLimit`** -- Set a per-interpreter memory allocation limit in bytes for
+  allocations routed through the TH8 wrappers; 0 (the default) means unlimited.  The
+  limit bounds *requested* bytes: every allocation whose requested size would not fit
+  in the remaining headroom is rejected (`Th8_Malloc` panics; `Th8_AttemptMalloc` /
+  `Th8_SafeAlloc` return NULL).  The limit check and accounting live in one place
+  (`th8MallocCommon`), so the second-chance `xNeedMemory` recovery path is subject to
+  the same limit and cannot allocate past it.  Because a real allocator may round a
+  block's usable size up, the tracked total (`Th8_GetAllocBytes`) can momentarily sit
+  above the limit by at most one allocation's rounding -- the safe direction, which
+  self-corrects when the block is freed -- and is never driven below true usage.  It is
+  thus a bounded-slack requested-bytes limit, not a hard usable-bytes ceiling.
+  Prototype: `TH8_API void Th8_SetAllocLimit(Th8_Interp *interp, size_t nLimit);`
+
 * **`Th8_SetBasePath`** -- Explicitly set the base path for the TH8 platform layer.
   Prototype: `TH8_API int Th8_SetBasePath(const char *zPath, size_t nPath);`
 
 * **`Th8_SetCommandCopy`** -- Set a deep-copy callback on a command.  Used by proc/nproc
   Prototype: `TH8_API void Th8_SetCommandCopy( Th8_Interp *interp, const char *zName, void *(*xCopy)(Th8_Interp *, void *));`
+
+* **`Th8_SetDeadline`** -- Set an absolute monotonic-microsecond deadline
+  (same timebase as Th8_GetTimeUs), or 0 to remove it.  This is a *cooperative
+  checkpoint* deadline, not a hard real-time bound: it is sampled at periodic
+  step boundaries and stops evaluation with "time limit exceeded" at the first
+  checkpoint at or after the deadline, so a single long work unit or a blocking
+  platform callback can overshoot until the next checkpoint.  A hard wall-clock
+  guarantee requires an out-of-process supervisor or other preemptive
+  containment.
+  Prototype: `TH8_API void Th8_SetDeadline(Th8_Interp *interp, th8_int64_t nDeadlineUs);`
 
 * **`Th8_SetCwd`** -- Change the current working directory via the platform's
   Prototype: `TH8_API int Th8_SetCwd(Th8_Interp *interp, const char *zPath, size_t nPath);`
@@ -1921,11 +1995,30 @@ authoritative contract for a catalog entry.
 * **`Th8_SetResultInt`** -- Set the interpreter result to the decimal string representation
   Prototype: `TH8_API int Th8_SetResultInt(Th8_Interp *interp, int iVal);`
 
+* **`Th8_SetResultLimit`** -- Set the maximum byte size of the interpreter result; 0 selects
+  the built-in TH8_MX_STRLEN (100 MiB) default cap and does NOT disable the limit.
+  Prototype: `TH8_API void Th8_SetResultLimit(Th8_Interp *interp, size_t nLimit);`
+
 * **`Th8_SetResultWideInt`** -- Set the interpreter result to the decimal string representation
   Prototype: `TH8_API int Th8_SetResultWideInt(Th8_Interp *interp, th8_int64_t wVal);`
 
+* **`Th8_SetSafeLimits`** -- Apply the recommended hardened resource profile
+  (TH8_SAFE_ALLOC_LIMIT / _STEP_LIMIT / _RESULT_LIMIT) for evaluating untrusted script in one
+  call; individual limits may be overridden afterwards.
+  Prototype: `TH8_API void Th8_SetSafeLimits(Th8_Interp *interp);`
+
 * **`Th8_SetStepCount`** -- Set the step counter to an explicit value, without changing
   Prototype: `TH8_API void Th8_SetStepCount(Th8_Interp *interp, th8_int64_t nCount);`
+
+* **`Th8_SetStepLimit`** -- Set the maximum number of Th8_Ready-counted work units (command
+  invocations and expression-tree nodes); 0 (the default) means unlimited.
+  Prototype: `TH8_API void Th8_SetStepLimit(Th8_Interp *interp, th8_int64_t nLimit);`
+
+* **`Th8_SetTimeLimitMs`** -- Arm the cooperative checkpoint deadline nMs milliseconds
+  from now (relative-duration convenience over Th8_SetDeadline, with the same
+  cooperative-overshoot semantics -- not a hard real-time bound); 0 or less clears the
+  deadline.  Returns TH8_OK, or TH8_ERROR if the clock could not be read while arming.
+  Prototype: `TH8_API int Th8_SetTimeLimitMs(Th8_Interp *interp, th8_int64_t nMs);`
 
 * **`Th8_SetVar`** -- Set the variable zVar (nVar bytes) to the value zVal (nVal bytes)
   Prototype: `TH8_API int Th8_SetVar( Th8_Interp *interp, const char *zVar, size_t nVar, const char *zVal, size_t nVal);`

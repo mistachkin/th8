@@ -159,6 +159,38 @@ runTest {test string-4.2 {
 } -result {}}
 
 ###############################################################################
+
+runTest {test string-4.3 {
+  R-47403-50623: string repeat allows output up to the 1 MiB hard cap
+} -body {
+  string length [string repeat "a" 1048576]
+} -result {1048576}}
+
+###############################################################################
+
+runTest {test string-4.4 {
+  R-47403-50623: string repeat rejects output past the 1 MiB hard cap with
+  "string too long"
+} -body {
+  catch {string repeat "a" 1048577} msg
+  set msg
+} -cleanup {
+  unset -nocomplain msg
+} -result {string too long}}
+
+###############################################################################
+
+runTest {test string-4.5 {
+  R-47403-50623: the 1 MiB string repeat cap accounts for the per-copy
+  length, not just the count
+} -body {
+  catch {string repeat "ab" 524289} msg
+  set msg
+} -cleanup {
+  unset -nocomplain msg
+} -result {string too long}}
+
+###############################################################################
 #
 # Section 5 -- string trim / trimleft / trimright
 #

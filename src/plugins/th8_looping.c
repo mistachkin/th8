@@ -716,6 +716,7 @@ foreach_step(Th8_Interp *interp, void *pData[], int rc)
 	int jj;
 
 	for (jj = 0; jj < pp->nVar; jj++) {
+	    if (Th8_Ready(interp) != TH8_OK) return TH8_ERROR;
 	    if (ALWAYS(pp->azVar) && ALWAYS(pp->azValue) &&
 	        pp->iIndex + jj < pp->nValue) {
 		Th8_SetVar(

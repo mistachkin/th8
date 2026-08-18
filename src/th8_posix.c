@@ -1235,6 +1235,16 @@ th8PosixCallUnloadProc(
  *	failure) emit a diagnostic into the interpreter result
  *	via `Th8_ErrorMessage` / `TH8_TRACE_ERR`.
  *
+ * Why / How:
+ *	The reference-counted handle cache lets multiple `load`
+ *	callers share one `dlopen`'d image; `xUnload` must drop
+ *	exactly one reference per call (via `th8PosixFindHandle`
+ *	/ `th8PosixReleaseHandle`) so the library is only
+ *	`dlclose`'d once nothing references it.  The `_Unload`
+ *	symbol lookup mirrors Tcl's `load`/`unload` convention so
+ *	extensions get a teardown hook symmetric with their init
+ *	entry point.
+ *
  * Parameters:
  *	interp -- live interpreter (receives diagnostics).
  *	pCtx   -- platform context (ignored).
@@ -1247,7 +1257,7 @@ th8PosixCallUnloadProc(
  *	bClose -- 1 to `dlclose` once refs reach zero;
  *		0 to keep the handle cached.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success.
  *	`TH8_ERROR` on bad arguments or look-up failure
  *	(interpreter result: diagnostic).
@@ -1543,12 +1553,21 @@ th8PosixMemset(Th8_Interp *interp, void *pCtx, void *dst, int c, size_t n)
  *
  *	Gated on `TH8_ENABLE_UNBOUND`.
  *
+ * Why / How:
+ *	`dladdr` maps an in-process address back to the shared
+ *	object that contains it, so resolving the address of this
+ *	very function yields the path of the TH8 image regardless
+ *	of the name it was loaded under.  Deriving the anchor
+ *	location from that path (rather than a compiled-in
+ *	install prefix) lets a relocated or side-by-side TH8
+ *	install find its own co-located trust anchor.
+ *
  * Parameters:
  *	zBuf -- output buffer; receives the NUL-terminated path
  *		on success.
  *	nBuf -- size of `zBuf` in bytes.
  *
- * Returns:
+ * Results:
  *	1 on success; 0 if `dladdr` failed, the resolved path
  *	contained no `/` (which cannot happen on POSIX), or the
  *	composed path would exceed `nBuf`.
@@ -1601,10 +1620,18 @@ th8PosixGetModuleAnchorPath(char *zBuf, size_t nBuf)
  *
  *	Gated on `TH8_ENABLE_UNBOUND`.
  *
+ * Why / How:
+ *	`access(2)` with `R_OK` is the direct POSIX way to ask
+ *	"could I open this for reading right now" without
+ *	actually opening it, and (per the note above) it is
+ *	evaluated against the real UID, which is the correct
+ *	permission set to test when the trust-anchor search may
+ *	run from a privileged process.
+ *
  * Parameters:
  *	zPath -- NUL-terminated path to test.
  *
- * Returns:
+ * Results:
  *	1 if readable; 0 otherwise (including any errno set
  *	by `access`).
  *
@@ -1649,12 +1676,22 @@ th8PosixPathReadable(const char *zPath)
  *
  *	Gated on `TH8_ENABLE_UNBOUND`.
  *
+ * Why / How:
+ *	No single location is guaranteed to hold a root key
+ *	across POSIX distributions, so the function tries a
+ *	fixed priority list of every convention this build knows
+ *	about and returns the first one that both exists on disk
+ *	and is readable by the current user, checked via
+ *	`th8PosixPathReadable` so a stale or permission-denied
+ *	candidate is silently skipped rather than causing a
+ *	downstream `ub_ctx_add_ta_file` failure.
+ *
  * Parameters:
  *	zBuf -- output buffer; receives the NUL-terminated
  *		anchor path on success.
  *	nBuf -- size of `zBuf` in bytes.
  *
- * Returns:
+ * Results:
  *	1 if a readable static anchor was found; 0 if none of
  *	the candidates existed.
  *
@@ -1710,12 +1747,21 @@ th8PosixFindStaticAnchorPath(char *zBuf, size_t nBuf)
  *
  *	Gated on `TH8_ENABLE_UNBOUND`.
  *
+ * Why / How:
+ *	The managed anchor is mutable, per-user state (it is
+ *	rewritten as RFC 5011 key rollovers are tracked), so it
+ *	cannot live next to the read-only, possibly
+ *	system-owned static anchor; XDG_DATA_HOME (falling back
+ *	to the conventional `~/.local/share`) is the standard
+ *	POSIX location for exactly this kind of per-user
+ *	persistent application data.
+ *
  * Parameters:
  *	zBuf -- output buffer; receives the NUL-terminated path
  *		on success.
  *	nBuf -- size of `zBuf` in bytes.
  *
- * Returns:
+ * Results:
  *	1 on success; 0 if no per-user directory is available
  *	(no `HOME`, no `XDG_DATA_HOME`) or the composed path
  *	would exceed `nBuf`.
@@ -1774,12 +1820,21 @@ th8PosixGetManagedAnchorPath(char *zBuf, size_t nBuf)
  *
  *	Gated on `TH8_ENABLE_UNBOUND`.
  *
+ * Why / How:
+ *	`mkdir` only creates one level at a time and fails if an
+ *	intermediate component is missing, so the path is walked
+ *	left to right, temporarily NUL-terminating at each `/`
+ *	to `mkdir` that prefix before restoring the slash and
+ *	continuing -- the same technique as the shell's
+ *	`mkdir -p`, done in-place on a scratch copy so the
+ *	caller's `zPath` is never mutated.
+ *
  * Parameters:
  *	zPath -- NUL-terminated path whose parent directories
  *		should be created.  The basename of `zPath` is
  *		ignored (only directory components are created).
  *
- * Returns:
+ * Results:
  *	1 on success (every parent exists, was newly created,
  *	or already existed); 0 on `mkdir` failure other than
  *	`EEXIST`, or on `zPath` being too long for the scratch
@@ -1836,12 +1891,22 @@ th8PosixEnsureParentDir(const char *zPath)
  *
  *	Gated on `TH8_ENABLE_UNBOUND`.
  *
+ * Why / How:
+ *	A plain byte-copy loop (not a hardlink or rename) is
+ *	used so the bootstrap never modifies or removes the
+ *	vendor-supplied static anchor, and the destination is
+ *	opened with `O_CREAT | O_TRUNC` plus an explicit
+ *	`fchmod(0600)` -- rather than relying on `open`'s mode
+ *	argument alone -- because the umask could otherwise
+ *	widen the on-disk permissions of this per-user secret
+ *	file.
+ *
  * Parameters:
  *	zSrc -- NUL-terminated source path (readable).
  *	zDst -- NUL-terminated destination path (will be
  *		created or replaced).
  *
- * Returns:
+ * Results:
  *	1 on success; 0 on any `open` / `read` / `write` /
  *	`fchmod` failure.
  *
@@ -1891,6 +1956,85 @@ done:
 /*
  *----------------------------------------------------------------------
  *
+ * th8PosixReadFile --
+ *
+ *	Read up to `nBuf` bytes of `zPath` into the caller-provided buffer
+ *	`zBuf`, setting `*pnRead` to the byte count.  A RAW read (open(2) +
+ *	read(2)) that never touches the signed-only script policy: the
+ *	shared unbound driver uses it to read a trust anchor and its
+ *	`.b64sig` for signature verification, and routing through the policy
+ *	would recurse.
+ *
+ *	Gated on `TH8_ENABLE_UNBOUND`.
+ *
+ * Why / How:
+ *	Signature verification requires the exact byte content
+ *	of the file that was signed; a read that silently
+ *	truncated at `nBuf` would let a corrupted or maliciously
+ *	oversized anchor pass as if it were the smaller, valid
+ *	one.  A one-byte probe read after filling the buffer
+ *	exactly (see the "Buffer exactly full" comment below)
+ *	distinguishes a file that fits perfectly from one that is
+ *	larger than `nBuf`, so oversize files are rejected rather
+ *	than silently truncated.
+ *
+ * Parameters:
+ *	zPath  -- NUL-terminated source path.
+ *	zBuf   -- caller buffer (not NUL-terminated by this routine).
+ *	nBuf   -- capacity of zBuf.
+ *	pnRead -- OUT: bytes read (set to 0 on failure).
+ *
+ * Results:
+ *	1 on success; 0 on open/read failure OR if the file does not fit in
+ *	nBuf (no partial read -- a truncated anchor or signature must never
+ *	reach verification).
+ *
+ * Side effects:
+ *	Reads from the filesystem.
+ *
+ *----------------------------------------------------------------------
+ */
+static int
+th8PosixReadFile(const char *zPath, char *zBuf, size_t nBuf, size_t *pnRead)
+{
+    int fd;
+    size_t nTotal = 0;
+
+    if (pnRead) *pnRead = 0;
+    if (!zPath || !zBuf || nBuf == 0) return 0;
+    fd = open(zPath, O_RDONLY);
+    if (fd < 0) return 0;
+    for (;;) {
+	ssize_t n = read(fd, zBuf + nTotal, nBuf - nTotal);
+	if (n < 0) {
+	    if (errno == EINTR) continue;
+	    close(fd);
+	    return 0;
+	}
+	if (n == 0) break; /* EOF */
+	nTotal += (size_t)n;
+	if (nTotal == nBuf) {
+	    /* Buffer exactly full: distinguish "fits exactly" from "more to
+             * come" (file too large) with a one-byte probe. */
+	    char probe;
+	    ssize_t more = read(fd, &probe, 1);
+
+	    close(fd);
+	    if (more == 0) {
+		if (pnRead) *pnRead = nTotal;
+		return 1;
+	    }
+	    return 0; /* more data (or error) -- refuse the oversize file */
+	}
+    }
+    close(fd);
+    if (pnRead) *pnRead = nTotal;
+    return 1;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8PosixUnboundOps --
  *
  *	Static `Th8_UnboundOps` instance handed to every call
@@ -1903,9 +2047,13 @@ done:
  *----------------------------------------------------------------------
  */
 static const Th8_UnboundOps th8PosixUnboundOps = {
-    th8PosixFindStaticAnchorPath, th8PosixGetManagedAnchorPath,
-    th8PosixPathReadable,         th8PosixEnsureParentDir,
+    th8PosixFindStaticAnchorPath,
+    th8PosixGetManagedAnchorPath,
+    th8PosixPathReadable,
+    th8PosixEnsureParentDir,
     th8PosixCopyFileContents,
+    th8PosixGetModuleAnchorPath,
+    th8PosixReadFile,
 };
 
 /*
@@ -1923,6 +2071,14 @@ static const Th8_UnboundOps th8PosixUnboundOps = {
  *
  *	Gated on `TH8_ENABLE_UNBOUND`.
  *
+ * Why / How:
+ *	Keeping the platform callback a one-line forwarder lets
+ *	the substantial DNSSEC-validation logic in
+ *	`th8_unbound.c` be written once and shared by every
+ *	platform, with only the small, genuinely OS-specific
+ *	pieces (trust-anchor paths, file permissions) supplied
+ *	here through the `Th8_UnboundOps` vtable.
+ *
  * Parameters:
  *	interp   -- live interpreter (used for allocation in
  *		the shared driver).
@@ -1934,7 +2090,7 @@ static const Th8_UnboundOps th8PosixUnboundOps = {
  *	ppResult -- output: result pointer on success;
  *		NULL on failure.
  *
- * Returns:
+ * Results:
  *	Whatever `th8UnboundResolve` returns: `TH8_OK` on
  *	success; `TH8_ERROR` on any failure.
  *
@@ -1971,13 +2127,19 @@ th8PosixDnsResolve(
  *
  *	Gated on `TH8_ENABLE_UNBOUND`.
  *
+ * Why / How:
+ *	The result's memory layout and ownership rules are
+ *	defined entirely by the shared `th8_unbound.c` driver
+ *	that allocated it, so freeing it is likewise forwarded
+ *	rather than duplicated per platform.
+ *
  * Parameters:
  *	interp  -- live interpreter (used for `Th8_Free`).
  *	pCtx    -- unused platform context.
  *	pResult -- result returned by `th8PosixDnsResolve`,
  *		or NULL.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -2435,7 +2597,25 @@ th8PosixGetLastError(Th8_Interp *interp, void *pCtx)
  *
  * th8PosixSetLastError --
  *
- *	See th8PosixGetLastError above.
+ *	Implements the Th8_Platform.xSetLastError callback.  Set
+ *	the calling thread's `errno` to `nErr`.  See
+ *	`th8PosixGetLastError` above.
+ *
+ * Why / How:
+ *	Callers that need to force a specific "last error" state
+ *	(for example, restoring `errno` after a diagnostic probe,
+ *	or seeding it before a callback that reports errors via
+ *	the platform's last-error mechanism) go through this
+ *	wrapper so the interpreter never references the POSIX
+ *	`errno` macro directly; the Win32 platform file supplies
+ *	the matching `SetLastError` wrapper for the same
+ *	callback slot.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Sets the calling thread's `errno` to `nErr`.
  *
  *----------------------------------------------------------------------
  */
@@ -3930,11 +4110,21 @@ typedef struct th8PosixEvent {
  *	contract; no error is emitted into the interpreter
  *	result.
  *
+ * Why / How:
+ *	A mutex + condition variable + flag is the standard POSIX
+ *	building block for a manual-reset event: the mutex
+ *	serializes reads/writes of `signaled`, and the condition
+ *	variable lets `xEventWait` block without busy-polling
+ *	until `xEventSet` broadcasts.  Returning an opaque `void *`
+ *	(rather than exposing the struct) keeps the platform
+ *	callback signature identical between POSIX and Win32,
+ *	where the equivalent handle is a kernel `HANDLE`.
+ *
  * Parameters:
  *	interp -- live interpreter (unused beyond the contract).
  *	pCtx   -- platform context (ignored).
  *
- * Returns:
+ * Results:
  *	Non-NULL opaque handle on success; NULL on allocation
  *	or pthread init failure.
  *
@@ -3980,13 +4170,20 @@ th8PosixEventCreate(Th8_Interp *interp, void *pCtx)
  *	succeed" guard.  Matched pair with
  *	`th8Win32EventDestroy`.
  *
+ * Why / How:
+ *	The pthread cond/mutex objects must be destroyed before
+ *	the memory backing them is freed (destroying first, then
+ *	freeing, mirrors the reverse order of `EventCreate`'s
+ *	init calls) so no live synchronisation primitive is ever
+ *	left pointing into freed memory.
+ *
  * Parameters:
  *	interp -- ignored.
  *	pCtx   -- platform context (ignored).
  *	pEvent -- handle returned by `th8PosixEventCreate`, or
  *		NULL.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -4020,12 +4217,19 @@ th8PosixEventDestroy(Th8_Interp *interp, void *pCtx, void *pEvent)
  *	apply -- every `Wait` blocked on this event resumes.
  *	Matched pair with `th8Win32EventSet`.
  *
+ * Why / How:
+ *	`signaled` is mutated only while holding `e->lock` so a
+ *	concurrent `xEventWait` cannot observe a torn update, and
+ *	`pthread_cond_broadcast` (rather than `_signal`) is used
+ *	because manual-reset semantics require waking every
+ *	waiter, not just one.
+ *
  * Parameters:
  *	interp -- ignored.
  *	pCtx   -- platform context (ignored).
  *	pEvent -- handle, or NULL (no-op on NULL).
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -4059,12 +4263,18 @@ th8PosixEventSet(Th8_Interp *interp, void *pCtx, void *pEvent)
  *	notified (resetting an event has nothing to wake).
  *	Matched pair with `th8Win32EventReset`.
  *
+ * Why / How:
+ *	`signaled` is cleared under `e->lock` for the same
+ *	reason `EventSet` sets it under the lock: any thread
+ *	concurrently entering `xEventWait` must see either the
+ *	fully-set or fully-cleared state, never a partial update.
+ *
  * Parameters:
  *	interp -- ignored.
  *	pCtx   -- platform context (ignored).
  *	pEvent -- handle, or NULL (no-op on NULL).
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -4108,6 +4318,19 @@ th8PosixEventReset(Th8_Interp *interp, void *pCtx, void *pEvent)
  *	semantics are desired.  Matched pair with
  *	`th8Win32EventWait`.
  *
+ * Why / How:
+ *	`pthread_cond_wait` / `pthread_cond_timedwait` can wake
+ *	spuriously or on `EINTR` without `signaled` having
+ *	changed, so every wait is wrapped in a `while (!signaled)`
+ *	re-check loop; a distinct `-1` ("early-wake, re-poll")
+ *	result lets the infinite- and bounded-wait branches break
+ *	out of that loop early (e.g. so a caller can re-evaluate
+ *	other pending work) instead of spinning inside this call
+ *	until the real timeout.  The bounded-wait deadline is
+ *	computed once from `gettimeofday` plus `nTimeoutMs`
+ *	because `pthread_cond_timedwait` takes an absolute
+ *	deadline, not a relative duration.
+ *
  * Parameters:
  *	interp      -- ignored.
  *	pCtx        -- platform context (ignored).
@@ -4115,10 +4338,12 @@ th8PosixEventReset(Th8_Interp *interp, void *pCtx, void *pEvent)
  *	nTimeoutMs  -- timeout in milliseconds; negative for
  *		infinite, zero for poll, positive for bounded.
  *
- * Returns:
- *	0 if the event was signaled before the timeout;
- *	1 otherwise (including NULL `pEvent` and
- *	pthread errors).
+ * Results:
+ *	0 if the event was observed signaled; 1 if the timeout
+ *	elapsed, `pEvent` was NULL, or an unrecoverable pthread
+ *	error occurred; -1 on a spurious/early wake with the
+ *	event still unsignaled, meaning the caller should re-poll
+ *	rather than treat this as a timeout.
  *
  * Side effects:
  *	Acquires and releases `e->lock`; may block on

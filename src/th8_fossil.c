@@ -76,10 +76,18 @@ static Th8_Interp *th8FossilInterp = 0;
  *	values, so every bridge path returning from TH1 into
  *	TH8 must remap through this switch.
  *
+ * Why / How:
+ *	A plain switch over the five recognised TH_* values.  The
+ *	mapping is not the identity: TH1 and TH8 assign BREAK and
+ *	RETURN opposite numeric codes (TH_BREAK=2 / TH_RETURN=3 vs
+ *	TH8_RETURN=2 / TH8_BREAK=3), so a bridge return that skipped
+ *	this remap would turn a `break` into a `return` (and vice
+ *	versa).  Unrecognised codes fall through unchanged.
+ *
  * Parameters:
  *	th1Rc -- a TH_* return code.
  *
- * Returns:
+ * Results:
  *	The matching TH8_* code, or th1Rc unchanged if it is
  *	not a recognised TH1 code.
  *
@@ -116,10 +124,16 @@ th8FromTh1Rc(int th1Rc)
  *	return code, the inverse of th8FromTh1Rc.  Used on
  *	bridge paths that return from TH8 back into TH1.
  *
+ * Why / How:
+ *	The exact inverse of th8FromTh1Rc: a switch over the five
+ *	TH8_* values that undoes the BREAK/RETURN code swap when a
+ *	bridge path unwinds from TH8 back into TH1.  Unrecognised
+ *	codes fall through unchanged.
+ *
  * Parameters:
  *	th8Rc -- a TH8_* return code.
  *
- * Returns:
+ * Results:
  *	The matching TH_* code, or th8Rc unchanged if it is
  *	not a recognised TH8 code.
  *
@@ -157,12 +171,22 @@ th1FromTh8Rc(int th8Rc)
  *	"compute from NUL") are clamped to 0; callers needing
  *	TH8_NOLEN semantics must handle that case separately.
  *
+ * Why / How:
+ *	TH1 command procs receive argument lengths as `int *`, but
+ *	TH8 procs expect `size_t *`; this widens one array into a
+ *	freshly Th8_Malloc'd one element by element.  A negative TH1
+ *	length is TH1's "compute from the NUL terminator" sentinel,
+ *	clamped to 0 here because TH8 spells that case as TH8_NOLEN
+ *	((size_t)-1), which the caller must apply itself.  The
+ *	allocation goes through TH8_ALLOC_MUL so the argc*size product
+ *	is overflow-checked.
+ *
  * Parameters:
  *	interp -- TH8 interpreter used for the allocation.
  *	anTh1  -- source array of TH1 int lengths.
  *	argc   -- element count.
  *
- * Returns:
+ * Results:
  *	A Th8_Malloc'd size_t array the caller must Th8_Free, or
  *	NULL if argc <= 0 or the allocation failed.
  *
@@ -203,12 +227,21 @@ th8FossilIntToSizeT(Th8_Interp *interp, const int *anTh1, int argc)
  *	other values above INT_MAX are clamped to INT_MAX to
  *	avoid truncation on LP64 platforms.
  *
+ * Why / How:
+ *	The inverse of th8FossilIntToSizeT, used when TH8 calls into
+ *	a TH1 command proc: it narrows a size_t length array into a
+ *	freshly allocated int array.  TH8_NOLEN ((size_t)-1) becomes
+ *	TH1's -1 "compute from NUL" sentinel; any other value above
+ *	INT_MAX is clamped to INT_MAX so the narrowing cannot wrap to
+ *	a negative or truncated length on LP64.  Allocation is via
+ *	TH8_ALLOC_MUL for the overflow-checked product.
+ *
  * Parameters:
  *	interp -- TH8 interpreter used for the allocation.
  *	anTh8  -- source array of TH8 size_t lengths.
  *	argc   -- element count.
  *
- * Returns:
+ * Results:
  *	A Th8_Malloc'd int array the caller must Th8_Free, or
  *	NULL if argc <= 0 or the allocation failed.
  *
@@ -276,6 +309,16 @@ typedef struct Th8TrampolineCtx {
  *	copies the TH1 result back into TH8, and translates the
  *	return code.
  *
+ * Why / How:
+ *	One generic wrapper backs every trampolined TH1 command so
+ *	TH8 need not expose TH1's individual static command procs.
+ *	It fetches the process-wide Fossil TH1 interpreter, marshals
+ *	the TH8 size_t lengths down to TH1 int lengths via
+ *	th8FossilSizeTToInt, calls the TH1 proc directly (avoiding a
+ *	serialize/reparse round trip), copies the TH1 result string
+ *	back into the TH8 result, frees the scratch length array, and
+ *	remaps the TH1 return code with th8FromTh1Rc.
+ *
  * Parameters:
  *	interp -- calling TH8 interpreter.
  *	ctx    -- Th8TrampolineCtx holding the TH1 proc + ctx.
@@ -283,7 +326,7 @@ typedef struct Th8TrampolineCtx {
  *	argv   -- argument values.
  *	argl   -- argument lengths (TH8 size_t form).
  *
- * Returns:
+ * Results:
  *	The TH1 proc's return code translated to TH8, or
  *	TH8_ERROR if TH1 is unavailable or marshalling failed.
  *
@@ -351,11 +394,18 @@ th8FossilTrampoline(
  *	by TH8 when a command created by
  *	th8FossilRegisterTrampoline is deleted.
  *
+ * Why / How:
+ *	Registered as the delete callback when
+ *	th8FossilRegisterTrampoline creates a trampoline command, so
+ *	the Th8TrampolineCtx allocated at registration is released
+ *	exactly when TH8 tears the command down.  A one-line Th8_Free
+ *	wrapper matching the delete-proc signature.
+ *
  * Parameters:
  *	interp -- owning TH8 interpreter.
  *	ctx    -- Th8TrampolineCtx to release.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -382,6 +432,16 @@ th8FossilTrampolineDel(Th8_Interp *interp, void *ctx)
  *	arguments, evaluates it in the TH1 interpreter, copies
  *	the result back to TH8, and translates the return code.
  *
+ * Why / How:
+ *	An alternative to th8FossilTrampoline that dispatches by TH1
+ *	command name rather than by a captured proc pointer: the name
+ *	arrives as the context pointer (a static-table string, valid
+ *	for the process lifetime).  It list-quotes the name plus the
+ *	TH8 arguments into a TH1 script with Th8_ListAppend, runs it
+ *	with Th_Eval, copies the result back, and translates the
+ *	return code.  Building from the stored name (not argv[0])
+ *	keeps the call correct even if the TH8 command was renamed.
+ *
  * Parameters:
  *	interp -- calling TH8 interpreter.
  *	ctx    -- the TH1 command name (static string).
@@ -389,7 +449,7 @@ th8FossilTrampolineDel(Th8_Interp *interp, void *ctx)
  *	argv   -- argument values.
  *	argl   -- argument lengths.
  *
- * Returns:
+ * Results:
  *	The TH1 evaluation's return code translated to TH8, or
  *	TH8_ERROR if the TH1 interpreter is unavailable.
  *
@@ -461,6 +521,13 @@ th8FossilTh1Dispatch(
  *	TH1 script in the Fossil TH1 interpreter and return its
  *	result to TH8.
  *
+ * Why / How:
+ *	Backs the TH8 `th1Eval` command.  After checking arity and
+ *	that the Fossil TH1 interpreter exists, it hands argv[1]
+ *	straight to Th_Eval (no quoting, since the argument already
+ *	IS a TH1 script), copies the TH1 result back into TH8, and
+ *	remaps the return code with th8FromTh1Rc.
+ *
  * Parameters:
  *	interp -- calling TH8 interpreter.
  *	ctx    -- unused command context.
@@ -468,7 +535,7 @@ th8FossilTh1Dispatch(
  *	argv   -- argv[1] is the TH1 script.
  *	argl   -- argument lengths.
  *
- * Returns:
+ * Results:
  *	The TH1 evaluation's return code translated to TH8;
  *	TH8_ERROR if TH1 is unavailable, or a wrong-num-args
  *	error if argc != 2.
@@ -524,6 +591,15 @@ th8Th1EvalCmd(
  *	evaluate it in the Fossil TH1 interpreter, and return the
  *	result to TH8.
  *
+ * Why / How:
+ *	Backs the TH8 `th1Invoke` command.  Unlike th1Eval it treats
+ *	its arguments as a command plus operands rather than as
+ *	script text: Th8_ListAppend list-quotes each word so one TH8
+ *	argument maps to exactly one TH1 word (spaces and special
+ *	characters survive), then Th_Eval runs the assembled command
+ *	in the Fossil TH1 interpreter.  The result is copied back and
+ *	the return code translated.
+ *
  * Parameters:
  *	interp -- calling TH8 interpreter.
  *	ctx    -- unused command context.
@@ -531,7 +607,7 @@ th8Th1EvalCmd(
  *	argv   -- argv[1] is the command, argv[2..] its args.
  *	argl   -- argument lengths.
  *
- * Returns:
+ * Results:
  *	The TH1 evaluation's return code translated to TH8;
  *	TH8_ERROR if TH1 is unavailable, or a wrong-num-args
  *	error if argc < 2.
@@ -602,6 +678,15 @@ th8Th1InvokeCmd(
  *	Uses the TH1 command signature (int *argl), not the TH8
  *	one.
  *
+ * Why / How:
+ *	The mirror of th8Th1EvalCmd for the opposite direction:
+ *	registered into the Fossil TH1 interpreter as `th8Eval`, so
+ *	it uses the TH1 command signature (int *argl).  It evaluates
+ *	argv[1] in the module-static th8FossilInterp via Th8_Eval
+ *	(converting the possibly-negative TH1 length to a size_t),
+ *	copies the TH8 result back into TH1, and remaps the code with
+ *	th1FromTh8Rc.
+ *
  * Parameters:
  *	th1Interp -- calling TH1 interpreter.
  *	ctx       -- unused command context.
@@ -609,7 +694,7 @@ th8Th1InvokeCmd(
  *	argv      -- argv[1] is the TH8 script.
  *	argl      -- TH1 int argument lengths.
  *
- * Returns:
+ * Results:
  *	The TH8 evaluation's return code translated to TH1;
  *	TH_ERROR if TH8 is unavailable, or a wrong-num-args
  *	error if argc != 2.
@@ -666,6 +751,14 @@ th1Th8EvalCmd(
  *	the arguments into a TH8 invocation, evaluate it in the
  *	Fossil TH8 interpreter, and return the result to TH1.
  *
+ * Why / How:
+ *	The TH1-side counterpart to th8Th1InvokeCmd: registered into
+ *	the Fossil TH1 interpreter as `th8Invoke`.  It list-quotes
+ *	each TH1 argument (converting the int lengths to size_t) with
+ *	Th8_ListAppend so one TH1 word becomes one TH8 word, runs the
+ *	assembled command in th8FossilInterp via Th8_Eval, copies the
+ *	result back into TH1, and translates the return code.
+ *
  * Parameters:
  *	th1Interp -- calling TH1 interpreter.
  *	ctx       -- unused command context.
@@ -673,7 +766,7 @@ th1Th8EvalCmd(
  *	argv      -- argv[1] is the command, argv[2..] its args.
  *	argl      -- TH1 int argument lengths.
  *
- * Returns:
+ * Results:
  *	The TH8 evaluation's return code translated to TH1;
  *	TH_ERROR if TH8 is unavailable, or a wrong-num-args
  *	error if argc < 2.
@@ -748,13 +841,23 @@ th1Th8InvokeCmd(
  *	and creates a TH8 command bound to th8FossilTrampoline,
  *	with th8FossilTrampolineDel as its destructor.
  *
+ * Why / How:
+ *	Wires one Fossil TH1 command into TH8.  It heap-allocates a
+ *	Th8TrampolineCtx capturing the TH1 proc pointer and its
+ *	context (the generic th8FossilTrampoline wrapper takes a
+ *	single ctx, so the pair must be boxed), then creates a TH8
+ *	command bound to th8FossilTrampoline with that box and
+ *	th8FossilTrampolineDel as the destructor that frees it.  A
+ *	failed box allocation is swallowed silently, leaving the
+ *	command simply unregistered.
+ *
  * Parameters:
  *	interp   -- TH8 interpreter to register into.
  *	zName    -- command name to create in TH8.
  *	xTh1Proc -- the TH1 command implementation to wrap.
  *	pTh1Ctx  -- context pointer passed to the TH1 proc.
  *
- * Returns:
+ * Results:
  *	None.  Silently returns if the context allocation fails.
  *
  * Side effects:
@@ -794,10 +897,16 @@ th8FossilRegisterTrampoline(
  *	hot-path and used by call sites that want to defer
  *	initialisation until first actual use.
  *
+ * Why / How:
+ *	A trivial predicate over the module-static th8FossilInterp
+ *	pointer, letting Fossil call sites cheaply decide whether the
+ *	shared interpreter has been built yet and defer the heavier
+ *	Th8_InitializeForFossil until first real use.
+ *
  * Parameters:
  *	(none)
  *
- * Returns:
+ * Results:
  *	1 if `th8FossilInterp` is non-NULL; 0 otherwise.
  *
  * Side effects:
@@ -823,10 +932,17 @@ Th8_FossilReady(void)
  *	`Th8_InitializeForFossil` / `Th8_FinalizeForFossil`
  *	lifecycle.
  *
+ * Why / How:
+ *	A plain accessor that returns the module-static
+ *	th8FossilInterp so other translation units can share the one
+ *	Fossil interpreter.  It is a borrow, not a transfer: ownership
+ *	stays with the Th8_InitializeForFossil / Th8_FinalizeForFossil
+ *	lifecycle, so callers must never delete the returned interp.
+ *
  * Parameters:
  *	(none)
  *
- * Returns:
+ * Results:
  *	The Fossil-shared `Th8_Interp` (may be NULL if
  *	initialisation has not yet happened or has been
  *	finalised).
@@ -855,12 +971,20 @@ Th8_GetFossilInterp(void)
  *	(out of memory, missing platform pieces) and surfaces
  *	`TH8_ERROR` rather than dereferencing.
  *
+ * Why / How:
+ *	A one-call convenience wrapper for evaluating TH8 from Fossil
+ *	C code.  If the shared interpreter does not exist yet it
+ *	lazily builds it with TH8_FOSSIL_DEFAULT flags; a second NULL
+ *	check then catches an initialisation failure (OOM, missing
+ *	platform pieces) and returns TH8_ERROR rather than
+ *	dereferencing a NULL interp before delegating to Th8_Eval.
+ *
  * Parameters:
  *	zScript -- script body.
  *	nScript -- script length in bytes (`TH8_NOLEN` to
  *		auto-detect via `strlen`).
  *
- * Returns:
+ * Results:
  *	Whatever `Th8_Eval` returns (`TH8_OK`, `TH8_ERROR`,
  *	`TH8_RETURN`, `TH8_BREAK`, `TH8_CONTINUE`).
  *	`TH8_ERROR` if the lazy initialisation failed.
@@ -894,11 +1018,26 @@ Th8_FossilEval(const char *zScript, size_t nScript)
  *	trampoline Fossil's TH1 commands into TH8, and run the
  *	optional "th8-setup" script.
  *
+ * Why / How:
+ *	The five-step bring-up of the bridge, each step guarded so
+ *	repeat calls are idempotent unless FORCE_RESET/FORCE_SETUP
+ *	ask otherwise.  (1) On first call or FORCE_RESET it builds a
+ *	platform by merging the OS layer (Win32/macOS+POSIX/POSIX)
+ *	with libc, creates the interp, and registers the TH8
+ *	language -- backing out to NULL if either fails.  (2) It adds
+ *	the th1Eval/th1Invoke bridge commands to TH8 and (3) the
+ *	th8Eval/th8Invoke commands to the TH1 interpreter when one
+ *	exists.  (4) Unless TH8_FOSSIL_NO_TRAMPOLINE is set it walks
+ *	Th_GetFossilCommands() and trampolines each TH1 command that
+ *	TH8 does not already provide natively.  (5) Finally it runs
+ *	the "th8-setup" db setting, logging (not aborting on) an
+ *	error.
+ *
  * Parameters:
  *	flags -- bit mask of TH8_FOSSIL_* options (FORCE_RESET,
  *		FORCE_SETUP, NO_TRAMPOLINE, ...).
  *
- * Returns:
+ * Results:
  *	None.  Returns early (leaving th8FossilInterp NULL) if
  *	interpreter creation fails.
  *
@@ -946,10 +1085,16 @@ Th8_InitializeForFossil(unsigned int flags)
 	if (!th8FossilInterp) return;
 
 	/*
-	 * Register the standard TH8 language commands.
+	 * Register the standard TH8 language commands.  On a real
+	 * registration failure (TH8K-006) leave th8FossilInterp NULL so
+	 * callers see initialization did not complete.
 	 */
 
-	Th8_RegisterLanguage(th8FossilInterp);
+	if (Th8_RegisterLanguage(th8FossilInterp) != TH8_OK) {
+	    Th8_DeleteInterp(th8FossilInterp);
+	    th8FossilInterp = 0;
+	    return;
+	}
 
 	/*
 	 * Enable binary loading for extensions and BigInt support.
@@ -1084,10 +1229,17 @@ Th8_InitializeForFossil(unsigned int flags)
  *	`Th8_InitializeForFossil` rebuilds from scratch.
  *	Safe to call when no interpreter exists.
  *
+ * Why / How:
+ *	Deletes the shared interp through Th8_DeleteInterp (which
+ *	frees every per-interp resource) and then zeroes the
+ *	module-static pointer so a later Th8_InitializeForFossil
+ *	rebuilds from scratch.  The leading NULL check makes it safe
+ *	to call when no interpreter was ever created.
+ *
  * Parameters:
  *	(none)
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:

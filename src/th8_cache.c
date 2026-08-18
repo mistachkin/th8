@@ -537,6 +537,20 @@ th8ClearCache(Th8_Interp *interp) /* Interpreter whose cache to clear. */
  *	of the input.  The caller receives a borrowed Th8_Value* whose
  *	union fields can be populated with type-specific cached data.
  *
+ * Results:
+ *	A borrowed (cache-owned) pointer to the Th8_Value for the key --
+ *	the existing entry on a hit, or a freshly created entry on a
+ *	miss or collision eviction.  NULL on a NULL interp/string or on
+ *	an out-of-memory failure (and, in fault-injection builds, when
+ *	the lookup-failure hook is armed for this cacheType).
+ *
+ * Side effects:
+ *	Acquires the cache mutex.  May allocate a new cache entry (with
+ *	a cache-owned copy of the input string) and insert it into the
+ *	per-interpreter cache hash table, and may evict/free a colliding
+ *	entry.  In fault-injection builds, may update the fault hook's
+ *	skip/fire counters.
+ *
  *----------------------------------------------------------------------
  */
 

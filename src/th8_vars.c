@@ -165,7 +165,16 @@ Th8_DeclareSystemVar(Th8_Interp *interp, const char *zName, size_t nName)
 	if (!interp->paSystemVar) return TH8_ERROR;
     }
     pEntry = Th8_HashFind(interp, interp->paSystemVar, zName, nName, 1);
-    if (pEntry) pEntry->pData = (void *)(size_t)1;
+    if (!pEntry) {
+	/* create=1 hash insert can fail on OOM (Th8_HashFind returns NULL).
+	 * The old code returned TH8_OK regardless, so a transient allocation
+	 * failure left the variable NOT marked as a system var (writable from
+	 * scripts) while reporting success -- e.g. leaving ::th8_security
+	 * script-writable after Th8_RegisterLanguage returned TH8_OK
+	 * (TH8K-006 / Bug 85 class). */
+	return TH8_ERROR;
+    }
+    pEntry->pData = (void *)(size_t)1;
     return TH8_OK;
 }
 
@@ -1175,6 +1184,16 @@ typedef struct {
  *	restore is a no-op in that case.  All allocations are
  *	rolled back on any intermediate failure.
  *
+ * Why / How:
+ *	Security-sensitive operations often need to mutate a system
+ *	array transiently and then put it back exactly as it was;
+ *	this captures a deep, owned copy so the restore is independent
+ *	of any later change to the live array.  It enumerates the
+ *	element names (Th8_ListAppendArray + Th8_SplitList), reads and
+ *	copies each element's value, and packs them into an opaque
+ *	Th8_SysVarState.  Every partial allocation is rolled back on
+ *	failure so the caller never receives a half-built handle.
+ *
  * Parameters:
  *	interp  -- live interpreter.
  *	zArr    -- array name (e.g. `"::th8_security"`).
@@ -1183,7 +1202,7 @@ typedef struct {
  *		array was empty), suitable for
  *		`Th8_RestoreSystemVar`.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` on success; `TH8_ERROR` on allocation
  *	failure or element-read failure (interpreter result:
  *	diagnostic).
@@ -1658,6 +1677,9 @@ Th8_ExistsArrayVar(
  *	Th8_ExistsArrayVar to distinguish "epoch 0 on a fresh
  *	array" from "no such array").
  *
+ * Side effects:
+ *	None.  Only reads the variable's stored epoch counter.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1718,6 +1740,9 @@ th8GetArrayEpoch(
  *	pHash allocation), or -1 if the variable does not exist
  *	or has no element hash.
  *
+ * Side effects:
+ *	None.  Only reads the variable's stored generation counter.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1773,6 +1798,10 @@ th8GetArrayGeneration(
  * Results:
  *	The element-hash pointer, or NULL if the variable does
  *	not exist or is not an array.
+ *
+ * Side effects:
+ *	None.  Returns a borrowed pointer to the array's existing
+ *	element hash; the caller must not free it.
  *
  *----------------------------------------------------------------------
  */

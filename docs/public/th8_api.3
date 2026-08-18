@@ -334,8 +334,43 @@ Set the maximum result/string size (0\ =\ use
 .BI "void Th8_SetAllocLimit(Th8_Interp *" interp ", size_t " nLimit ");"
 Set the per-interpreter memory ceiling (0\ =\ unlimited).
 .TP
+.BI "void Th8_SetSafeLimits(Th8_Interp *" interp ");"
+Apply the recommended hardened resource profile
+.RB ( TH8_SAFE_ALLOC_LIMIT ", " TH8_SAFE_STEP_LIMIT ", " TH8_SAFE_RESULT_LIMIT )
+for evaluating untrusted script in one call.  A fresh interpreter has
+no allocation or step limit by default; call this (or the individual
+setters) before running untrusted script.
+.TP
+.BI "void Th8_SetDeadline(Th8_Interp *" interp ", th8_int64_t " nDeadlineUs ");"
+Set an absolute monotonic-microsecond deadline (same timebase
+as
+.BR Th8_GetTimeUs ),
+or 0 to remove it.  This is a
+.I cooperative
+checkpoint deadline, not a hard real-time bound: it is sampled at
+periodic step boundaries and stops evaluation with "time limit
+exceeded" at the first checkpoint at or after the deadline, so a single
+long work unit or a blocking platform callback can overshoot until the
+next checkpoint.  A hard wall-clock guarantee requires an out-of-process
+supervisor or other preemptive containment.
+.TP
+.BI "int Th8_SetTimeLimitMs(Th8_Interp *" interp ", th8_int64_t " nMs ");"
+Arm the cooperative checkpoint deadline
+.I nMs
+milliseconds from now (a relative-duration convenience over
+.BR Th8_SetDeadline ,
+with the same cooperative-overshoot semantics);
+0 or less clears the deadline.
+.TP
+.BI "th8_int64_t Th8_GetDeadline(Th8_Interp *" interp ");"
+Return the absolute monotonic-microsecond deadline (0 = none).
+.TP
 .BI "size_t Th8_GetAllocBytes(Th8_Interp *" interp ");"
 Returns total bytes allocated by this interpreter.
+.TP
+.BI "size_t Th8_GetAllocPeak(Th8_Interp *" interp ");"
+Returns the allocation counter's high-water mark (peak transient bytes;
+persists after frees).
 .TP
 .BI "void Th8_SetOverflowCheck(Th8_Interp *" interp ", int " bEnable ");"
 Enable (1) or disable (0) integer overflow detection.
@@ -755,15 +790,45 @@ Call
 .I xCallback
 for each entry.
 .TP
-.BI "void Th8_HashIterateOrdered(Th8_Interp *" interp ", Th8_Hash *" pHash ", Th8_HashIterProc " xProc ", void *" pCtx ");"
+.BI "int Th8_HashIterateOrdered(Th8_Interp *" interp ", Th8_Hash *" pHash ", Th8_HashIterProc " xProc ", void *" pCtx ");"
 Iterate hash entries in insertion order
 (complementing
 .BR Th8_HashIterate ,
 which visits entries in undefined/hash-bucket order).
+Returns
+.B TH8_OK
+on success, or
+.B TH8_ERROR
+if the entries cannot be collected (allocation failure) or the
+operation is canceled
+.RB ( Th8_Ready )
+during collection or iteration.
 .SS "Language Registration"
 .TP
 .BI "int Th8_RegisterLanguage(Th8_Interp *" interp ");"
 Register all built-in commands.
+.TP
+.BI "int Th8_RegisterSubsets(Th8_Interp *" interp ", const char *const *" azNames ", int " nNames ");"
+Register only the named command SUBSETS (an allowlist) instead of the whole
+language, so an embedder can withhold Turing-completeness (the
+.BR looping / procedures
+subsets) and grant untrusted scripts a safe slice.  A subset name is a built-in
+plugin (membership = its command table + ensemble sub-commands) or a curated
+subset (individual COMMAND / FUNCTION / SUBCOMMAND members).  Additive,
+idempotent, order-independent; an unknown name registers nothing and returns
+.BR TH8_ERROR .
+A later OOM leaves a partial language and the caller must discard the
+interpreter.
+.TP
+.BI "int Th8_ListSubsets(Th8_Interp *" interp ");"
+Set the result to the list of subset names valid for
+.BR Th8_RegisterSubsets .
+.TP
+.BI "int Th8_GetSubsetMembers(Th8_Interp *" interp ", const char *" zName ");"
+Set the result to the resolved members of one subset -- an audit of exactly what
+it grants; resolving also validates the manifest.  Returns
+.B TH8_ERROR
+for an unknown subset name.
 .TP
 .BI "int Th8_RegisterRegex(Th8_Interp *" interp ");"
 Register
@@ -1190,7 +1255,7 @@ if a bare
 is found.
 .TP
 .BI "int Th8_ResetSecurityArray(Th8_Interp *" interp ");"
-Set all elements of the
+Set all seven elements of the
 .B ::th8_security
 array to the string
 .BR none .
@@ -1198,7 +1263,14 @@ This is typically called before script signature verification
 to ensure a clean baseline.
 Returns
 .B TH8_OK
-on success.
+when every element was reset, or
+.B TH8_ERROR
+on the first allocation failure.
+On
+.B TH8_ERROR
+the array may be left partially reset, so the caller MUST treat the
+security state as indeterminate and abort the current evaluation rather
+than expose the partial array to a script.
 .TP
 .BI "void Th8_NotifyDeleteInterp(Th8_Interp *" interp ", void *" pCtx ");"
 Invoke the platform's
@@ -1852,12 +1924,56 @@ Return the per-callback context override through
 or the platform default if not set.
 .SS "Ensemble Support"
 .TP
-.BI "int Th8_CallSubCommand(Th8_Interp *" interp ", void *" ctx ", int " argc ", const char **" argv ", size_t *" argl ", const Th8_SubCommand *" aSub ");"
-Dispatch to a sub-command by matching
+.BI "int Th8_CreateSubCommand(Th8_Interp *" interp ", const char *" zCmdName ", const char *" zSubName ", Th8_CommandProc " xProc ", void *" pContext ", void (*" xDel ")(Th8_Interp*, void*), th8_uint64_t *" pToken ");"
+Register (or replace) a sub-command
+.I zSubName
+of the command
+.IR zCmdName .
+The first sub-command gives the command a sub-command overlay: the core
+dispatches
+.RI \(dq cmd " " sub " ...\(dq"
+to the sub-command's
+.I xProc
+(which receives the full
+.IR argv )
+when
 .I argv[1]
-against the
-.I aSub
-table.  Reports an error listing valid sub-commands on mismatch.
+names a registered sub-command; anything unmatched falls back to the command's
+own handler.  A pure ensemble (a command with a NULL handler) instead reports
+the standard \(dqmust be ...\(dq error.  So adding a sub-command to a plain
+command does not shadow its ordinary use \(em only
+.RI \(dq cmd " <registered-sub> ...\(dq"
+is intercepted.  The operation is transactional: on failure nothing is
+registered.  A unique token is written through
+.I pToken
+when it is non-NULL, for
+.B Th8_DeleteSubCommand
+and
+.BR Th8_GetSubCommandInfo .
+.TP
+.BI "int Th8_GetSubCommandInfo(Th8_Interp *" interp ", const char *" zCmdName ", size_t " nCmd ", const char *" zSubName ", size_t " nSub ", Th8_CommandProc *" pxProc ", void **" ppContext ", void (**" pxDel ")(Th8_Interp*, void*), th8_uint64_t *" pToken ");"
+Query a sub-command's current binding, filling any of the OUT parameters (all
+may be NULL) with its
+.IR xProc ,
+.IR pContext ,
+.IR xDel ,
+and token.  The captured
+.I xProc
+and
+.I pContext
+are directly callable, supporting save-and-restore around a temporary
+replacement and sub-classing (a wrapper whose context holds the capture and
+calls back into the original for pre-/post-processing).  Returns
+.B TH8_ERROR
+if the command is unknown, is not an ensemble, or has no such sub-command.
+.TP
+.BI "int Th8_DeleteSubCommand(Th8_Interp *" interp ", th8_uint64_t " token ");"
+Delete a sub-command by its
+.IR token .
+Runs the sub-command's
+.IR xDel .
+When the last sub-command of a command is removed, the command reverts to a
+plain command (or a bare ensemble shell if it had no handler).
 .SS "Attribute Flags (Harpy)"
 .TP
 .BI "int Th8_AttrFlagsParse(Th8_Interp *" interp ", const char *" z ", size_t " n ", int " bComplex ", int " bSpace ", Th8_AfMap *" pMap ");"

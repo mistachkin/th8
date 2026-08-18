@@ -109,6 +109,7 @@ join_command(
     if (rc != TH8_OK) return rc;
 
     for (i = 0; i < nCount; i++) {
+	if (Th8_Ready(interp) != TH8_OK) goto oom;
 	if (i > 0) {
 	    TH8_STR_APPEND(interp, &zOut, &nOut, zSep, nSep);
 	}
@@ -367,6 +368,11 @@ lindex_command(
 	    int j;
 
 	    for (j = 0; j < nIdx; j++) {
+		if (Th8_Ready(interp) != TH8_OK) {
+		    Th8_Free(interp, azIdx);
+		    Th8_Free(interp, zCopy);
+		    return TH8_ERROR;
+		}
 		rc = Th8_SplitList(
 		    interp, zList, nList, &azElem, &anElem, &nCount,
 		    TH8_LIST_NONE);
@@ -684,8 +690,121 @@ lrange_command(
     if (iLast >= nCount) iLast = nCount - 1;
 
     for (i = iFirst; i <= iLast && ALWAYS(azElem); i++) {
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_Free(interp, azElem);
+	    return TH8_ERROR;
+	}
 	Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
     }
+    Th8_SetResult(interp, zOut, nOut);
+    Th8_Free(interp, zOut);
+    Th8_Free(interp, azElem);
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * linsert_command --
+ *
+ *	Insert elements into a list before a given index.
+ *
+ *	linsert LIST INDEX ?ELEMENT ...?
+ *
+ * Why / How:
+ *	Implements the Tcl [linsert] command.  Splits the list, then
+ *	builds a new list from three parts: the elements before INDEX,
+ *	the new ELEMENT arguments, and the elements at and after INDEX.
+ *	INDEX uses one-past-the-end semantics -- `end` inserts AFTER the
+ *	last element (append), unlike lindex/lrange where `end` is the
+ *	last element -- so th8ParseIndex is given nCount+1, resolving
+ *	`end` -> nCount and `end-N` -> nCount-N; the result is clamped to
+ *	[0, nCount].
+ *
+ * Results:
+ *	TH8_OK.  Result is the new list with the elements inserted.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+linsert_command(
+    Th8_Interp *interp,
+    void *ctx,
+    int argc,
+    const char **argv,
+    size_t *argl)
+{
+    char **azElem = 0;
+    size_t *anElem = 0;
+    int nCount;
+    int iIndex;
+    char *zOut = 0;
+    size_t nOut = 0;
+    int i;
+    int rc;
+
+    (void)ctx;
+
+    if (argc < 3) {
+	return Th8_WrongNumArgs(interp, "linsert list index ?element ...?");
+    }
+    rc = Th8_SplitList(
+        interp, argv[1], argl[1], &azElem, &anElem, &nCount, TH8_LIST_NONE);
+    if (rc != TH8_OK) return rc;
+
+    /*
+     * `end` must resolve to the append position (nCount), so parse against
+     * nCount+1; numeric indices are unaffected, then clamped below.
+     */
+
+    if (th8ParseIndex(interp, argv[2], argl[2], nCount + 1, &iIndex) !=
+        TH8_OK) {
+	Th8_Free(interp, azElem);
+	return TH8_ERROR;
+    }
+    if (iIndex < 0) iIndex = 0;
+    if (iIndex > nCount) iIndex = nCount;
+
+    /*
+     * Elements before the insertion point.
+     */
+
+    for (i = 0; i < iIndex && ALWAYS(azElem); i++) {
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_Free(interp, azElem);
+	    return TH8_ERROR;
+	}
+	Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
+    }
+
+    /*
+     * Inserted elements (from argv[3] onward).
+     */
+
+    for (i = 3; i < argc; i++) {
+	Th8_ListAppend(interp, &zOut, &nOut, argv[i], argl[i]);
+    }
+
+    /*
+     * Elements at and after the insertion point.
+     */
+
+    for (i = iIndex; i < nCount && ALWAYS(azElem); i++) {
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_Free(interp, azElem);
+	    return TH8_ERROR;
+	}
+	Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
+    }
+
     Th8_SetResult(interp, zOut, nOut);
     Th8_Free(interp, zOut);
     Th8_Free(interp, azElem);
@@ -768,6 +887,11 @@ lreplace_command(
      */
 
     for (i = 0; i < iFirst && ALWAYS(azElem); i++) {
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_Free(interp, azElem);
+	    return TH8_ERROR;
+	}
 	Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
     }
 
@@ -784,6 +908,11 @@ lreplace_command(
      */
 
     for (i = iLast + 1; i < nCount && ALWAYS(azElem); i++) {
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_Free(interp, azElem);
+	    return TH8_ERROR;
+	}
 	Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
     }
 
@@ -1009,7 +1138,8 @@ lsearch_command(
 		    }
 		}
 
-		if (bDecreasing) cmp = -cmp;
+		if (bDecreasing)
+		    cmp = (cmp < 0) - (cmp > 0); /* sign flip; INT_MIN-safe */
 
 		if (cmp == 0) {
 		    found = mid;
@@ -1118,14 +1248,478 @@ lsearch_command(
 }
 
 
+/* TH8_SORT_*, Th8_SortCtx -- declared at top of file. */
+
 /*
- * Sort mode constants and context structure.  The context struct
- * is defined for potential future use with a qsort_r-like interface;
- * the current implementation uses inline comparison within the
- * insertion sort loop instead.
+ *----------------------------------------------------------------------
+ *
+ * th8DictCompare --
+ *
+ *	Dictionary-mode comparison of two strings: case-insensitive,
+ *	with embedded runs of decimal digits compared by numeric
+ *	magnitude rather than lexically.  Used by th8LsortCompare for
+ *	[lsort -dictionary].
+ *
+ * Why / How:
+ *	Digit runs are compared WITHOUT accumulating into a
+ *	fixed-width integer (the previous `num = num*10 + digit`
+ *	overflowed the signed `int` for ordinary long digit strings,
+ *	silently producing wrong orderings, TH8K-017).  Instead each
+ *	run's significant length is found (leading zeros skipped); the
+ *	run with more significant digits is the larger number, and
+ *	equal-length runs are compared lexically.  Non-digit bytes are
+ *	folded to lower case and compared by value.  The scan polls
+ *	`Th8_Ready` periodically so a single comparison of two very
+ *	long strings remains cancellable (TH8K-017, TH8K-009).
+ *
+ * Results:
+ *	The comparison sign (<0, 0, >0).  On a cancellation/readiness
+ *	failure it stops early, writes TH8_ERROR through *pRc, and
+ *	returns 0; otherwise *pRc is TH8_OK.
+ *
+ * Side effects:
+ *	None (readiness check may set the interpreter result).
+ *
+ *----------------------------------------------------------------------
  */
 
-/* TH8_SORT_*, Th8_SortCtx -- declared at top of file. */
+static int
+th8DictCompare(
+    Th8_Interp *interp,
+    const char *zA,
+    size_t nA,
+    const char *zB,
+    size_t nB,
+    int *pRc)
+{
+    size_t ia = 0, ib = 0;
+    int cmp = 0;
+
+    *pRc = TH8_OK;
+    while (ia < nA && ib < nB) {
+	unsigned char ca = (unsigned char)zA[ia];
+	unsigned char cb = (unsigned char)zB[ib];
+	int aIsDigit = (ca >= '0' && ca <= '9');
+	int bIsDigit = (cb >= '0' && cb <= '9');
+
+	/* Bound cancellation latency across a long comparison. */
+	if ((ia & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		*pRc = TH8_ERROR;
+		return 0;
+	    }
+	}
+
+	if (aIsDigit && bIsDigit) {
+	    size_t ea = ia, eb = ib, fa, fb, la, lb;
+
+	    /* Find the end of each decimal run (pollable). */
+	    while (ea < nA && zA[ea] >= '0' && zA[ea] <= '9') {
+		if ((ea & 0xFFF) == 0) {
+		    if (Th8_Ready(interp) != TH8_OK) {
+			*pRc = TH8_ERROR;
+			return 0;
+		    }
+		}
+		ea++;
+	    }
+	    while (eb < nB && zB[eb] >= '0' && zB[eb] <= '9') {
+		if ((eb & 0xFFF) == 0) {
+		    if (Th8_Ready(interp) != TH8_OK) {
+			*pRc = TH8_ERROR;
+			return 0;
+		    }
+		}
+		eb++;
+	    }
+
+	    /* Skip leading zeros to get each run's significant length. */
+	    fa = ia;
+	    while (fa < ea && zA[fa] == '0')
+		fa++;
+	    fb = ib;
+	    while (fb < eb && zB[fb] == '0')
+		fb++;
+	    la = ea - fa;
+	    lb = eb - fb;
+
+	    if (la != lb) {
+		cmp = (la < lb) ? -1 : 1;
+	    } else {
+		while (fa < ea && zA[fa] == zB[fb]) {
+		    fa++;
+		    fb++;
+		}
+		if (fa < ea) {
+		    cmp = ((unsigned char)zA[fa] < (unsigned char)zB[fb]) ? -1
+		                                                          : 1;
+		}
+	    }
+	    ia = ea;
+	    ib = eb;
+	} else {
+	    if (ca >= 'A' && ca <= 'Z') ca += ('a' - 'A');
+	    if (cb >= 'A' && cb <= 'Z') cb += ('a' - 'A');
+	    cmp = (ca > cb) - (ca < cb);
+	    ia++;
+	    ib++;
+	}
+	if (cmp != 0) return cmp;
+    }
+
+    /* Common prefix equal: the shorter string sorts first. */
+    return (nA < nB) ? -1 : (nA > nB);
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8LsortField --
+ *
+ *	Resolve the comparison field for one list element: the element
+ *	itself, or (when -index N was given) its Nth sub-element.
+ *
+ * Why / How:
+ *	When pCtx->iIndex >= 0 the element is parsed as a sub-list via
+ *	Th8_SplitList and the Nth item selected (an out-of-range index
+ *	yields the empty string, matching the prior behaviour).  The
+ *	Th8_SplitList return code is honoured -- a malformed sub-list
+ *	is a hard error, no longer silently ignored (TH8K-017).  On
+ *	success *pazFree receives the sub-list block (or NULL) that the
+ *	caller MUST free after it is done reading *pzField, whose bytes
+ *	point into that block.
+ *
+ * Results:
+ *	TH8_OK with the field, its length, and the free-block out
+ *	parameters set, or TH8_ERROR (with the interpreter result set)
+ *	if the sub-list could not be split.
+ *
+ * Side effects:
+ *	Allocates the sub-list block on the -index path (freed by the
+ *	caller via *pazFree).
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8LsortField(
+    const Th8_SortCtx *pCtx,
+    const char *zElem,
+    size_t nElem,
+    const char **pzField,
+    size_t *pnField,
+    char ***pazFree)
+{
+    Th8_Interp *interp = pCtx->interp;
+    char **azSub = 0;
+    size_t *anSub = 0;
+    int nSub = 0;
+
+    *pazFree = 0;
+    if (pCtx->iIndex < 0) {
+	*pzField = zElem;
+	*pnField = TH8_LEN(nElem);
+	return TH8_OK;
+    }
+    if (Th8_SplitList(
+            interp, zElem, TH8_LEN(nElem), &azSub, &anSub, &nSub,
+            TH8_LIST_NONE) != TH8_OK) {
+	return TH8_ERROR;
+    }
+    *pazFree = azSub;
+    /* ALWAYS: an in-range index (iIndex < nSub) implies nSub >= 1, so
+     * Th8_SplitList returned a non-NULL block -- the guard is defensive
+     * and never false when reached, so wrap it to keep the always-true
+     * arm out of the MC/DC denominator. */
+    if (pCtx->iIndex < nSub && ALWAYS(azSub)) {
+	*pzField = azSub[pCtx->iIndex];
+	*pnField = TH8_LEN(anSub[pCtx->iIndex]);
+    } else {
+	*pzField = "";
+	*pnField = 0;
+    }
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8LsortCompare --
+ *
+ *	Compare two whole list elements per an [lsort] sort context,
+ *	writing the (direction-adjusted) comparison sign to *pCmp.
+ *
+ * Why / How:
+ *	Resolves each element's comparison field via th8LsortField
+ *	(honouring -index), then compares by the selected mode
+ *	(-ascii, -integer, -real, -dictionary, or -command).  All
+ *	sub-list blocks allocated for -index are freed on EVERY exit
+ *	path, including the conversion- and evaluation-error paths that
+ *	previously leaked them (TH8K-017).  The -decreasing sign flip
+ *	uses `(cmp<0)-(cmp>0)`, which is safe even when a -command
+ *	comparator returns INT_MIN (plain negation would overflow,
+ *	TH8K-017).
+ *
+ * Results:
+ *	TH8_OK with *pCmp set, or TH8_ERROR (interpreter result set) on
+ *	a bad integer/real element, a failed -command evaluation, a
+ *	non-integer comparator result, a malformed -index sub-list, or
+ *	a cancellation during a -dictionary scan.
+ *
+ * Side effects:
+ *	In -command mode evaluates the comparator script (which may
+ *	have arbitrary side effects).
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8LsortCompare(
+    const Th8_SortCtx *pCtx,
+    const char *zElemA,
+    size_t nElemA,
+    const char *zElemB,
+    size_t nElemB,
+    int *pCmp)
+{
+    Th8_Interp *interp = pCtx->interp;
+    const char *zA, *zB;
+    size_t nA, nB;
+    char **azFreeA = 0, **azFreeB = 0;
+    int cmp = 0;
+    int rc = TH8_OK;
+
+    if (th8LsortField(pCtx, zElemA, nElemA, &zA, &nA, &azFreeA) != TH8_OK) {
+	return TH8_ERROR;
+    }
+    if (th8LsortField(pCtx, zElemB, nElemB, &zB, &nB, &azFreeB) != TH8_OK) {
+	Th8_Free(interp, azFreeA);
+	return TH8_ERROR;
+    }
+
+    if (pCtx->eMode == TH8_SORT_INTEGER) {
+	int va, vb;
+
+	if (Th8_ToInt(interp, zA, nA, &va) != TH8_OK ||
+	    Th8_ToInt(interp, zB, nB, &vb) != TH8_OK) {
+	    rc = TH8_ERROR;
+	} else {
+	    cmp = (va > vb) - (va < vb);
+	}
+    } else if (pCtx->eMode == TH8_SORT_REAL) {
+	double ra, rb;
+
+	if (Th8_ToDouble(interp, zA, nA, &ra) != TH8_OK ||
+	    Th8_ToDouble(interp, zB, nB, &rb) != TH8_OK) {
+	    rc = TH8_ERROR;
+	} else {
+	    cmp = (ra > rb) - (ra < rb);
+	}
+    } else if (pCtx->eMode == TH8_SORT_COMMAND) {
+	char *zEval = 0;
+	size_t nEval = 0;
+	int iResult = 0;
+
+	/*
+	 * Build "script a b" and evaluate; the result is the sign.  Each
+	 * append is checked in its own single-condition branch (an
+	 * else-if ladder) rather than one compound `||`, so the
+	 * OOM-only failure arms stay out of the MC/DC denominator.
+	 */
+	if (Th8_StringAppend(
+	        interp, &zEval, &nEval, pCtx->zCommand, pCtx->nCommand) !=
+	    TH8_OK) {
+	    rc = TH8_ERROR;
+	} else if (
+	    Th8_StringAppend(interp, &zEval, &nEval, " ", 1) != TH8_OK) {
+	    rc = TH8_ERROR;
+	} else if (Th8_ListAppend(interp, &zEval, &nEval, zA, nA) != TH8_OK) {
+	    rc = TH8_ERROR;
+	} else if (
+	    Th8_StringAppend(interp, &zEval, &nEval, " ", 1) != TH8_OK) {
+	    rc = TH8_ERROR;
+	} else if (Th8_ListAppend(interp, &zEval, &nEval, zB, nB) != TH8_OK) {
+	    rc = TH8_ERROR;
+	} else {
+	    rc = Th8_Eval(interp, 0, zEval, nEval, NULL, 0);
+	    if (rc == TH8_OK) {
+		size_t nRes;
+		const char *zRes = Th8_GetResult(interp, &nRes);
+
+		if (Th8_ToInt(interp, zRes, nRes, &iResult) != TH8_OK) {
+		    rc = TH8_ERROR;
+		} else {
+		    cmp = iResult;
+		}
+	    }
+	}
+	Th8_Free(interp, zEval);
+    } else if (pCtx->eMode == TH8_SORT_DICTIONARY) {
+	int dictRc = TH8_OK;
+
+	cmp = th8DictCompare(interp, zA, nA, zB, nB, &dictRc);
+	if (dictRc != TH8_OK) rc = TH8_ERROR;
+    } else {
+	size_t nMin = nA < nB ? nA : nB;
+
+	cmp = Th8_Memcmp(interp, zA, zB, nMin);
+	if (cmp == 0) {
+	    cmp = (nA < nB) ? -1 : (nA > nB);
+	}
+    }
+
+    Th8_Free(interp, azFreeA);
+    Th8_Free(interp, azFreeB);
+
+    if (rc == TH8_OK && pCtx->bDecreasing) {
+	cmp = (cmp < 0) - (cmp > 0); /* INT_MIN-safe sign flip */
+    }
+    *pCmp = cmp;
+    return rc;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8LsortMergeSort --
+ *
+ *	Sort parallel element/length arrays in place using a stable
+ *	bottom-up merge sort driven by th8LsortCompare.
+ *
+ * Why / How:
+ *	Replaces the previous O(n^2) insertion sort (unreasonable for
+ *	the one-million-element list ceiling, TH8K-017) with an
+ *	O(n log n) stable merge.  Stability -- required by [lsort]
+ *	(equal-key elements keep input order) -- is preserved by taking
+ *	the left run on ties (`cmp <= 0`).  A readiness check runs
+ *	before each comparison so a large sort stays cancellable, and
+ *	any comparison error (bad element, failed -command, cancelled
+ *	scan) aborts the whole sort.
+ *
+ * Results:
+ *	TH8_OK on success (arrays sorted in place), or TH8_ERROR if the
+ *	scratch arrays cannot be allocated, a comparison fails, or a
+ *	readiness check fires (interpreter result set in the latter
+ *	cases).
+ *
+ * Side effects:
+ *	Allocates and frees two scratch arrays of nCount entries.  May
+ *	evaluate -command comparator scripts.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8LsortMergeSort(const Th8_SortCtx *pCtx, char **az, size_t *an, int nCount)
+{
+    Th8_Interp *interp = pCtx->interp;
+    char **azTmp;
+    size_t *anTmp;
+    int width;
+    int rc = TH8_OK;
+
+    if (nCount < 2) return TH8_OK;
+
+    azTmp = (char **)TH8_ALLOC_MUL(interp, (size_t)nCount, sizeof(char *));
+    if (!azTmp) return TH8_ERROR;
+    anTmp = (size_t *)TH8_ALLOC_MUL(interp, (size_t)nCount, sizeof(size_t));
+    if (!anTmp) {
+	Th8_Free(interp, azTmp);
+	return TH8_ERROR;
+    }
+
+    for (width = 1; width < nCount; width *= 2) {
+	int iLeft;
+
+	for (iLeft = 0; iLeft < nCount; iLeft += 2 * width) {
+	    int iMid = iLeft + width;
+	    int iEnd = iLeft + 2 * width;
+	    int i, j, k;
+
+	    if (iMid > nCount) iMid = nCount;
+	    if (iEnd > nCount) iEnd = nCount;
+	    i = iLeft;
+	    j = iMid;
+	    k = iLeft;
+
+	    while (i < iMid && j < iEnd) {
+		int cmp = 0;
+
+		if (Th8_Ready(interp) != TH8_OK) {
+		    rc = TH8_ERROR;
+		    goto done;
+		}
+		if (th8LsortCompare(pCtx, az[i], an[i], az[j], an[j], &cmp) !=
+		    TH8_OK) {
+		    rc = TH8_ERROR;
+		    goto done;
+		}
+		if (cmp <= 0) { /* stable: take left on tie */
+		    azTmp[k] = az[i];
+		    anTmp[k] = an[i];
+		    i++;
+		} else {
+		    azTmp[k] = az[j];
+		    anTmp[k] = an[j];
+		    j++;
+		}
+		k++;
+	    }
+	    while (i < iMid) {
+		/* Poll the leftover-copy tail too (TH8K-009): the merge loop
+		 * above polls per comparison, but a run that is already ordered
+		 * drains here without any comparison.  Nested single-condition
+		 * ifs keep this out of a compound MC/DC decision; 0xFFF matches
+		 * the documented 4096-iteration maximum interval. */
+		if ((k & 0xFFF) == 0) {
+		    if (Th8_Ready(interp) != TH8_OK) {
+			rc = TH8_ERROR;
+			goto done;
+		    }
+		}
+		azTmp[k] = az[i];
+		anTmp[k] = an[i];
+		i++;
+		k++;
+	    }
+	    while (j < iEnd) {
+		if ((k & 0xFFF) == 0) {
+		    if (Th8_Ready(interp) != TH8_OK) {
+			rc = TH8_ERROR;
+			goto done;
+		    }
+		}
+		azTmp[k] = az[j];
+		anTmp[k] = an[j];
+		j++;
+		k++;
+	    }
+	}
+
+	for (iLeft = 0; iLeft < nCount; iLeft++) {
+	    /* The copy-back is a full O(nCount) pass every width doubling --
+	     * ~1M unpolled iterations at the list ceiling without this poll
+	     * (TH8K-009). */
+	    if ((iLeft & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) {
+		    rc = TH8_ERROR;
+		    goto done;
+		}
+	    }
+	    az[iLeft] = azTmp[iLeft];
+	    an[iLeft] = anTmp[iLeft];
+	}
+    }
+
+done:
+    Th8_Free(interp, azTmp);
+    Th8_Free(interp, anTmp);
+    return rc;
+}
+
 
 /*
  *----------------------------------------------------------------------
@@ -1141,16 +1735,19 @@ lsearch_command(
  *	-unique.
  *
  * Why / How:
- *	Implements the Tcl [lsort] command.  Uses a stable insertion
- *	sort (O(n^2) but correct and portable without qsort_r).
- *	Supports five comparison modes and optional sub-element
- *	indexing via -index.  -command mode evaluates a comparison
- *	script for each pair.  Calls Th8_Ready per comparison for
- *	cancellation.  -unique removes adjacent duplicates after
- *	sorting.
+ *	Implements the Tcl [lsort] command.  Parses the options into a
+ *	Th8_SortCtx, then sorts with a stable O(n log n) merge sort
+ *	(th8LsortMergeSort) whose comparator (th8LsortCompare) handles
+ *	all five comparison modes, optional -index sub-element
+ *	extraction, and the -command script evaluation.  A readiness
+ *	check runs before each comparison for cancellation.  -unique
+ *	removes adjacent duplicates after sorting.
  *
  * Results:
- *	TH8_OK.  Result is the sorted list.
+ *	TH8_OK with the sorted list as the result, or TH8_ERROR if the
+ *	list or a sub-element cannot be parsed, an element cannot be
+ *	converted for the chosen mode, a -command evaluation fails, or
+ *	the sort/result build is cancelled or runs out of memory.
  *
  * Side effects:
  *	May evaluate comparison scripts in -command mode.
@@ -1175,15 +1772,12 @@ lsort_command(
     int iArg = 1;
     char *zOut = 0;
     size_t nOut = 0;
-    int i, j;
+    int i;
     int rc;
     const char *zCommand = 0;
     size_t nCommand = 0;
     int iIndex = -1;
-    /* Function-scope so the oom label can free the -command eval
-     * accumulator, which is built inside the sort's inner loop. */
-    char *zEval = 0;
-    size_t nEval = 0;
+    Th8_SortCtx sortCtx;
 
     if (argc < 2) {
 	return Th8_WrongNumArgs(interp, "lsort ?options? list");
@@ -1241,186 +1835,25 @@ lsort_command(
     if (rc != TH8_OK) return rc;
 
     /*
-     * Insertion sort.  O(n^2) but simple, correct, stable,
-     * and doesn't require qsort (which needs a context
-     * pointer we can't portably provide in C89).
-     * For the sizes typical in an embedded interpreter,
-     * this is adequate.
+     * Stable O(n log n) merge sort (TH8K-017, replacing the former
+     * O(n^2) insertion sort).  The context carries the mode,
+     * direction, -index selector, and optional -command script; all
+     * comparison, sub-element extraction, and error/leak handling
+     * live in th8LsortCompare.
      */
 
+    sortCtx.interp = interp;
+    sortCtx.eMode = eMode;
+    sortCtx.bDecreasing = bDecreasing;
+    sortCtx.zCommand = zCommand;
+    sortCtx.nCommand = nCommand;
+    sortCtx.iIndex = iIndex;
+
     if (azElem && nCount > 1) {
-	for (i = 1; i < nCount; i++) {
-	    char *zKey = azElem[i];
-	    size_t nKey = anElem[i];
-
-	    j = i - 1;
-	    while (j >= 0) {
-		int cmp = 0;
-		const char *zA, *zB;
-		size_t nA, nB;
-		char **azSubA = 0, **azSubB = 0;
-		size_t *anSubA = 0, *anSubB = 0;
-
-		if (Th8_Ready(interp) != TH8_OK) {
-		    Th8_Free(interp, azElem);
-		    return TH8_ERROR;
-		}
-
-		zA = azElem[j];
-		nA = TH8_LEN(anElem[j]);
-		zB = zKey;
-		nB = TH8_LEN(nKey);
-
-		/*
-		 * If -index is given, extract the Nth sub-element
-		 * from each list element for comparison.
-		 */
-
-		if (iIndex >= 0) {
-		    int nSubA = 0, nSubB = 0;
-
-		    Th8_SplitList(
-		        interp, zA, nA, &azSubA, &anSubA, &nSubA,
-		        TH8_LIST_NONE);
-		    Th8_SplitList(
-		        interp, zB, nB, &azSubB, &anSubB, &nSubB,
-		        TH8_LIST_NONE);
-		    if (iIndex < nSubA && ALWAYS(azSubA)) {
-			zA = azSubA[iIndex];
-			nA = TH8_LEN(anSubA[iIndex]);
-		    } else {
-			zA = "";
-			nA = 0;
-		    }
-		    if (iIndex < nSubB && ALWAYS(azSubB)) {
-			zB = azSubB[iIndex];
-			nB = TH8_LEN(anSubB[iIndex]);
-		    } else {
-			zB = "";
-			nB = 0;
-		    }
-		}
-
-		/*
-		 * Compare zA/zB using the selected mode.
-		 */
-
-		if (eMode == TH8_SORT_INTEGER) {
-		    int va, vb;
-
-		    if (Th8_ToInt(interp, zA, nA, &va) != TH8_OK ||
-		        Th8_ToInt(interp, zB, nB, &vb) != TH8_OK) {
-			Th8_Free(interp, azElem);
-			return TH8_ERROR;
-		    }
-		    cmp = (va > vb) - (va < vb);
-		} else if (eMode == TH8_SORT_REAL) {
-		    double ra, rb;
-
-		    if (Th8_ToDouble(interp, zA, nA, &ra) != TH8_OK ||
-		        Th8_ToDouble(interp, zB, nB, &rb) != TH8_OK) {
-			Th8_Free(interp, azElem);
-			return TH8_ERROR;
-		    }
-		    cmp = (ra > rb) - (ra < rb);
-		} else if (eMode == TH8_SORT_COMMAND) {
-		    /*
-		     * -command: build "script a b", evaluate,
-		     * result is the comparison integer.
-		     */
-
-		    int iResult;
-
-		    zEval = 0;
-		    nEval = 0;
-		    TH8_STR_APPEND(
-		        interp, &zEval, &nEval, zCommand, nCommand);
-		    TH8_STR_APPEND(interp, &zEval, &nEval, " ", 1);
-		    Th8_ListAppend(interp, &zEval, &nEval, zA, nA);
-		    TH8_STR_APPEND(interp, &zEval, &nEval, " ", 1);
-		    Th8_ListAppend(interp, &zEval, &nEval, zB, nB);
-		    rc = Th8_Eval(interp, 0, zEval, nEval, NULL, 0);
-		    Th8_Free(interp, zEval);
-		    zEval = 0;
-		    if (rc != TH8_OK) {
-			Th8_Free(interp, azElem);
-			return rc;
-		    }
-		    {
-			size_t nRes;
-			const char *zRes = Th8_GetResult(interp, &nRes);
-
-			if (Th8_ToInt(interp, zRes, nRes, &iResult) !=
-			    TH8_OK) {
-			    Th8_Free(interp, azElem);
-			    return TH8_ERROR;
-			}
-		    }
-		    cmp = iResult;
-		} else if (eMode == TH8_SORT_DICTIONARY) {
-		    /*
-		     * Dictionary comparison: case-insensitive,
-		     * with embedded integers compared numerically.
-		     */
-
-		    size_t ia = 0, ib = 0;
-
-		    cmp = 0;
-		    while (ia < nA && ib < nB && cmp == 0) {
-			unsigned char ca = (unsigned char)zA[ia];
-			unsigned char cb = (unsigned char)zB[ib];
-			int aIsDigit = (ca >= '0' && ca <= '9');
-			int bIsDigit = (cb >= '0' && cb <= '9');
-
-			if (aIsDigit && bIsDigit) {
-			    /* Compare numeric runs. */
-			    int numA = 0, numB = 0;
-
-			    while (ia < nA && zA[ia] >= '0' &&
-			           zA[ia] <= '9') {
-				numA = numA * 10 + (zA[ia] - '0');
-				ia++;
-			    }
-			    while (ib < nB && zB[ib] >= '0' &&
-			           zB[ib] <= '9') {
-				numB = numB * 10 + (zB[ib] - '0');
-				ib++;
-			    }
-			    cmp = (numA > numB) - (numA < numB);
-			} else {
-			    /* Case-insensitive character compare. */
-			    if (ca >= 'A' && ca <= 'Z') ca += ('a' - 'A');
-			    if (cb >= 'A' && cb <= 'Z') cb += ('a' - 'A');
-			    cmp = (ca > cb) - (ca < cb);
-			    ia++;
-			    ib++;
-			}
-		    }
-		    if (cmp == 0) {
-			cmp = (nA < nB) ? -1 : (nA > nB);
-		    }
-		} else {
-		    /* ASCII / default: byte comparison */
-		    size_t nMin = nA < nB ? nA : nB;
-
-		    cmp = Th8_Memcmp(interp, zA, zB, nMin);
-		    if (cmp == 0) {
-			cmp = (nA < nB) ? -1 : (nA > nB);
-		    }
-		}
-
-		Th8_Free(interp, azSubA);
-		Th8_Free(interp, azSubB);
-
-		if (bDecreasing) cmp = -cmp;
-		if (cmp <= 0) break;
-
-		azElem[j + 1] = azElem[j];
-		anElem[j + 1] = anElem[j];
-		j--;
-	    }
-	    azElem[j + 1] = zKey;
-	    anElem[j + 1] = nKey;
+	rc = th8LsortMergeSort(&sortCtx, azElem, anElem, nCount);
+	if (rc != TH8_OK) {
+	    Th8_Free(interp, azElem);
+	    return rc;
 	}
     }
 
@@ -1429,6 +1862,7 @@ lsort_command(
      */
 
     for (i = 0; i < nCount && ALWAYS(azElem); i++) {
+	if (Th8_Ready(interp) != TH8_OK) goto oom;
 	if (bUnique && i > 0) {
 	    size_t nA = TH8_LEN(anElem[i - 1]);
 	    size_t nB = TH8_LEN(anElem[i]);
@@ -1438,7 +1872,10 @@ lsort_command(
 		continue; /* skip duplicate */
 	    }
 	}
-	Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
+	if (Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]) !=
+	    TH8_OK) {
+	    goto oom;
+	}
     }
     Th8_SetResult(interp, zOut, nOut);
     Th8_Free(interp, zOut);
@@ -1446,9 +1883,8 @@ lsort_command(
     return TH8_OK;
 
 oom:
-    /* A TH8_STR_APPEND growth failed (building the result or a
-     * -command eval buffer); "out of memory" already set. */
-    Th8_Free(interp, zEval);
+    /* A result-list growth (Th8_ListAppend) failed; "out of memory"
+     * already set. */
     Th8_Free(interp, zOut);
     Th8_Free(interp, azElem);
     return TH8_ERROR;
@@ -1470,10 +1906,13 @@ oom:
  *	Calls Th8_Ready per element for cancellation.
  *
  * Results:
- *	TH8_OK.  Result is a properly-formed list.
+ *	TH8_OK with a properly-formed list result on success; TH8_ERROR
+ *	on a wrong argument count, on a Th8_Ready cancel/resource-limit
+ *	trip, or on an out-of-memory while building the result list (in
+ *	which case no partial list is published).
  *
  * Side effects:
- *	None.
+ *	Sets the interpreter result (the split list, or an error message).
  *
  *----------------------------------------------------------------------
  */
@@ -1494,6 +1933,7 @@ split_command(
     size_t nList = 0;
     size_t i;
     size_t start;
+    int rc = TH8_OK;
 
     if (argc != 2 && argc != 3) {
 	return Th8_WrongNumArgs(interp, "split string ?splitchars?");
@@ -1518,9 +1958,19 @@ split_command(
 	while (i < nStr) {
 	    int nByte;
 
-	    if (Th8_Ready(interp) != TH8_OK) goto split_done;
+	    if (Th8_Ready(interp) != TH8_OK) {
+		rc =
+		    TH8_ERROR; /* propagate cancel/limit, not partial output */
+		goto split_done;
+	    }
 	    Th8_Utf8Decode(&zStr[i], nStr - i, &nByte);
-	    Th8_ListAppend(interp, &zList, &nList, &zStr[i], (size_t)nByte);
+	    if (Th8_ListAppend(
+	            interp, &zList, &nList, &zStr[i], (size_t)nByte) !=
+	        TH8_OK) {
+		Th8_SetResultStatic(interp, "out of memory", TH8_NOLEN);
+		rc = TH8_ERROR;
+		goto split_done;
+	    }
 	    i += (size_t)nByte;
 	}
     } else {
@@ -1533,7 +1983,10 @@ split_command(
 	    size_t j;
 	    int isSplit = 0;
 
-	    if (Th8_Ready(interp) != TH8_OK) goto split_done;
+	    if (Th8_Ready(interp) != TH8_OK) {
+		rc = TH8_ERROR;
+		goto split_done;
+	    }
 	    for (j = 0; j < nChars; j++) {
 		if (zStr[i] == zChars[j]) {
 		    isSplit = 1;
@@ -1541,21 +1994,39 @@ split_command(
 		}
 	    }
 	    if (isSplit) {
-		Th8_ListAppend(
-		    interp, &zList, &nList, &zStr[start], i - start);
+		if (Th8_ListAppend(
+		        interp, &zList, &nList, &zStr[start], i - start) !=
+		    TH8_OK) {
+		    Th8_SetResultStatic(interp, "out of memory", TH8_NOLEN);
+		    rc = TH8_ERROR;
+		    goto split_done;
+		}
 		start = i + 1;
 	    }
 	}
 	if (nStr > 0) {
-	    Th8_ListAppend(
-	        interp, &zList, &nList, &zStr[start], nStr - start);
+	    if (Th8_ListAppend(
+	            interp, &zList, &nList, &zStr[start], nStr - start) !=
+	        TH8_OK) {
+		Th8_SetResultStatic(interp, "out of memory", TH8_NOLEN);
+		rc = TH8_ERROR;
+		goto split_done;
+	    }
 	}
     }
 
 split_done:
-    Th8_SetResult(interp, zList, nList);
+    /*
+     * On success publish the list; on error (cancel/limit via Th8_Ready, or an
+     * OOM from Th8_ListAppend) the interpreter result already holds the correct
+     * error message -- do NOT overwrite it with the partial list, and return
+     * TH8_ERROR rather than reporting truncated output as success (TH8K-009).
+     */
+    if (rc == TH8_OK) {
+	Th8_SetResult(interp, zList, nList);
+    }
     Th8_Free(interp, zList);
-    return TH8_OK;
+    return rc;
 }
 
 
@@ -1634,6 +2105,11 @@ lassign_command(
      */
 
     for (i = argc - 2; i < nCount && ALWAYS(azElem); i++) {
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zRest);
+	    Th8_Free(interp, azElem);
+	    return TH8_ERROR;
+	}
 	Th8_ListAppend(interp, &zRest, &nRest, azElem[i], anElem[i]);
     }
 
@@ -1709,6 +2185,11 @@ lremove_command(
     for (i = 0; i < nCount && ALWAYS(azElem); i++) {
 	int skip = 0;
 
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_Free(interp, azElem);
+	    return TH8_ERROR;
+	}
 	for (j = 2; j < argc; j++) {
 	    int idx;
 
@@ -1780,6 +2261,11 @@ lreverse_command(
     if (rc != TH8_OK) return rc;
 
     for (i = nCount - 1; i >= 0 && ALWAYS(azElem); i--) {
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_Free(interp, azElem);
+	    return TH8_ERROR;
+	}
 	Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
     }
 
@@ -1839,8 +2325,27 @@ lreverse_command(
  */
 
 /*
- * th8DictFind -- look up a key in a split key-value list.
- * Returns the index of the value (key_index + 1), or -1 if not found.
+ *----------------------------------------------------------------------
+ *
+ * th8DictFind --
+ *
+ *	Look up a key in a split key-value element list (the array
+ *	form of a dict, keys at even indices and values at odd).
+ *
+ * Why / How:
+ *	Scans key positions (i += 2) and compares length first, then
+ *	bytes via `Th8_Memcmp`, so it works on binary keys and avoids a
+ *	full compare when lengths differ.  Returning the VALUE index
+ *	(key_index + 1) lets callers read or replace the value directly.
+ *
+ * Results:
+ *	The index of the matching key's value (key_index + 1), or -1 if
+ *	the key is not present.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -1865,19 +2370,37 @@ th8DictFind(
 
 
 /*
- * th8DictRebuildWith -- rebuild a dict from element arrays.
+ *----------------------------------------------------------------------
  *
- *	If bRemove is true and iKeyIdx >= 0, skip the key-value
- *	pair at (iKeyIdx-1, iKeyIdx).
+ * th8DictRebuildWith --
  *
- *	If !bRemove and iKeyIdx >= 0, replace the value at
- *	iKeyIdx with zNewVal/nNewVal.
+ *	Rebuild a dict string from its split element arrays, optionally
+ *	removing or replacing one key's value:
+ *	  * bRemove && iKeyIdx >= 0 -- skip the key-value pair at
+ *	    (iKeyIdx-1, iKeyIdx).
+ *	  * !bRemove && iKeyIdx >= 0 -- replace the value at iKeyIdx
+ *	    with zNewVal/nNewVal.
+ *	  * iKeyIdx == -1 && !bRemove -- copy through unchanged (the
+ *	    caller handles new-key insertion separately).
  *
- *	If iKeyIdx == -1 and !bRemove, this is a no-op: caller
- *	handles new-key insertion separately.
+ * Why / How:
+ *	Copies preserve dicts as ordinary lists: it re-emits every pair
+ *	with `Th8_ListAppend` (which handles element quoting) in the
+ *	original order, substituting or dropping the targeted pair as it
+ *	goes.  Rebuilding a fresh string rather than mutating in place
+ *	keeps the input immutable for the caller.  Polls `Th8_Ready` each
+ *	pair so a large dict rewrite stays cancelable.
  *
- *	On success, *pzOut and *pnOut hold the rebuilt dict string
- *	(caller must Th8_Free).
+ * Results:
+ *	TH8_OK with the rebuilt dict in *pzOut and *pnOut (caller must
+ *	`Th8_Free` *pzOut); TH8_ERROR if a cancel/limit is pending
+ *	(any partial buffer is freed).
+ *
+ * Side effects:
+ *	Allocates the output dict string (ownership passes to the
+ *	caller).  Frees its partial buffer on the cancel path.
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -1898,6 +2421,10 @@ th8DictRebuildWith(
     int i;
 
     for (i = 0; i < nCount && ALWAYS(azElem); i += 2) {
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    return TH8_ERROR;
+	}
 	if (bRemove && iKeyIdx >= 0 && i + 1 == iKeyIdx) {
 	    /* Skip this key-value pair. */
 	    continue;
@@ -1918,14 +2445,33 @@ th8DictRebuildWith(
 
 
 /*
- * th8DictSplit -- split a dict string, using the cache.
+ *----------------------------------------------------------------------
  *
- *	Uses Th8_FindInCache with TH8_CACHE_DICT (cache type 10)
- *	to cache the split result.  If cache hit, reuse.  Otherwise
- *	split and cache.  Returns TH8_ERROR if odd element count.
+ * th8DictSplit --
  *
- *	The caller receives freshly-allocated element arrays that
- *	must be freed with Th8_Free(interp, *pazElem).
+ *	Split a dict string into parallel key/value element arrays,
+ *	using the interpreter's internal-representation cache.  The
+ *	caller receives freshly-allocated arrays that must be freed
+ *	with `Th8_Free(interp, *pazElem)`.
+ *
+ * Why / How:
+ *	Consults `Th8_FindInCache` with `TH8_CACHE_DICT` so repeated dict
+ *	operations on the same string avoid re-parsing: a cache hit
+ *	copies the cached elements into one contiguous allocation for the
+ *	caller; a miss splits with `Th8_SplitList`, validates an even
+ *	element count, and populates the cache.  A NULL cache slot (OOM)
+ *	simply falls through to a fresh parse (Bug 28 family).
+ *
+ * Results:
+ *	TH8_OK with *pazElem, *panElem, and *pnCount populated (caller
+ *	frees *pazElem); TH8_ERROR on an odd element count ("missing value
+ *	to go with key") or allocation failure ("out of memory").
+ *
+ * Side effects:
+ *	Allocates the caller's element arrays; may populate a dict cache
+ *	entry.  Sets the interpreter result on error.
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -2057,15 +2603,38 @@ th8DictSplit(
 
 
 /*
- * th8DictTraverse -- walk a nested key path.
+ *----------------------------------------------------------------------
  *
- *	For each key in azKeys[0..nKeys-1] except the last, looks
- *	up the value and descends into it (splitting as a nested
- *	dict).  On success, *pazElem / *panElem / *pnCount are the
- *	innermost dict and *piKey is the value index of the last
- *	key (-1 if not found).  Caller must Th8_Free *pazElem.
+ * th8DictTraverse --
  *
- *	Returns TH8_ERROR on bad dict structure.
+ *	Walk a nested key path into a dict.  For each key in
+ *	azKeys[0..nKeys-1] except the last, looks up the value and
+ *	descends into it as a nested dict.  On success *pazElem /
+ *	*panElem / *pnCount describe the innermost dict and *piKey is
+ *	the value index of the last key (-1 if not found).  Caller must
+ *	`Th8_Free` *pazElem.
+ *
+ * Why / How:
+ *	Implements the multi-key form of `dict get`/`dict set`: each
+ *	intermediate key must resolve to a value that is itself a valid
+ *	dict, which is re-split with `th8DictSplit` before descending;
+ *	the previous level's element array is freed as soon as its inner
+ *	value has been copied out, so only one level is held at a time.
+ *	The last key is not descended -- its index is returned for the
+ *	caller to read or rewrite.
+ *
+ * Results:
+ *	TH8_OK with the innermost dict and last-key index reported via
+ *	the out-parameters (*piKey == -1 if the final key is absent);
+ *	TH8_ERROR if an intermediate key is missing or names a
+ *	malformed dict (interpreter result: diagnostic).
+ *
+ * Side effects:
+ *	Allocates the returned innermost element arrays (caller frees
+ *	*pazElem) and frees the intermediate arrays it descends through.
+ *	Sets the interpreter result on error.
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -2335,6 +2904,11 @@ dict_filter_command(
 	        interp, "dict filter dictionary key pattern");
 	}
 	for (i = 0; i < nDict; i += 2) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		Th8_Free(interp, zOut);
+		Th8_Free(interp, azDict);
+		return TH8_ERROR;
+	    }
 	    if (Th8_GlobMatch(
 	            interp, argv[4], TH8_LEN(argl[4]), azDict[i],
 	            anDict[i])) {
@@ -2350,6 +2924,11 @@ dict_filter_command(
 	        interp, "dict filter dictionary value pattern");
 	}
 	for (i = 0; i < nDict; i += 2) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		Th8_Free(interp, zOut);
+		Th8_Free(interp, azDict);
+		return TH8_ERROR;
+	    }
 	    if (Th8_GlobMatch(
 	            interp, argv[4], TH8_LEN(argl[4]), azDict[i + 1],
 	            anDict[i + 1])) {
@@ -2633,6 +3212,11 @@ dict_keys_command(
     }
 
     for (i = 0; i < nCount && ALWAYS(azElem); i += 2) {
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_Free(interp, azElem);
+	    return TH8_ERROR;
+	}
 	if (!zPat ||
 	    Th8_GlobMatch(interp, zPat, nPat, azElem[i], anElem[i])) {
 	    Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
@@ -2712,7 +3296,21 @@ dict_merge_command(
 	    zOut = 0;
 	    nOut = 0;
 	    for (i = 0; i < nD; i++) {
-		Th8_ListAppend(interp, &zOut, &nOut, azD[i], anD[i]);
+		if (Th8_Ready(interp) != TH8_OK) {
+		    Th8_Free(interp, azD);
+		    Th8_Free(interp, zOut);
+		    return TH8_ERROR;
+		}
+		/* A failed append must abort: ignoring it would leave zOut
+		 * TRUNCATED (possibly an odd element count), and the merge
+		 * pass below reads it as key/value PAIRS -- an odd list makes
+		 * azCur[i+1] an out-of-bounds read (crash) (TH8K-030). */
+		if (Th8_ListAppend(interp, &zOut, &nOut, azD[i], anD[i]) !=
+		    TH8_OK) {
+		    Th8_Free(interp, azD);
+		    Th8_Free(interp, zOut);
+		    return TH8_ERROR;
+		}
 	    }
 	} else {
 	    /*
@@ -2736,24 +3334,54 @@ dict_merge_command(
 
 	    /* Copy existing, replacing matched keys. */
 	    for (i = 0; i < nCur; i += 2) {
-		int iV =
-		    th8DictFind(interp, azD, anD, nD, azCur[i], anCur[i]);
-		Th8_ListAppend(interp, &zNew, &nNew, azCur[i], anCur[i]);
-		if (iV >= 0) {
-		    Th8_ListAppend(interp, &zNew, &nNew, azD[iV], anD[iV]);
-		} else {
-		    Th8_ListAppend(
-		        interp, &zNew, &nNew, azCur[i + 1], anCur[i + 1]);
+		int iV;
+
+		if (Th8_Ready(interp) != TH8_OK) {
+		    Th8_Free(interp, zNew);
+		    Th8_Free(interp, azCur);
+		    Th8_Free(interp, azD);
+		    Th8_Free(interp, zOut);
+		    return TH8_ERROR;
+		}
+		iV = th8DictFind(interp, azD, anD, nD, azCur[i], anCur[i]);
+		if (Th8_ListAppend(
+		        interp, &zNew, &nNew, azCur[i], anCur[i]) != TH8_OK ||
+		    (iV >= 0 ? Th8_ListAppend(
+		                   interp, &zNew, &nNew, azD[iV], anD[iV]) !=
+		                   TH8_OK
+		             : Th8_ListAppend(
+		                   interp, &zNew, &nNew, azCur[i + 1],
+		                   anCur[i + 1]) != TH8_OK)) {
+		    Th8_Free(interp, zNew);
+		    Th8_Free(interp, azCur);
+		    Th8_Free(interp, azD);
+		    Th8_Free(interp, zOut);
+		    return TH8_ERROR;
 		}
 	    }
 
 	    /* Append new keys. */
 	    for (i = 0; i < nD; i += 2) {
+		if (Th8_Ready(interp) != TH8_OK) {
+		    Th8_Free(interp, zNew);
+		    Th8_Free(interp, azCur);
+		    Th8_Free(interp, azD);
+		    Th8_Free(interp, zOut);
+		    return TH8_ERROR;
+		}
 		if (th8DictFind(interp, azCur, anCur, nCur, azD[i], anD[i]) <
 		    0) {
-		    Th8_ListAppend(interp, &zNew, &nNew, azD[i], anD[i]);
-		    Th8_ListAppend(
-		        interp, &zNew, &nNew, azD[i + 1], anD[i + 1]);
+		    if (Th8_ListAppend(
+		            interp, &zNew, &nNew, azD[i], anD[i]) != TH8_OK ||
+		        Th8_ListAppend(
+		            interp, &zNew, &nNew, azD[i + 1], anD[i + 1]) !=
+		            TH8_OK) {
+			Th8_Free(interp, zNew);
+			Th8_Free(interp, azCur);
+			Th8_Free(interp, azD);
+			Th8_Free(interp, zOut);
+			return TH8_ERROR;
+		    }
 		}
 	    }
 
@@ -2818,6 +3446,11 @@ dict_remove_command(
     for (i = 0; i < nCount && ALWAYS(azElem); i += 2) {
 	int skip = 0;
 
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_Free(interp, azElem);
+	    return TH8_ERROR;
+	}
 	for (j = 3; j < argc; j++) {
 	    if (anElem[i] == TH8_LEN(argl[j]) &&
 	        Th8_Memcmp(interp, azElem[i], argv[j], anElem[i]) == 0) {
@@ -2898,6 +3531,11 @@ dict_replace_command(
     for (i = 0; i < nCount && ALWAYS(azElem); i += 2) {
 	int replaced = 0;
 
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_Free(interp, azElem);
+	    return TH8_ERROR;
+	}
 	for (j = 3; j + 1 < argc; j += 2) {
 	    if (anElem[i] == TH8_LEN(argl[j]) &&
 	        Th8_Memcmp(interp, azElem[i], argv[j], anElem[i]) == 0) {
@@ -3035,6 +3673,11 @@ dict_values_command(
     }
 
     for (i = 1; i < nCount && ALWAYS(azElem); i += 2) {
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_Free(interp, azElem);
+	    return TH8_ERROR;
+	}
 	if (!zPat ||
 	    Th8_GlobMatch(interp, zPat, nPat, azElem[i], anElem[i])) {
 	    Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
@@ -3061,8 +3704,35 @@ dict_values_command(
 #  if defined(TH8_ENABLE_VARIABLES)
 
 /*
- * th8DictVarGet -- helper: read a dict variable, split it, validate
- * even length.  Caller must Th8_Free azElem on success.
+ *----------------------------------------------------------------------
+ *
+ * th8DictVarGet --
+ *
+ *	Read a dict-valued variable, split it into key/value element
+ *	arrays, and validate an even element count.  A missing variable
+ *	is treated as an empty dict.  Caller must `Th8_Free` *pazElem on
+ *	success.
+ *
+ * Why / How:
+ *	Splits on the RAW byte length (TH8_LIST_NONE) so the element
+ *	lengths stay byte-exact for `th8DictFind`/memcpy comparisons: a
+ *	tainted dict variable would otherwise produce tainted element
+ *	lengths that never match a raw search key.  The variable's taint
+ *	is deliberately dropped here and re-applied at write-back by
+ *	`th8DictVarPut`.  Treating a nonexistent variable as the empty
+ *	dict lets the mutating `dict` subcommands create it on first use.
+ *
+ * Results:
+ *	TH8_OK with the element arrays reported (empty when the variable
+ *	does not exist); TH8_ERROR on a split failure or an odd element
+ *	count ("missing value to go with key").
+ *
+ * Side effects:
+ *	Allocates the caller's element arrays.  Overwrites the
+ *	interpreter result (with the variable value, or an error
+ *	message).
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -3109,8 +3779,29 @@ th8DictVarGet(
 }
 
 /*
- * th8DictVarPut -- helper: write dict back to variable,
- * set result to new dict value.
+ *----------------------------------------------------------------------
+ *
+ * th8DictVarPut --
+ *
+ *	Write a rebuilt dict string back to its variable and set the
+ *	interpreter result to the new dict value.
+ *
+ * Why / How:
+ *	Because `th8DictVarGet` splits on raw lengths (dropping taint), an
+ *	in-place mutation loses the source dict's taint; this re-reads the
+ *	variable's pre-mutation value and OR-folds its taint bits, plus
+ *	any taint already carried in `nDict` from new key/value arguments,
+ *	so the written value's taint is the union.  The pre-mutation read
+ *	is safe because it happens before the `Th8_SetVar` overwrite.
+ *
+ * Results:
+ *	TH8_OK.  The variable is updated and the interpreter result holds
+ *	the new (correctly-tainted) dict value.
+ *
+ * Side effects:
+ *	Sets the variable named `zVar` and the interpreter result.
+ *
+ *----------------------------------------------------------------------
  */
 
 static int
@@ -3198,6 +3889,7 @@ dict_append_command(
         interp, azElem, anElem, nCount, argv[3], TH8_LEN(argl[3]));
 
     for (i = 0; i < nCount && ALWAYS(azElem); i += 2) {
+	if (Th8_Ready(interp) != TH8_OK) goto oom;
 	Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
 	if (i + 1 == iKey) {
 	    /* Append strings to existing value. */
@@ -3399,6 +4091,11 @@ dict_incr_command(
         interp, azElem, anElem, nCount, argv[3], TH8_LEN(argl[3]));
 
     for (i = 0; i < nCount && ALWAYS(azElem); i += 2) {
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    Th8_Free(interp, azElem);
+	    return TH8_ERROR;
+	}
 	Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
 	if (i + 1 == iKey) {
 	    int val = 0;
@@ -3491,6 +4188,7 @@ dict_lappend_command(
         interp, azElem, anElem, nCount, argv[3], TH8_LEN(argl[3]));
 
     for (i = 0; i < nCount && ALWAYS(azElem); i += 2) {
+	if (Th8_Ready(interp) != TH8_OK) goto oom;
 	Th8_ListAppend(interp, &zOut, &nOut, azElem[i], anElem[i]);
 	if (i + 1 == iKey) {
 	    /* List-append values to existing value. */
@@ -4238,6 +4936,11 @@ dict_update_command(
 	    for (i = 0; i < nCount && ALWAYS(azElem); i += 2) {
 		int skip = 0;
 
+		if (Th8_Ready(interp) != TH8_OK) {
+		    Th8_Free(interp, zOut);
+		    Th8_Free(interp, azElem);
+		    return TH8_ERROR;
+		}
 		for (p = 0; p < nPairs; p++) {
 		    int argKey = 3 + p * 2;
 		    if (anElem[i] == TH8_LEN(argl[argKey]) &&
@@ -4482,6 +5185,11 @@ dict_with_command(
     }
 
     for (i = 0; i < nCount; i += 2) {
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, azElem);
+	    Th8_Free(interp, azSavedKeys);
+	    return TH8_ERROR;
+	}
 	Th8_SetVar(
 	    interp, azElem[i], anElem[i], azElem[i + 1],
 	    anElem[i + 1] | nSrcTag);
@@ -4506,6 +5214,11 @@ dict_with_command(
 	int k;
 
 	for (k = 0; k < nSavedKeys; k++) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		Th8_Free(interp, zOut);
+		Th8_Free(interp, azSavedKeys);
+		return TH8_ERROR;
+	    }
 	    if (Th8_GetVar(interp, azSavedKeys[k], anSavedKeys[k]) ==
 	        TH8_OK) {
 		size_t nVal;
@@ -4690,69 +5403,62 @@ oom:
 /*
  *----------------------------------------------------------------------
  *
- * dict_command -- ensemble dispatcher.
+ * th8DictSub -- `dict` sub-command catalogue.
  *
  * Why / How:
- *	Implements the Tcl [dict] command ensemble.  Builds a static
- *	subcommand table (conditionally including variable-gated
- *	subcommands) and delegates to Th8_CallSubCommand.
+ *	Catalogue of [dict] sub-commands (conditionally including the
+ *	variable-gated ones).  Installed into the `dict` ensemble command's
+ *	per-interpreter sub-command hash at registration (TH8K-025); the core
+ *	dispatches them -- there is no `dict` delegator.
  *
  * Results:
- *	Return code from the sub-command.
+ *	N/A (data).
  *
  * Side effects:
- *	Determined by the sub-command.
+ *	None.
  *
  *----------------------------------------------------------------------
  */
 
-static int
-dict_command(
-    Th8_Interp *interp,
-    void *ctx,
-    int argc,
-    const char **argv,
-    size_t *argl)
-{
-    static const Th8_SubCommand aSub[] = {
-#  if defined(TH8_ENABLE_VARIABLES)
-        {0, "append", dict_append_command},
-#  endif
-        {0, "create", dict_create_command},
-        {0, "exists", dict_exists_command},
-        {0, "filter", dict_filter_command},
-#  if defined(TH8_ENABLE_VARIABLES)
-        {0, "for", dict_for_command},
-#  endif
-        {0, "get", dict_get_command},
-#  if defined(TH8_ENABLE_VARIABLES)
-        {0, "incr", dict_incr_command},
-#  endif
-        {0, "info", dict_info_command},
-        {0, "keys", dict_keys_command},
-#  if defined(TH8_ENABLE_VARIABLES)
-        {0, "lappend", dict_lappend_command},
-        {0, "map", dict_map_command},
-#  endif
-        {0, "merge", dict_merge_command},
-        {0, "remove", dict_remove_command},
-        {0, "replace", dict_replace_command},
-#  if defined(TH8_ENABLE_VARIABLES)
-        {0, "set", dict_set_command},
-#  endif
-        {0, "size", dict_size_command},
-#  if defined(TH8_ENABLE_VARIABLES)
-        {0, "unset", dict_unset_command},
-        {0, "update", dict_update_command},
-#  endif
-        {0, "values", dict_values_command},
-#  if defined(TH8_ENABLE_VARIABLES)
-        {0, "with", dict_with_command},
-#  endif
-        {0, 0, 0}};
+/* Published for th8_lang.c ensemble population (TH8K-025). */
+const Th8_SubCommand *th8_dict_aSub;
 
-    return Th8_CallSubCommand(interp, ctx, argc, argv, argl, aSub);
-}
+static const Th8_SubCommand th8DictSub[] = {
+#  if defined(TH8_ENABLE_VARIABLES)
+    {0, "append", dict_append_command},
+#  endif
+    {0, "create", dict_create_command},
+    {0, "exists", dict_exists_command},
+    {0, "filter", dict_filter_command},
+#  if defined(TH8_ENABLE_VARIABLES)
+    {0, "for", dict_for_command},
+#  endif
+    {0, "get", dict_get_command},
+#  if defined(TH8_ENABLE_VARIABLES)
+    {0, "incr", dict_incr_command},
+#  endif
+    {0, "info", dict_info_command},
+    {0, "keys", dict_keys_command},
+#  if defined(TH8_ENABLE_VARIABLES)
+    {0, "lappend", dict_lappend_command},
+    {0, "map", dict_map_command},
+#  endif
+    {0, "merge", dict_merge_command},
+    {0, "remove", dict_remove_command},
+    {0, "replace", dict_replace_command},
+#  if defined(TH8_ENABLE_VARIABLES)
+    {0, "set", dict_set_command},
+#  endif
+    {0, "size", dict_size_command},
+#  if defined(TH8_ENABLE_VARIABLES)
+    {0, "unset", dict_unset_command},
+    {0, "update", dict_update_command},
+#  endif
+    {0, "values", dict_values_command},
+#  if defined(TH8_ENABLE_VARIABLES)
+    {0, "with", dict_with_command},
+#  endif
+    {0, 0, 0}};
 
 
 /*
@@ -4764,13 +5470,14 @@ dict_command(
  */
 
 static Th8_CommandEntry th8ListsCommands[] = {
-    {1, 0, "dict", dict_command},
+    {1, 0, "dict", 0}, /* pure ensemble (TH8K-025) */
     {1, 0, "join", join_command},
 #  if defined(TH8_ENABLE_VARIABLES)
     {1, 0, "lappend", lappend_command},
     {1, 0, "lassign", lassign_command},
 #  endif
     {1, 0, "lindex", lindex_command},
+    {1, 0, "linsert", linsert_command},
     {1, 0, "list", list_command},
     {1, 0, "llength", llength_command},
     {1, 0, "lrange", lrange_command},
@@ -4825,6 +5532,8 @@ th8ListsGetCommands(Th8_CommandEntry *pCommand, int *pnCommand)
 	    pCommand[i] = th8ListsCommands[i];
 	}
     }
+    th8_dict_aSub =
+        th8DictSub; /* publish for ensemble population (TH8K-025) */
     return TH8_OK;
 }
 #endif /* TH8_PLUGIN_LISTS */

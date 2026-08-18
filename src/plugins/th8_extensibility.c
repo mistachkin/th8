@@ -213,6 +213,13 @@ unload_command(
  *	Used to pick an arbitrary version from the ifneeded sub-hash
  *	when no specific version is requested.
  *
+ * Why / How:
+ *	Stores the current entry through the context pointer and
+ *	immediately returns TH8_BREAK, so the shared hash-iterate
+ *	machinery halts after visiting exactly one entry -- a
+ *	convenient "grab any element" primitive without exposing the
+ *	hash's internal bucket layout to the caller.
+ *
  * Results:
  *	TH8_BREAK (stop iteration after the first entry).
  *
@@ -239,6 +246,13 @@ th8LangFirstEntry(Th8_HashEntry *pEntry, void *pCtx)
  *
  *	Hash iteration callback that appends each entry's key to a
  *	list.  Used by [package names] and [package versions].
+ *
+ * Why / How:
+ *	Unpacks the interpreter, list pointer, and length pointer
+ *	from the three-slot context array, then appends the current
+ *	entry's key as a properly quoted list element via
+ *	Th8_ListAppend and returns TH8_OK to keep iterating -- so one
+ *	full sweep collects every key into the caller's growing list.
  *
  * Results:
  *	TH8_OK (continue iteration).
@@ -413,6 +427,13 @@ package_provide_command(
     }
     pEntry = Th8_HashFind(
         interp, Th8_GetPackageHash(interp), argv[2], TH8_LEN(argl[2]), 1);
+    if (!pEntry) {
+	/* create=1 hash insert can fail on OOM (Th8_HashFind returns NULL);
+	 * dereferencing pEntry->pData without this check crashed under a
+	 * transient allocation failure (Bug 85). */
+	Th8_SetResultStatic(interp, "out of memory", TH8_NOLEN);
+	return TH8_ERROR;
+    }
     pPkg = (Th8_PkgInfo *)pEntry->pData;
     if (!pPkg) {
 	pPkg = (Th8_PkgInfo *)TH8_ALLOC(interp, sizeof(Th8_PkgInfo));
@@ -423,8 +444,16 @@ package_provide_command(
 	pEntry->pData = (void *)pPkg;
     }
     if (argc == 4) {
+	/* Strdup FIRST, then swap: a transient OOM (Bug 85) must not free the
+	 * old version and then leave zVersion NULL -- and must fail the
+	 * command rather than silently record a versionless package. */
+	char *zVer = Th8_Strdup(interp, argv[3], argl[3]);
+	if (!zVer) {
+	    Th8_SetResultStatic(interp, "out of memory", TH8_NOLEN);
+	    return TH8_ERROR;
+	}
 	Th8_Free(interp, pPkg->zVersion);
-	pPkg->zVersion = Th8_Strdup(interp, argv[3], argl[3]);
+	pPkg->zVersion = zVer;
 	pPkg->nVersion = TH8_LEN(argl[3]);
     }
     if (pPkg->zVersion) {
@@ -779,6 +808,13 @@ package_ifneeded_command(
     }
     pEntry = Th8_HashFind(
         interp, Th8_GetPackageHash(interp), argv[2], TH8_LEN(argl[2]), 1);
+    if (!pEntry) {
+	/* create=1 hash insert can fail on OOM (Th8_HashFind returns NULL);
+	 * dereferencing pEntry->pData without this check crashed under a
+	 * transient allocation failure (Bug 85). */
+	Th8_SetResultStatic(interp, "out of memory", TH8_NOLEN);
+	return TH8_ERROR;
+    }
     pPkg = (Th8_PkgInfo *)pEntry->pData;
     if (!pPkg) {
 	pPkg = (Th8_PkgInfo *)TH8_ALLOC(interp, sizeof(Th8_PkgInfo));
@@ -801,11 +837,24 @@ package_ifneeded_command(
 	 */
 
 	Th8_HashEntry *pVer;
+	char *zScript;
 
 	pVer = Th8_HashFind(
 	    interp, pPkg->paIfNeeded, argv[3], TH8_LEN(argl[3]), 1);
+	if (!pVer) {
+	    /* create=1 hash insert can fail on OOM (Bug 85). */
+	    Th8_SetResultStatic(interp, "out of memory", TH8_NOLEN);
+	    return TH8_ERROR;
+	}
+	/* Strdup FIRST, then swap, so a transient OOM neither frees the old
+	 * script into a dangling pData nor records a NULL ifneeded script. */
+	zScript = Th8_Strdup(interp, argv[4], argl[4]);
+	if (!zScript) {
+	    Th8_SetResultStatic(interp, "out of memory", TH8_NOLEN);
+	    return TH8_ERROR;
+	}
 	Th8_Free(interp, pVer->pData);
-	pVer->pData = (void *)Th8_Strdup(interp, argv[4], argl[4]);
+	pVer->pData = (void *)zScript;
 	Th8_ClearResult(interp);
     } else {
 	/*
@@ -1008,8 +1057,8 @@ static int
 th8VersionParse(
     const char *z,
     size_t n,
-    int *aVer,   /* OUT: version components. */
-    int nMax)   /* Max components to parse. */
+    int *aVer, /* OUT: version components. */
+    int nMax) /* Max components to parse. */
 {
     int nVer = 0;
     size_t i = 0;
@@ -1234,15 +1283,15 @@ package_versions_command(
 /*
  *----------------------------------------------------------------------
  *
- * package_command --
+ * th8PackageSub --
  *
- *	Implements the Tcl [package] command.  Dispatcher for
- *	[package] sub-commands.
+ *	Catalogue of `package` sub-commands, installed into the `package`
+ *	ensemble command's per-interpreter sub-command hash at registration
+ *	(TH8K-025).
  *
  * Why / How:
- *	Uses Th8_CallSubCommand with a static sub-command table.
- *	Exports th8_package_aSub so that [info commands] can
- *	enumerate the available package sub-commands.
+ *	Published as th8_package_aSub so [info subcommands] can enumerate the
+ *	available package sub-commands.
  *
  * Results:
  *	Return code from the sub-command.
@@ -1267,45 +1316,6 @@ static const Th8_SubCommand th8PackageSub[] =
      {0, "vsatisfies", package_vsatisfies_command},
      {0, 0, 0}};
 
-/*
- *----------------------------------------------------------------------
- *
- * package_command --
- *
- *	Implements the script-visible `[package ...]` ensemble
- *	(`forget`, `ifneeded`, `names`, `present`, `provide`,
- *	`require`, `unknown`, `vcompare`, `versions`,
- *	`vsatisfies`).  Thin dispatcher into `th8PackageSub`
- *	via `Th8_CallSubCommand`; unknown / ambiguous
- *	subcommands fall through to its diagnostics.
- *
- * Parameters:
- *	interp -- live interpreter.
- *	ctx    -- command context (forwarded).
- *	argc   -- argument count.
- *	argv   -- argument vector.
- *	argl   -- argument byte-length vector.
- *
- * Returns:
- *	The selected subcommand's return code, or `TH8_ERROR`
- *	with a diagnostic if the subcommand name is unknown.
- *
- * Side effects:
- *	Whatever the dispatched subcommand performs.
- *
- *----------------------------------------------------------------------
- */
-static int
-package_command(
-    Th8_Interp *interp,
-    void *ctx,
-    int argc,
-    const char **argv,
-    size_t *argl)
-{
-    return Th8_CallSubCommand(interp, ctx, argc, argv, argl, th8PackageSub);
-}
-
 
 /*
  *----------------------------------------------------------------------
@@ -1317,7 +1327,7 @@ package_command(
 
 static Th8_CommandEntry th8ExtensibilityCommands[] = {
     {1, 0, "load", load_command},
-    {1, 0, "package", package_command},
+    {1, 0, "package", 0}, /* pure ensemble (TH8K-025) */
     {1, 0, "unload", unload_command},
 };
 

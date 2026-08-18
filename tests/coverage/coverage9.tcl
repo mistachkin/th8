@@ -55,7 +55,10 @@ runTest {test coverage9-1.2 {
 ###############################################################################
 
 runTest {test coverage9-1.3 {
-  R-41372-31985: Th8_GetMemPlatform returns non-NULL
+  R-44164-55088: Th8_GetMemPlatform's xNeedMemory clears the IR
+  cache then allocates through the interpreter's single
+  limit-checked, accounted allocation core; a returned block
+  is accounted exactly once and cannot exceed Th8_SetAllocLimit
 } -constraints {
     th8
 } -body {

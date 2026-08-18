@@ -1,0 +1,26 @@
+###############################################################################
+#
+# notoken.tcl.b64sig (coverage fixture, no public-key token)
+#
+# TH8 MC/DC COVERAGE FIXTURE (not a real signature).
+#
+# Deliberately malformed Harpy signature file used ONLY by the
+# ::th8testlib::policyverifydata `notoken` mode to drive the
+# th8_policy.c th8PolicyVerifyData token-presence guard:
+#
+#   if (!zToken || Th8_Strlen(interp, zToken) != 16) { ... }
+#
+# Line 3 above deliberately omits the "-- TOKEN" pattern that
+# Th8_HarpySigLoad looks for, so it returns TH8_OK with a NULL
+# token, driving the (T,-) C1 short-circuit vector of that decision.
+# The base64 body below is a short, valid-but-meaningless blob so
+# that Th8_HarpySigLoad succeeds and the token guard is reached.
+#
+# There is intentionally no notoken.tcl: th8PolicyVerifyData reads
+# only this .b64sig sibling (the data it verifies is supplied inline
+# by the probe), so no signed script is required or wanted here.
+#
+###############################################################################
+
+  QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2
+  d3h5ejAxMjM0NTY3ODkrLw==

@@ -95,7 +95,12 @@ static pthread_mutex_t th8SqliteMutex;
  * th8SqliteLock (POSIX) --
  *
  *	Acquire the per-process SQLite-backed-store mutex.
- *	Implements the canonical CAS-based lazy-init pattern:
+ *
+ * Why / How:
+ *	The lock is needed because the SQLite-backed-store layer is
+ *	shared across interpreters; threads can race on first
+ *	registration of the shared schema.  Implements the canonical
+ *	CAS-based lazy-init pattern:
  *
  *	  *  Fast path: `th8SqliteMutexReady == 1`, jump
  *	     straight to `pthread_mutex_lock`.
@@ -105,15 +110,12 @@ static pthread_mutex_t th8SqliteMutex;
  *	  *  Slow path (subsequent racers): spin until
  *	     `th8SqliteMutexReady == 1`, then fence and lock.
  *
- *	Mirror of the Win32 implementation below.  The lock
- *	is needed because the SQLite-backed-store layer is
- *	shared across interpreters; threads can race on
- *	first registration of the shared schema.
+ *	Mirror of the Win32 implementation below.
  *
  * Parameters:
  *	(none)
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -146,15 +148,16 @@ th8SqliteLock(void)
  * th8SqliteUnlock (POSIX) --
  *
  *	Release the per-process SQLite-backed-store mutex
- *	previously acquired by `th8SqliteLock`.  Mirror of
- *	the Win32 implementation below.
+ *	previously acquired by `th8SqliteLock`.
  *
- *	Caller must hold the mutex.
+ * Why / How:
+ *	Thin wrapper over `pthread_mutex_unlock`; the caller must hold
+ *	the mutex.  Mirror of the Win32 implementation below.
  *
  * Parameters:
  *	(none)
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -181,16 +184,20 @@ static volatile LONG th8SqliteCritSecReady = 0;
  * th8SqliteLock (Win32) --
  *
  *	Acquire the per-process SQLite-backed-store critical
- *	section.  Same CAS-based lazy-init pattern as the
- *	POSIX variant above, expressed against
- *	`InterlockedCompareExchange` /
- *	`InitializeCriticalSection`.  Mirror of the POSIX
- *	implementation.
+ *	section.
+ *
+ * Why / How:
+ *	Same CAS-based lazy-init pattern as the POSIX variant above,
+ *	expressed against `InterlockedCompareExchange` /
+ *	`InitializeCriticalSection`: the first caller claims init via a
+ *	`0 -> -1` compare-exchange, initialises the critical section,
+ *	and publishes readiness as `1`; racers spin until ready.
+ *	Mirror of the POSIX implementation.
  *
  * Parameters:
  *	(none)
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -221,15 +228,16 @@ th8SqliteLock(void)
  * th8SqliteUnlock (Win32) --
  *
  *	Release the per-process SQLite-backed-store critical
- *	section acquired by `th8SqliteLock`.  Mirror of the
- *	POSIX implementation above.
+ *	section acquired by `th8SqliteLock`.
  *
- *	Caller must hold the critical section.
+ * Why / How:
+ *	Thin wrapper over `LeaveCriticalSection`; the caller must hold
+ *	the critical section.  Mirror of the POSIX implementation above.
  *
  * Parameters:
  *	(none)
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -252,7 +260,21 @@ th8SqliteUnlock(void)
  * th8SqlitePrepare --
  *
  *	Prepare a single SQL statement, formatted with the table name.
- *	Returns SQLITE_OK or an error code.
+ *
+ * Why / How:
+ *	Formats zFmt (which contains a single %s for the table name)
+ *	into a fixed 512-byte stack buffer with sqlite3_snprintf, then
+ *	compiles it via sqlite3_prepare_v2.  Centralizes the
+ *	table-name substitution used by every prepared statement in
+ *	this binding.
+ *
+ * Results:
+ *	SQLITE_OK on success, with *ppStmt set to the compiled
+ *	statement; otherwise a SQLite error code.
+ *
+ * Side effects:
+ *	Allocates a prepared statement owned by pDb (the caller must
+ *	finalize it).
  *
  *----------------------------------------------------------------------
  */
@@ -276,7 +298,31 @@ th8SqlitePrepare(
  *
  * th8SqliteKeyValue --
  *
- *	xKeyValue callback backed by a SQLite database.
+ *	xKeyValue callback backed by a SQLite database.  Services every
+ *	key/value operation (EXISTS, GET, SET, UNSET, LIST and their
+ *	glob-matching *2 variants) for a SQLite-backed store.
+ *
+ * Why / How:
+ *	Serializes the whole operation under th8SqliteLock (the store is
+ *	shared across interpreters), stashes the invoking interpreter in
+ *	ctx->pCurrentInterp so the busy handler can poll Th8_Ready for
+ *	cancellation, then dispatches on op to the matching cached
+ *	prepared statement.  The bulk *2 mutators (SET2/UNSET2) wrap
+ *	their scan-then-write in a single BEGIN IMMEDIATE / COMMIT
+ *	transaction for atomicity; the error path (kv_err) captures
+ *	sqlite3_errmsg before rolling back any open transaction.
+ *
+ * Results:
+ *	TH8_OK on success (with the interpreter result set to the
+ *	value, key list, or dict for read ops); TH8_ERROR on a missing
+ *	key, no database connection, an unknown op, or a SQLite failure
+ *	(with an interpreter error message).
+ *
+ * Side effects:
+ *	Reads/writes the backing SQLite database, may allocate and free
+ *	list/dict buffers, sets the interpreter result, and acquires
+ *	and releases the per-process lock.  On a mutator error, rolls
+ *	back the in-progress transaction so no partial state survives.
  *
  *----------------------------------------------------------------------
  */
@@ -797,6 +843,23 @@ kv_err:
  *	Finalize all cached statements, close the database, and
  *	free the context.
  *
+ * Why / How:
+ *	Sole teardown path for a Th8_SQLiteKvCtx.  Rather than
+ *	finalize only the six cached statement handles, it walks
+ *	sqlite3_next_stmt so any statement left open on the connection
+ *	(including ones this binding never cached) is finalized before
+ *	sqlite3_close_v2, avoiding a "unable to close due to unfinalized
+ *	statements" leak.  The zDatabase/zTable strings were duplicated
+ *	with the C library allocator, so they are released with free.
+ *	Tolerates a NULL ctx so callers can invoke it unconditionally.
+ *
+ * Results:
+ *	None.
+ *
+ * Side effects:
+ *	Finalizes every statement on ctx->pDb, closes the connection,
+ *	and frees ctx->zDatabase, ctx->zTable, and ctx itself.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -850,6 +913,14 @@ th8SqliteCleanupCtx(Th8_SQLiteKvCtx *ctx)
  *	"produced any other row" (set to 0).  Returns 0 to keep
  *	exec going so all rows are observed.
  *
+ * Results:
+ *	Always 0, so sqlite3_exec continues feeding rows to the
+ *	callback rather than aborting.
+ *
+ * Side effects:
+ *	Updates *(int *)pCtx to 1 (intact) or 0 (corrupt) per the
+ *	rule above.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -901,6 +972,14 @@ th8SqliteIntegrityCallback(void *pCtx, int nCol, char **azVal, char **azCol)
  *	xKeyValue caller's interp.  If NULL (no operation in flight,
  *	which should not happen) we fall back to the timeout-only
  *	policy.
+ *
+ * Results:
+ *	Non-zero (1) to tell SQLite to retry the busy operation; 0 to
+ *	abort it with SQLITE_BUSY -- returned on host cancellation or
+ *	once ~50 retries (~1 second) have elapsed.
+ *
+ * Side effects:
+ *	On a retry, sleeps ~20 ms via sqlite3_sleep before returning.
  *
  *----------------------------------------------------------------------
  */
@@ -970,6 +1049,17 @@ th8SqliteBusyHandler(void *pCtx, int nRetries)
  *	authorizer is installed AFTER the open sequence completes.
  *	By the time the first user statement is prepared, the
  *	allowed action set is final.
+ *
+ * Results:
+ *	SQLITE_OK for the whitelisted actions -- SELECT, TRANSACTION,
+ *	built-in FUNCTION calls, and READ/INSERT/UPDATE/DELETE against
+ *	ctx->zTable (plus READ of the json_each/json_tree virtual
+ *	tables); SQLITE_DENY for everything else, which makes the
+ *	pending prepare fail with an authorization error.
+ *
+ * Side effects:
+ *	None.  It only inspects the action and ctx->zTable; it changes
+ *	no state.
  *
  *----------------------------------------------------------------------
  */
@@ -1244,7 +1334,33 @@ static const Th8_SqliteOpenStep th8SqliteOpenSteps[] = {
  *	Open the database, run the security-ordered open sequence
  *	(integrity check, persistent settings, transient settings,
  *	vacuum, schema), and prepare all cached statements.
- *	Returns TH8_OK or TH8_ERROR.
+ *
+ * Why / How:
+ *	Builds a fully hardened, single-purpose KV connection in one
+ *	place: opens with SQLITE_OPEN_NOFOLLOW (no symlink redirection);
+ *	installs the cancellation-aware busy handler before any SQL so
+ *	the open-time PRAGMAs benefit from it; applies the
+ *	sqlite3_db_config defenses (DEFENSIVE, DQS off, no
+ *	load_extension/trigger/view); walks the security-ordered
+ *	th8SqliteOpenSteps table (verification before any mutation);
+ *	installs the authorizer AFTER the open SQL (so PRAGMA/CREATE are
+ *	exempt but user statements are constrained to ctx->zTable); and
+ *	finally compiles the six cached statements via th8SqlitePrepare.
+ *	Any failure returns early -- the caller destroys the context via
+ *	th8SqliteCleanupCtx, so no per-step unwind is done here.
+ *
+ * Results:
+ *	TH8_OK with ctx->pDb open and every cached statement prepared;
+ *	TH8_ERROR (with an interpreter error message) if the open,
+ *	busy-handler/authorizer install, integrity check, any open
+ *	step, or any statement prepare fails.
+ *
+ * Side effects:
+ *	Opens (and possibly creates) the database file, may mutate it
+ *	(journal mode, VACUUM, CREATE TABLE, etc.), installs the busy
+ *	handler and authorizer, allocates six prepared statements on
+ *	the connection, sets ctx->pDb and the ctx->p* statement
+ *	handles, and temporarily sets/clears ctx->pCurrentInterp.
  *
  *----------------------------------------------------------------------
  */
@@ -1555,6 +1671,18 @@ static Th8_Platform th8SqlitePlatformData = {
  *	Return the SQLite-backed platform layer.
  *	The pCtx field points to the module-static Th8_SQLiteKvCtx.
  *
+ * Why / How:
+ *	Exposes the module-static th8SqlitePlatformData (a Th8_Platform
+ *	whose xKeyValue slot is th8SqliteKeyValue) so a host can merge
+ *	the SQLite-backed store into an interpreter.  A plain accessor;
+ *	the pCtx field is populated separately during _Init.
+ *
+ * Results:
+ *	A const pointer to the module-static Th8_Platform.  Never NULL.
+ *
+ * Side effects:
+ *	None.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1578,7 +1706,23 @@ Th8_GetSQLitePlatform(void)
  * th8SqliteJsonExec --
  *
  *	Execute a SQL statement that returns a single text value and
- *	set the interpreter result.  Returns TH8_OK or TH8_ERROR.
+ *	set the interpreter result.
+ *
+ * Why / How:
+ *	Shared helper for the scalar [json] subcommands (valid, extract,
+ *	type, length, error, pretty, ...).  Prepares zSql, binds the
+ *	nBind text arguments (azBind/anBind) positionally, steps once,
+ *	and copies column 0 into the interpreter result (a NULL column
+ *	or a no-row result clears it).  Always finalizes the statement.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to the single column
+ *	value (or cleared); TH8_ERROR with the interpreter result set
+ *	to sqlite3_errmsg on prepare, bind, or step failure.
+ *
+ * Side effects:
+ *	Prepares and finalizes a transient statement on pDb and sets or
+ *	clears the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -1642,6 +1786,25 @@ th8SqliteJsonExec(
  *
  *	Execute a SQL statement that returns multiple rows with a
  *	single text column.  Build a Tcl list of the results.
+ *
+ * Why / How:
+ *	Backs the row-producing [json] subcommands (keys, values) that
+ *	iterate json_each/json_tree.  Binds the JSON text as parameter 1
+ *	and, when zPath is non-NULL, the path as parameter 2; steps to
+ *	completion appending each non-NULL column-0 value to a growing
+ *	Th8 list; then sets that list as the interpreter result.
+ *	Finalizes the statement and frees the temporary list buffer on
+ *	every path.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to a (possibly empty)
+ *	list of column values; TH8_ERROR with the interpreter result
+ *	set to sqlite3_errmsg on prepare, bind, or step failure.
+ *
+ * Side effects:
+ *	Prepares and finalizes a transient statement on pDb, allocates
+ *	and frees a list buffer, and sets or clears the interpreter
+ *	result.
  *
  *----------------------------------------------------------------------
  */
@@ -1721,6 +1884,20 @@ json_multi_err:
  *	  SELECT func(?, ?, ?, ...)
  *	  Binds: json, path1, path2, ...
  *
+ * Why / How:
+ *	The variadic JSON mutators take an unbounded number of bind
+ *	parameters, so the SELECT text cannot be a fixed literal.  This
+ *	allocates a buffer via TH8_ALLOC_MUL_ADD (overflow-safe sizing)
+ *	and writes `SELECT <func>(?,?,...)` with nParams placeholders.
+ *	The caller binds the arguments and executes the result.
+ *
+ * Results:
+ *	A newly allocated, NUL-terminated SQL string owned by the caller
+ *	(free with Th8_Free); NULL if the allocation fails.
+ *
+ * Side effects:
+ *	Allocates the returned buffer; sets no interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -1766,6 +1943,27 @@ th8SqliteJsonBuildSql(
  *	json subcommand ...
  *
  *	Dispatch JSON operations via SQLite's built-in JSON functions.
+ *
+ * Why / How:
+ *	Implements the [json] command by translating each subcommand
+ *	(valid, extract, type, length, error, pretty, set, insert,
+ *	replace, remove, keys, values, ...) into a SELECT over SQLite's
+ *	JSON1 functions run on the module-static KV connection
+ *	(th8SqliteCtx->pDb), reusing th8SqliteJsonExec for scalar
+ *	results and th8SqliteJsonMultiRow for row-producing ones.  This
+ *	gives TH8 a full JSON facility for free rather than reimplementing
+ *	a parser.  Argument counts are validated per subcommand via
+ *	Th8_WrongNumArgs.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to the operation's output
+ *	(scalar value or list); TH8_ERROR (with an interpreter message)
+ *	on wrong argument count, no database connection, an unknown
+ *	subcommand, or a SQLite failure.
+ *
+ * Side effects:
+ *	Executes JSON SQL on the shared connection (read-only; no KV
+ *	rows are modified) and sets the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -2084,6 +2282,28 @@ sql_err:
  *	Opens the SQLite database, creates the KV table,
  *	prepares cached statements, and merges the platform.
  *
+ * Why / How:
+ *	The standard TH8 load entry point.  Initializes stubs (when
+ *	built with USE_TH8_STUBS) and the SQLite library, allocates the
+ *	module-static Th8_SQLiteKvCtx (database from the TH8_SQLITE_DB
+ *	environment variable, else ":memory:"; table "kv"), builds the
+ *	hardened connection via th8SqliteOpenAndPrepare, then merges the
+ *	SQLite platform into the interpreter, binds ctx as the xKeyValue
+ *	callback context, registers the [json] command, and provides the
+ *	package.  Every failure after allocation unwinds via
+ *	th8SqliteCleanupCtx so no partial state is left behind.
+ *
+ * Results:
+ *	TH8_OK once the store is installed and the package provided;
+ *	TH8_ERROR (with an interpreter error message) on stub/SQLite
+ *	init failure, out of memory, or an open/merge/context failure.
+ *
+ * Side effects:
+ *	Initializes SQLite, allocates and stores the module-static
+ *	th8SqliteCtx, opens/creates the database file, merges the
+ *	platform into interp, creates the [json] command, and evaluates
+ *	a `package provide`.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -2198,6 +2418,21 @@ Th8sqlite3_Init(Th8_Interp *interp)
  *
  *	Extension cleanup.  Finalizes all statements, closes all
  *	connections, and shuts down SQLite.
+ *
+ * Why / How:
+ *	The [unload] counterpart to Th8sqlite3_Init.  Takes the
+ *	per-process lock, tears down the module-static context via
+ *	th8SqliteCleanupCtx (finalizing statements and closing the
+ *	connection), clears th8SqliteCtx, releases the lock, shuts down
+ *	the SQLite library, and forgets the package.  The interp and
+ *	flags arguments are unused.
+ *
+ * Results:
+ *	Always TH8_OK.
+ *
+ * Side effects:
+ *	Destroys th8SqliteCtx and closes its database, calls
+ *	sqlite3_shutdown, and evaluates a `package forget`.
  *
  *----------------------------------------------------------------------
  */

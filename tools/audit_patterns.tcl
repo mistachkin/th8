@@ -115,6 +115,7 @@ set ::PLATFORM_BOUNDARY_FILES [list \
     src/th8_shell.c \
     src/test/th8_testlib.c \
     src/test/th8_tcl.c \
+    src/test/th8_lifecycle_fail.c \
     src/th8_hash.c]
 
 

@@ -73,6 +73,10 @@ format_command(
     nFmt = TH8_LEN(argl[1]);
 
     for (i = 0; i < nFmt; i++) {
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zOut);
+	    return TH8_ERROR;
+	}
 	if (zFmt[i] != '%') {
 	    TH8_STR_APPEND(interp, &zOut, &nOut, &zFmt[i], 1);
 	    continue;
@@ -921,45 +925,280 @@ oom:
 /*
  *----------------------------------------------------------------------
  *
+ * th8ScanFormatUnsigned --
+ *
+ *	Format an unsigned 64-bit value as a decimal string.
+ *
+ * Why / How:
+ *	Renders the unsigned interpretation of a scanned value for the
+ *	64-bit-unsigned scan conversions (%lu and 64-bit %u variants),
+ *	which Th8_SetResultWideInt (signed) cannot express.  Digits are
+ *	generated least-significant first, then reversed into the
+ *	caller's buffer, which must hold at least 20 digits.
+ *
+ * Results:
+ *	The number of digits written (never zero: 0 renders as "0").
+ *
+ * Side effects:
+ *	Writes into zBuf.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8ScanFormatUnsigned(char *zBuf, th8_uint64_t v)
+{
+    char tmp[24];
+    int n = 0;
+    int i;
+
+    if (v == 0) {
+	zBuf[0] = '0';
+	return 1;
+    }
+    while (v > 0) {
+	tmp[n++] = (char)('0' + (int)(v % 10));
+	v /= 10;
+    }
+    for (i = 0; i < n; i++) {
+	zBuf[i] = tmp[n - 1 - i];
+    }
+    return n;
+}
+
+
+/* scan integer size modifiers (h/l/L run) -> stored integer type. */
+#  define SCAN_MOD_NONE 0 /* (default)  -> 32-bit int */
+#  define SCAN_MOD_HH   1 /* hh         -> 8-bit int  */
+#  define SCAN_MOD_H    2 /* h          -> 16-bit int */
+#  define SCAN_MOD_L    3 /* l or L     -> 64-bit int */
+#  define SCAN_MOD_LL   4 /* ll         -> BigInt     */
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8ScanDigitOk --
+ *
+ *	Test whether a character is a valid digit in the given radix.
+ *
+ * Why / How:
+ *	Branches on the four bases `scan` supports so digit validation
+ *	during a `%x`/`%o`/`%b`/`%d` conversion stops at the first
+ *	out-of-radix character; hex defers to `th8IsHexDig` so both
+ *	letter cases are accepted.  Any base other than 2, 8, or 16 is
+ *	treated as decimal.
+ *
+ * Results:
+ *	Non-zero if c is a digit of base (2, 8, 10, or 16); 0 otherwise.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8ScanDigitOk(char c, int base)
+{
+    if (base == 16) return th8IsHexDig(c);
+    if (base == 2) return (c == '0' || c == '1');
+    if (base == 8) return (c >= '0' && c <= '7');
+    return (c >= '0' && c <= '9');
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8ScanCountSpecs --
+ *
+ *	Count the non-suppressed conversion specifiers in a scan format.
+ *
+ * Why / How:
+ *	In list mode `scan` returns one element per non-suppressed
+ *	conversion specifier, padding trailing unmatched specifiers with
+ *	empty strings.  A `%` beginning `%%` is a literal; a `%`
+ *	immediately followed by `*` is suppressed and produces no list
+ *	element.  Every other `%` is a value-producing specifier.
+ *
+ * Results:
+ *	The number of value-producing (non-suppressed) specifiers.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8ScanCountSpecs(const char *zFmt, size_t nFmt)
+{
+    size_t i;
+    int n = 0;
+
+    for (i = 0; i + 1 < nFmt; i++) {
+	if (zFmt[i] != '%') continue;
+	if (zFmt[i + 1] == '%') {
+	    i++; /* literal %% */
+	    continue;
+	}
+	if (zFmt[i + 1] != '*') n++;
+    }
+    return n;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8ScanStoreInt --
+ *
+ *	Convert a scanned integer digit run to the type selected by the
+ *	conversion's size modifier and set it as the interpreter result.
+ *
+ * Why / How:
+ *	TH8's scan uses the ACTUAL C type associated with each specifier:
+ *	the digits are accumulated modulo 2^64, negated if signed, then
+ *	truncated to the modifier's width (hh=8, h=16, default=32, l/L=64
+ *	bits), sign-extended for signed conversions or zero-extended for
+ *	unsigned ones.  The `ll` modifier stores an arbitrary-precision
+ *	BigInt instead (th8ScanBignum); an unsigned BigInt scan of a
+ *	negative value is an error, matching the impossibility of an
+ *	unbounded unsigned magnitude.  Digits are assumed pre-validated
+ *	for `base` by the caller.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set; TH8_ERROR on an
+ *	unsigned-BigInt scan of a negative value or an over-long BigInt.
+ *
+ * Side effects:
+ *	Sets the interpreter result.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8ScanStoreInt(
+    Th8_Interp *interp,
+    const char *zDig,
+    size_t nDig,
+    int base,
+    int bNeg,
+    int bUnsigned,
+    int sizeMod)
+{
+    th8_uint64_t acc = 0;
+    th8_uint64_t mask;
+    th8_uint64_t low;
+    size_t k;
+    int width;
+
+    if (sizeMod == SCAN_MOD_LL) {
+#  if defined(TH8_ENABLE_BIGINT)
+	char buf[600];
+	size_t p = 0;
+	const char *zPfx = (base == 16) ? "0x"
+	                 : (base == 8)  ? "0o"
+	                 : (base == 2)  ? "0b"
+	                                : "";
+	size_t nPfx = Th8_Strlen(interp, zPfx);
+
+	if (bUnsigned && bNeg) {
+	    Th8_SetResultStatic(
+	        interp, "scan: unsigned bignum scans are invalid", TH8_NOLEN);
+	    return TH8_ERROR;
+	}
+	if (nDig + nPfx + 2 >= sizeof(buf)) {
+	    Th8_SetResultStatic(
+	        interp, "scan: integer too long for conversion", TH8_NOLEN);
+	    return TH8_ERROR;
+	}
+	if (bNeg) buf[p++] = '-';
+	Th8_Memcpy(interp, &buf[p], zPfx, nPfx);
+	p += nPfx;
+	Th8_Memcpy(interp, &buf[p], zDig, nDig);
+	p += nDig;
+	return th8ScanBignum(interp, buf, p);
+#  else
+	width = 64; /* No BigInt support: fall back to 64-bit. */
+#  endif
+    } else {
+	width = (sizeMod == SCAN_MOD_HH) ? 8
+	      : (sizeMod == SCAN_MOD_H)  ? 16
+	      : (sizeMod == SCAN_MOD_L)  ? 64
+	                                 : 32;
+    }
+
+    for (k = 0; k < nDig; k++) {
+	char c = zDig[k];
+	int d;
+
+	if (c >= '0' && c <= '9') {
+	    d = c - '0';
+	} else if (c >= 'a' && c <= 'f') {
+	    d = c - 'a' + 10;
+	} else {
+	    d = c - 'A' + 10;
+	}
+	acc = acc * (th8_uint64_t)base + (th8_uint64_t)d; /* modular */
+    }
+    if (bNeg) acc = (th8_uint64_t)0 - acc; /* two's-complement negate */
+
+    mask = (width == 64) ? ~(th8_uint64_t)0
+                         : (((th8_uint64_t)1 << width) - 1);
+    low = acc & mask;
+    if (!bUnsigned && width < 64 && ((low >> (width - 1)) & 1)) {
+	low |= ~mask; /* sign-extend */
+    }
+
+    if (bUnsigned && width == 64) {
+	char ubuf[24];
+	int nu = th8ScanFormatUnsigned(ubuf, low);
+
+	Th8_SetResult(interp, ubuf, (size_t)nu);
+    } else {
+	Th8_SetResultWideInt(interp, (th8_int64_t)low);
+    }
+    return TH8_OK;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
  * scan_command --
  *
- *	Parse a string according to a format (inverse of format).
+ *	Parse an input string under the control of a format string,
+ *	extracting values (the inverse of [format]).
  *
  *	scan STRING FORMAT ?VARNAME ...?
  *
- *	Simplified implementation supporting %d/%i, %o, %x, %s, %c,
- *	%f, and %n.  Width specifiers are parsed but not enforced.
- *
- *	Two modes of operation:
- *	  - Variable mode (argc > 3): each converted value is stored
- *	    in the corresponding VARNAME; the result is the count
- *	    of successful conversions.
- *	  - List mode (argc == 3): converted values are collected
- *	    into a list which becomes the result.
- *
- *	The parsing loop walks the format string (iFmt) and input
- *	string (iStr) in lockstep:
- *	  - Non-'%' format characters must match literally.
- *	  - %% matches a literal '%'.
- *	  - Each specifier consumes characters from the input,
- *	    converts them, and stores/collects the result.
- *	  - Parsing stops on the first mismatch or conversion failure.
- *
- *	NOTE: This is a simplified implementation.  Width limits on
- *	specifiers, character classes ([...]), and the * suppression
- *	flag are not yet supported.
- *
  * Why / How:
- *	Implements the Tcl [scan] command (the inverse of [format]).
- *	Operates in two modes: variable mode stores each converted
- *	value in a named variable and returns the count of successful
- *	conversions; list mode collects all converted values into a
- *	Tcl list.  The format and input strings are walked in lockstep
- *	with literal characters requiring an exact match and specifiers
- *	consuming and converting input characters.
+ *	A scanf engine tracking the Tcl 8.6 specifier set with TH8's own
+ *	type rules.  Each specifier is %[*][width][size]CONV:
+ *	  d u i o x X b   -- integers.  The size modifier selects the
+ *	                     stored C type: hh=8, h=16, (none)=32, l/L=64
+ *	                     bits, ll=BigInt; signed conversions (d, i)
+ *	                     sign-extend, the rest zero-extend.
+ *	  e E f g G       -- floating point: (none)=double, h=float; any
+ *	                     other size modifier is an error.
+ *	  c               -- one character as its code point
+ *	  s               -- run of non-whitespace characters
+ *	  [set] [^set]    -- run of characters in / not in a set
+ *	  n               -- count of characters consumed so far
+ *	  %%              -- a literal '%'
+ *	`*` suppresses assignment; a width bounds the field.  A blank/tab
+ *	in the format matches any run of input whitespace; every
+ *	conversion except c, [ and n skips leading whitespace.  In
+ *	variable mode the result is the count of assignments (or -1 if
+ *	end-of-input is reached before any conversion); in list mode (no
+ *	VARNAMEs) it is a list with one element per non-suppressed
+ *	specifier, trailing unmatched specifiers padded with empties.
  *
  * Results:
- *	TH8_OK on success; TH8_ERROR on overflow or if variables are
+ *	TH8_OK on success; TH8_ERROR on a bad size modifier, an
+ *	unsigned-BigInt scan of a negative value, or if variables are
  *	requested but TH8_ENABLE_VARIABLES is not compiled in.
  *
  * Side effects:
@@ -983,12 +1222,18 @@ scan_command(
     size_t iStr = 0;
     size_t iFmt = 0;
 #  if defined(TH8_ENABLE_VARIABLES)
-    int iVar = 3; /* Next variable argument */
+    int iVar = 3; /* Next variable argument. */
 #  endif
-    int nConv = 0; /* Conversions performed */
-    char *zList = 0; /* For no-variable mode */
+    int nAssign = 0; /* Assignments / list elements produced. */
+    int nConvTotal = 0; /* Conversions including suppressed ones. */
+    int bEof = 0; /* EOF reached before any conversion -> -1 / empty. */
+    int nSpecs; /* Non-suppressed specifiers (list-mode padding). */
+    int bConvAttempted = 0; /* A conversion specifier was reached. */
+    char *zList = 0; /* For inline (no-variable) mode. */
     size_t nList = 0;
     int bVarMode;
+
+    (void)ctx;
 
     if (argc < 3) {
 	return Th8_WrongNumArgs(interp, "scan string format ?varname ...?");
@@ -998,6 +1243,7 @@ scan_command(
     zFmt = argv[2];
     nFmt = TH8_LEN(argl[2]);
     bVarMode = (argc > 3);
+    nSpecs = th8ScanCountSpecs(zFmt, nFmt);
 
 #  if !defined(TH8_ENABLE_VARIABLES)
     if (bVarMode) {
@@ -1007,170 +1253,246 @@ scan_command(
     }
 #  endif
 
-    /* Loop invariant: every iStr advance inside the body is
-     * guarded by `iStr < nStr` (literal-match branch L849, and
-     * each conversion handler's internal bound check), so iStr
-     * never exceeds nStr.  The `iStr <= nStr` upper-bound here
-     * is a belt-and-braces defensive check, never F at entry. */
-    while (iFmt < nFmt && ALWAYS(iStr <= nStr)) {
-	if (zFmt[iFmt] != '%') {
-	    /*
-	     * Literal character must match.
-	     */
+    while (iFmt < nFmt) {
+	char cf;
+	int bSuppress;
+	int width;
+	int bHaveWidth;
+	int sizeMod;
+	char conv;
+	size_t maxEnd;
+	int converted;
 
-	    if (iStr >= nStr || zStr[iStr] != zFmt[iFmt]) {
-		break;
-	    }
+	if (Th8_Ready(interp) != TH8_OK) {
+	    Th8_Free(interp, zList);
+	    return TH8_ERROR;
+	}
+	cf = zFmt[iFmt];
+
+	/* A blank or tab matches any run (including zero) of input ws. */
+	if (th8IsSpace(cf)) {
+	    iFmt++;
+	    while (iStr < nStr && th8IsSpace(zStr[iStr]))
+		iStr++;
+	    continue;
+	}
+
+	/* Any other non-'%' character must match the input literally. */
+	if (cf != '%') {
+	    if (iStr >= nStr || zStr[iStr] != cf) break;
 	    iStr++;
 	    iFmt++;
 	    continue;
 	}
-	iFmt++; /* skip '%' */
+
+	iFmt++; /* Skip '%'. */
 	if (iFmt >= nFmt) break;
 	if (zFmt[iFmt] == '%') {
-	    /* Literal %% */
 	    if (iStr >= nStr || zStr[iStr] != '%') break;
 	    iStr++;
 	    iFmt++;
 	    continue;
 	}
 
-	/*
-	 * Skip optional width (not used in simplified impl).
-	 */
+	/* [*] assignment-suppression flag. */
+	bSuppress = 0;
+	if (zFmt[iFmt] == '*') {
+	    bSuppress = 1;
+	    iFmt++;
+	    if (iFmt >= nFmt) break;
+	}
 
+	/* [width] maximum field width. */
+	width = 0;
+	bHaveWidth = 0;
 	while (iFmt < nFmt && zFmt[iFmt] >= '0' && zFmt[iFmt] <= '9') {
+	    bHaveWidth = 1;
+	    width = width * 10 + (zFmt[iFmt] - '0');
 	    iFmt++;
 	}
 	if (iFmt >= nFmt) break;
 
-	switch (zFmt[iFmt]) {
+	/* [size] modifier (hh, h, l, ll, L). */
+	sizeMod = SCAN_MOD_NONE;
+	if (zFmt[iFmt] == 'h') {
+	    iFmt++;
+	    if (iFmt < nFmt && zFmt[iFmt] == 'h') {
+		iFmt++;
+		sizeMod = SCAN_MOD_HH;
+	    } else {
+		sizeMod = SCAN_MOD_H;
+	    }
+	} else if (zFmt[iFmt] == 'l') {
+	    iFmt++;
+	    if (iFmt < nFmt && zFmt[iFmt] == 'l') {
+		iFmt++;
+		sizeMod = SCAN_MOD_LL;
+	    } else {
+		sizeMod = SCAN_MOD_L;
+	    }
+	} else if (zFmt[iFmt] == 'L') {
+	    iFmt++;
+	    sizeMod = SCAN_MOD_L;
+	}
+	if (iFmt >= nFmt) break;
+
+	conv = zFmt[iFmt];
+
+	/* Every conversion except %c, %[, and %n skips leading whitespace. */
+	if (conv != 'c' && conv != '[' && conv != 'n') {
+	    while (iStr < nStr && th8IsSpace(zStr[iStr]))
+		iStr++;
+	}
+
+	/* EOF before a value-producing conversion, nothing converted -> -1. */
+	if (conv != 'n' && iStr >= nStr) {
+	    if (nConvTotal == 0) bEof = 1;
+	    break;
+	}
+
+	/* The field width bounds the input region this conversion reads. */
+	maxEnd = nStr;
+	if (bHaveWidth && width > 0 && iStr + (size_t)width < maxEnd) {
+	    maxEnd = iStr + (size_t)width;
+	}
+
+	converted = 0;
+	bConvAttempted = 1;
+
+	switch (conv) {
 	case 'd':
-	case 'i': {
+	case 'i':
+	case 'u': {
 	    /*
-	     * Decimal integer.
+	     * Decimal (d/u) or base-detected (i) integer.
 	     */
 
-	    size_t start = iStr;
-	    th8_int64_t val;
+	    size_t save = iStr;
+	    size_t dstart;
+	    int base = 10;
+	    int bNeg = 0;
+	    int bUnsigned = (conv == 'u');
 
-	    if (iStr < nStr && (zStr[iStr] == '-' || zStr[iStr] == '+')) {
+	    if (iStr < maxEnd && (zStr[iStr] == '-' || zStr[iStr] == '+')) {
+		bNeg = (zStr[iStr] == '-');
 		iStr++;
 	    }
-	    while (iStr < nStr && zStr[iStr] >= '0' && zStr[iStr] <= '9') {
-		iStr++;
-	    }
-	    if (iStr == start) goto scan_done;
-	    if (Th8_ToWideInt(0, &zStr[start], iStr - start, &val) !=
-	        TH8_OK) {
-		goto scan_done;
-	    }
-	    Th8_SetResultWideInt(interp, val);
-	    break;
-	}
-	case 'o': {
-	    size_t start = iStr;
-	    th8_int64_t val = 0;
-
-	    while (iStr < nStr && zStr[iStr] >= '0' && zStr[iStr] <= '7') {
-		if (val > (TH8_INT64_MAX >> 3)) {
-		    Th8_SetResultStatic(
-		        interp, "integer value too large", TH8_NOLEN);
-		    return TH8_ERROR;
+	    if (conv == 'i') {
+		if (iStr + 1 < maxEnd && zStr[iStr] == '0' &&
+		    (zStr[iStr + 1] == 'x' || zStr[iStr + 1] == 'X')) {
+		    base = 16;
+		    iStr += 2;
+		} else if (iStr < maxEnd && zStr[iStr] == '0') {
+		    base = 8;
 		}
-		val = (val << 3) | (zStr[iStr] - '0');
-		iStr++;
 	    }
-	    if (iStr == start) goto scan_done;
-	    Th8_SetResultWideInt(interp, val);
+	    dstart = iStr;
+	    while (iStr < maxEnd && th8ScanDigitOk(zStr[iStr], base))
+		iStr++;
+	    if (iStr == dstart) {
+		iStr = save;
+		break;
+	    }
+	    if (th8ScanStoreInt(
+	            interp, &zStr[dstart], iStr - dstart, base, bNeg,
+	            bUnsigned, sizeMod) != TH8_OK) {
+		Th8_Free(interp, zList);
+		return TH8_ERROR;
+	    }
+	    converted = 1;
 	    break;
 	}
-	case 'x': {
-	    size_t start;
-	    th8_int64_t val = 0;
-
+	case 'o':
+	case 'x':
+	case 'X':
+	case 'b': {
 	    /*
-	     * Skip optional 0x or 0X prefix.
+	     * Octal / hexadecimal / binary (unsigned), with optional 0x /
+	     * 0b prefix for x/X and b.
 	     */
 
-	    if (iStr + 1 < nStr && zStr[iStr] == '0' &&
+	    size_t save = iStr;
+	    size_t dstart;
+	    int base = (conv == 'o') ? 8 : (conv == 'b') ? 2 : 16;
+
+	    if (base == 16 && iStr + 1 < maxEnd && zStr[iStr] == '0' &&
 	        (zStr[iStr + 1] == 'x' || zStr[iStr + 1] == 'X')) {
 		iStr += 2;
+	    } else if (
+	        base == 2 && iStr + 1 < maxEnd && zStr[iStr] == '0' &&
+	        (zStr[iStr + 1] == 'b' || zStr[iStr + 1] == 'B')) {
+		iStr += 2;
 	    }
-	    start = iStr;
-	    while (iStr < nStr && th8IsHexDig(zStr[iStr])) {
-		int d;
-
-		if (ALWAYS(zStr[iStr] >= '0') && zStr[iStr] <= '9') {
-		    d = zStr[iStr] - '0';
-		} else if (zStr[iStr] >= 'a') {
-		    d = zStr[iStr] - 'a' + 10;
-		} else {
-		    d = zStr[iStr] - 'A' + 10;
-		}
-		if (val > (TH8_INT64_MAX >> 4)) {
-		    Th8_SetResultStatic(
-		        interp, "integer value too large", TH8_NOLEN);
-		    return TH8_ERROR;
-		}
-		val = (val << 4) | d;
+	    dstart = iStr;
+	    while (iStr < maxEnd && th8ScanDigitOk(zStr[iStr], base))
 		iStr++;
+	    if (iStr == dstart) {
+		iStr = save;
+		break;
 	    }
-	    if (iStr == start) goto scan_done;
-	    Th8_SetResultWideInt(interp, val);
+	    if (th8ScanStoreInt(
+	            interp, &zStr[dstart], iStr - dstart, base, 0, 1,
+	            sizeMod) != TH8_OK) {
+		Th8_Free(interp, zList);
+		return TH8_ERROR;
+	    }
+	    converted = 1;
 	    break;
 	}
 	case 'c': {
 	    /*
-	     * Single character -> code point value.
+	     * A single character (no ws skip, no width): its code point.
 	     */
 
 	    int nByte;
-	    int cp;
+	    int cp = Th8_Utf8Decode(&zStr[iStr], nStr - iStr, &nByte);
 
-	    if (iStr >= nStr) goto scan_done;
-	    cp = Th8_Utf8Decode(&zStr[iStr], nStr - iStr, &nByte);
 	    iStr += (size_t)nByte;
 	    Th8_SetResultInt(interp, cp);
+	    converted = 1;
 	    break;
 	}
 	case 's': {
 	    /*
-	     * Non-whitespace string.
+	     * A run of non-whitespace characters (bounded by the width).
 	     */
 
 	    size_t start = iStr;
 
-	    while (iStr < nStr && !th8IsSpace(zStr[iStr])) {
+	    while (iStr < maxEnd && !th8IsSpace(zStr[iStr]))
 		iStr++;
-	    }
+	    if (iStr == start) break;
 	    Th8_SetResult(interp, &zStr[start], iStr - start);
+	    converted = 1;
 	    break;
 	}
-	case 'f': {
+	case 'e':
+	case 'E':
+	case 'f':
+	case 'g':
+	case 'G': {
 	    /*
-	     * Floating-point number.
+	     * Floating point.  The stored type follows the size modifier:
+	     * (none) -> double, h -> float; any other modifier is an error.
 	     */
 
 	    size_t start = iStr;
 	    double rVal;
 	    int bSawExp = 0;
 
-	    if (iStr < nStr && (zStr[iStr] == '-' || zStr[iStr] == '+')) {
+	    if (sizeMod != SCAN_MOD_NONE && sizeMod != SCAN_MOD_H) {
+		Th8_SetResultStatic(
+		    interp,
+		    "scan: unsupported size modifier for floating-point "
+		    "conversion",
+		    TH8_NOLEN);
+		Th8_Free(interp, zList);
+		return TH8_ERROR;
+	    }
+	    if (iStr < maxEnd && (zStr[iStr] == '-' || zStr[iStr] == '+')) {
 		iStr++;
 	    }
-	    /* Bug 8 fix: the previous one-pass char-class
-	     * accepted only digits, '.', 'e', 'E' -- it did
-	     * NOT accept a '+'/'-' sign immediately after
-	     * 'e'/'E', so e.g. "1e-3" stopped at "1e" and
-	     * Th8_ToDouble rejected the truncated token,
-	     * making the scan silently return 0 conversions.
-	     * Restructured as a small state machine that:
-	     *   - consumes digits and '.' freely
-	     *   - accepts at most one 'e' / 'E'
-	     *   - accepts at most one sign byte immediately
-	     *     after the e/E that started the exponent. */
-	    while (iStr < nStr) {
+	    while (iStr < maxEnd) {
 		char c = zStr[iStr];
 
 		if ((c >= '0' && c <= '9') || c == '.') {
@@ -1180,7 +1502,7 @@ scan_command(
 		if ((c == 'e' || c == 'E') && !bSawExp) {
 		    bSawExp = 1;
 		    iStr++;
-		    if (iStr < nStr &&
+		    if (iStr < maxEnd &&
 		        (zStr[iStr] == '+' || zStr[iStr] == '-')) {
 			iStr++;
 		    }
@@ -1188,32 +1510,100 @@ scan_command(
 		}
 		break;
 	    }
-	    if (iStr == start) goto scan_done;
+	    if (iStr == start) break;
 	    if (Th8_ToDouble(0, &zStr[start], iStr - start, &rVal) !=
 	        TH8_OK) {
-		goto scan_done;
+		iStr = start;
+		break;
+	    }
+	    if (sizeMod == SCAN_MOD_H) {
+		rVal = (double)(float)rVal; /* narrow to single precision */
 	    }
 	    Th8_SetResultDouble(interp, rVal);
+	    converted = 1;
 	    break;
 	}
 	case 'n': {
 	    /*
-	     * Number of characters consumed so far.
+	     * Store the number of characters consumed so far (no input).
 	     */
 
 	    Th8_SetResultInt(interp, Th8_Utf8Len(zStr, iStr));
+	    converted = 1;
+	    break;
+	}
+	case '[': {
+	    /*
+	     * Character-set scan (honoring a leading '^' negation, a ']'
+	     * first member, and 'a-b' ranges).
+	     */
+
+	    unsigned char inSet[256];
+	    int bNeg = 0;
+	    size_t start;
+	    size_t bodyStart;
+	    size_t k;
+
+	    for (k = 0; k < 256; k++)
+		inSet[k] = 0;
+
+	    iFmt++; /* Past '['. */
+	    if (iFmt < nFmt && zFmt[iFmt] == '^') {
+		bNeg = 1;
+		iFmt++;
+	    }
+	    bodyStart = iFmt;
+	    if (iFmt < nFmt && zFmt[iFmt] == ']') {
+		inSet[(unsigned char)']'] = 1;
+		iFmt++;
+	    }
+	    while (iFmt < nFmt && zFmt[iFmt] != ']') {
+		if (zFmt[iFmt] == '-' && iFmt > bodyStart &&
+		    iFmt + 1 < nFmt && zFmt[iFmt + 1] != ']') {
+		    unsigned char lo = (unsigned char)zFmt[iFmt - 1];
+		    unsigned char hi = (unsigned char)zFmt[iFmt + 1];
+		    int c;
+
+		    if (lo <= hi) {
+			for (c = lo; c <= hi; c++)
+			    inSet[c] = 1;
+		    } else {
+			inSet[hi] = 1;
+			inSet[(unsigned char)'-'] = 1;
+		    }
+		    iFmt += 2;
+		    continue;
+		}
+		inSet[(unsigned char)zFmt[iFmt]] = 1;
+		iFmt++;
+	    }
+	    if (iFmt >= nFmt) {
+		goto scan_done; /* Unterminated set. */
+	    }
+
+	    start = iStr;
+	    while (iStr < maxEnd) {
+		unsigned char uc = (unsigned char)zStr[iStr];
+
+		if (bNeg ? inSet[uc] : !inSet[uc]) break;
+		iStr++;
+	    }
+	    if (iStr == start) break;
+	    Th8_SetResult(interp, &zStr[start], iStr - start);
+	    converted = 1;
 	    break;
 	}
 	default:
-	    goto scan_done;
+	    goto scan_done; /* Unknown conversion character. */
 	}
-	iFmt++;
 
-	/*
-	 * Store or collect the converted value.
-	 */
+	if (!converted) {
+	    break; /* Matching failure: stop scanning. */
+	}
 
-	{
+	iFmt++; /* Consume the conversion character (or the set's ']'). */
+
+	if (!bSuppress) {
 	    size_t nRes;
 	    const char *zRes = Th8_GetResult(interp, &nRes);
 
@@ -1228,14 +1618,27 @@ scan_command(
 	    } else {
 		Th8_ListAppend(interp, &zList, &nList, zRes, nRes);
 	    }
+	    nAssign++;
 	}
-	nConv++;
+	nConvTotal++;
     }
 
 scan_done:
     if (bVarMode) {
-	Th8_SetResultInt(interp, nConv);
+	Th8_SetResultInt(interp, bEof ? -1 : nAssign);
     } else {
+	/*
+	 * List mode: pad to one element per non-suppressed specifier with
+	 * empty strings, unless end-of-input was hit before any conversion
+	 * (then the result is the empty list).
+	 */
+
+	if (bConvAttempted && !bEof) {
+	    while (nAssign < nSpecs) {
+		Th8_ListAppend(interp, &zList, &nList, "", 0);
+		nAssign++;
+	    }
+	}
 	Th8_SetResult(interp, zList, nList);
 	Th8_Free(interp, zList);
     }

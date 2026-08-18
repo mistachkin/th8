@@ -225,6 +225,25 @@ typedef struct Th8StubsTable {
         void *pContext,
         void (*xDel)(Th8_Interp *, void *),
         th8_uint64_t *pToken);
+    int (*th8_CreateSubCommand)(
+        Th8_Interp *interp,
+        const char *zCmdName,
+        const char *zSubName,
+        Th8_CommandProc xProc,
+        void *pContext,
+        void (*xDel)(Th8_Interp *, void *),
+        th8_uint64_t *pToken);
+    int (*th8_DeleteSubCommand)(Th8_Interp *interp, th8_uint64_t token);
+    int (*th8_GetSubCommandInfo)(
+        Th8_Interp *interp,
+        const char *zCmdName,
+        size_t nCmd,
+        const char *zSubName,
+        size_t nSub,
+        Th8_CommandProc *pxProc,
+        void **ppContext,
+        void (**pxDel)(Th8_Interp *, void *),
+        th8_uint64_t *pToken);
     int (*th8_DeleteCommand)(Th8_Interp *interp, th8_uint64_t token);
     int (*th8_GetCommandInfo)(
         Th8_Interp *interp,
@@ -521,7 +540,11 @@ typedef struct Th8StubsTable {
 #else
     void *th8_GetEmbeddedKeyTime;
 #endif
+#if defined(TH8_ENABLE_CRYPTOGRAPHY)
     const Th8_KeyringEntry *(*th8_GetEmbeddedKeyring)(size_t *pnEntries);
+#else
+    void *th8_GetEmbeddedKeyring;
+#endif
 #if defined(TH8_ENABLE_CRYPTOGRAPHY) && defined(TH8_ENABLE_TEST_KEY)
     const unsigned char *(*th8_GetEmbeddedKeyTest)(size_t *pnData);
 #else
@@ -596,8 +619,13 @@ typedef struct Th8StubsTable {
     void (*th8_SetOverflowCheck)(Th8_Interp *interp, int bEnable);
     int (*th8_GetOverflowCheck)(Th8_Interp *interp);
     void (*th8_SetAllocLimit)(Th8_Interp *interp, size_t nLimit);
+    void (*th8_SetSafeLimits)(Th8_Interp *interp);
+    void (*th8_SetDeadline)(Th8_Interp *interp, th8_int64_t nDeadlineUs);
+    th8_int64_t (*th8_GetDeadline)(Th8_Interp *interp);
+    int (*th8_SetTimeLimitMs)(Th8_Interp *interp, th8_int64_t nMs);
     size_t (*th8_GetAllocLimit)(Th8_Interp *interp);
     size_t (*th8_GetAllocBytes)(Th8_Interp *interp);
+    size_t (*th8_GetAllocPeak)(Th8_Interp *interp);
 #if defined(TH8_ENABLE_LOAD)
     int (*th8_EnableLoad)(Th8_Interp *interp, int bEnable);
 #else
@@ -766,13 +794,6 @@ typedef struct Th8StubsTable {
     void *th8_ListAppendArray;
 #endif
     int (*th8_WrongNumArgs)(Th8_Interp *interp, const char *zMsg);
-    int (*th8_CallSubCommand)(
-        Th8_Interp *interp,
-        void *ctx,
-        int argc,
-        const char **argv,
-        size_t *argl,
-        const Th8_SubCommand *aSub);
     int (*th8_ReportTaint)(
         Th8_Interp *interp,
         const char *zTitle,
@@ -860,7 +881,7 @@ typedef struct Th8StubsTable {
         Th8_Hash *pHash,
         int (*xCallback)(Th8_HashEntry *, void *),
         void *pCtx);
-    void (*th8_HashIterateOrdered)(
+    int (*th8_HashIterateOrdered)(
         Th8_Interp *interp,
         Th8_Hash *pHash,
         int (*xCallback)(Th8_HashEntry *, void *),
@@ -1055,8 +1076,14 @@ typedef struct Th8StubsTable {
     void *th8_FaultCtxSize;
 #endif
     int (*th8_RegisterLanguage)(Th8_Interp *interp);
+    int (*th8_RegisterSubsets)(
+        Th8_Interp *interp,
+        const char *const *azNames,
+        int nNames);
+    int (*th8_ListSubsets)(Th8_Interp *interp);
+    int (*th8_GetSubsetMembers)(Th8_Interp *interp, const char *zName);
 #if defined(TH8_ENABLE_VARIABLES)
-    void (*th8_ResetSecurityArray)(Th8_Interp *interp);
+    int (*th8_ResetSecurityArray)(Th8_Interp *interp);
 #else
     void *th8_ResetSecurityArray;
 #endif
@@ -1345,6 +1372,9 @@ extern const Th8StubsTable *th8StubsPtr;
 #    define Th8_UnsetVar (th8StubsPtr->th8_UnsetVar)
 #  endif
 #  define Th8_CreateCommand         (th8StubsPtr->th8_CreateCommand)
+#  define Th8_CreateSubCommand      (th8StubsPtr->th8_CreateSubCommand)
+#  define Th8_DeleteSubCommand      (th8StubsPtr->th8_DeleteSubCommand)
+#  define Th8_GetSubCommandInfo     (th8StubsPtr->th8_GetSubCommandInfo)
 #  define Th8_DeleteCommand         (th8StubsPtr->th8_DeleteCommand)
 #  define Th8_GetCommandInfo        (th8StubsPtr->th8_GetCommandInfo)
 #  define Th8_SetCommandCopy        (th8StubsPtr->th8_SetCommandCopy)
@@ -1459,7 +1489,9 @@ extern const Th8StubsTable *th8StubsPtr;
 #  if defined(TH8_ENABLE_CRYPTOGRAPHY)
 #    define Th8_GetEmbeddedKeyTime (th8StubsPtr->th8_GetEmbeddedKeyTime)
 #  endif
-#  define Th8_GetEmbeddedKeyring (th8StubsPtr->th8_GetEmbeddedKeyring)
+#  if defined(TH8_ENABLE_CRYPTOGRAPHY)
+#    define Th8_GetEmbeddedKeyring (th8StubsPtr->th8_GetEmbeddedKeyring)
+#  endif
 #  if defined(TH8_ENABLE_CRYPTOGRAPHY) && defined(TH8_ENABLE_TEST_KEY)
 #    define Th8_GetEmbeddedKeyTest (th8StubsPtr->th8_GetEmbeddedKeyTest)
 #  endif
@@ -1509,8 +1541,13 @@ extern const Th8StubsTable *th8StubsPtr;
 #  define Th8_SetOverflowCheck (th8StubsPtr->th8_SetOverflowCheck)
 #  define Th8_GetOverflowCheck (th8StubsPtr->th8_GetOverflowCheck)
 #  define Th8_SetAllocLimit    (th8StubsPtr->th8_SetAllocLimit)
+#  define Th8_SetSafeLimits    (th8StubsPtr->th8_SetSafeLimits)
+#  define Th8_SetDeadline      (th8StubsPtr->th8_SetDeadline)
+#  define Th8_GetDeadline      (th8StubsPtr->th8_GetDeadline)
+#  define Th8_SetTimeLimitMs   (th8StubsPtr->th8_SetTimeLimitMs)
 #  define Th8_GetAllocLimit    (th8StubsPtr->th8_GetAllocLimit)
 #  define Th8_GetAllocBytes    (th8StubsPtr->th8_GetAllocBytes)
+#  define Th8_GetAllocPeak     (th8StubsPtr->th8_GetAllocPeak)
 #  if defined(TH8_ENABLE_LOAD)
 #    define Th8_EnableLoad (th8StubsPtr->th8_EnableLoad)
 #  endif
@@ -1572,12 +1609,11 @@ extern const Th8StubsTable *th8StubsPtr;
 #  if defined(TH8_ENABLE_VARIABLES)
 #    define Th8_ListAppendArray (th8StubsPtr->th8_ListAppendArray)
 #  endif
-#  define Th8_WrongNumArgs   (th8StubsPtr->th8_WrongNumArgs)
-#  define Th8_CallSubCommand (th8StubsPtr->th8_CallSubCommand)
-#  define Th8_ReportTaint    (th8StubsPtr->th8_ReportTaint)
-#  define Th8_Input          (th8StubsPtr->th8_Input)
-#  define Th8_Output         (th8StubsPtr->th8_Output)
-#  define Th8_OutputError    (th8StubsPtr->th8_OutputError)
+#  define Th8_WrongNumArgs (th8StubsPtr->th8_WrongNumArgs)
+#  define Th8_ReportTaint  (th8StubsPtr->th8_ReportTaint)
+#  define Th8_Input        (th8StubsPtr->th8_Input)
+#  define Th8_Output       (th8StubsPtr->th8_Output)
+#  define Th8_OutputError  (th8StubsPtr->th8_OutputError)
 #  if defined(TH8_PLUGIN_IO)
 #    define Th8_GetInput (th8StubsPtr->th8_GetInput)
 #  endif
@@ -1700,6 +1736,9 @@ extern const Th8StubsTable *th8StubsPtr;
 #    define Th8_FaultCtxSize (th8StubsPtr->th8_FaultCtxSize)
 #  endif
 #  define Th8_RegisterLanguage (th8StubsPtr->th8_RegisterLanguage)
+#  define Th8_RegisterSubsets  (th8StubsPtr->th8_RegisterSubsets)
+#  define Th8_ListSubsets      (th8StubsPtr->th8_ListSubsets)
+#  define Th8_GetSubsetMembers (th8StubsPtr->th8_GetSubsetMembers)
 #  if defined(TH8_ENABLE_VARIABLES)
 #    define Th8_ResetSecurityArray (th8StubsPtr->th8_ResetSecurityArray)
 #  endif

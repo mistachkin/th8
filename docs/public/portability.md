@@ -324,6 +324,52 @@ isfinite isinf isnan isnormal fpclassify signbit
 - **Requires**: POSIX terminal I/O (`tcgetattr`, `tcsetattr`)
 - **Gate**: `TH8_USE_BESTLINE`
 
+### Pure feature flags (no external dependency)
+
+These gate language/runtime features and are compiled entirely in-tree:
+
+- `TH8_ENABLE_EXPRESSIONS` / `ENABLE_EXPRESSIONS` -- `[expr]` and the math
+  functions.
+- `TH8_ENABLE_LOAD` / `ENABLE_LOAD` -- `[load]`/`[unload]` of binary extensions.
+- `TH8_ENABLE_CRYPTOGRAPHY` / `ENABLE_CRYPTOGRAPHY` -- signing, the Harpy
+  subsystem, secure variables (also needs OpenSSL).
+- `TH8_ENABLE_FAULT_INJECTION` / `ENABLE_FAULT_INJECTION` -- test-only fault
+  injection instrumentation (`Th8_FaultInstall`, etc.).
+- `TH8_ENABLE_VARIABLES` / `ENABLE_VARIABLES` -- the variable subsystem
+  (`[set]`, `[array]`, arrays, `Th8_GetVar`/`Th8_SetVar`).
+
+## 7a. Feature Composability -- Reduced-Feature Configurations
+
+The `?= 1` default of each flag means the full-featured build is the norm.
+**Every optional feature is independently disableable**: the core library,
+`th8sh`, AND the test library build with any single feature off, with
+combinations off, and with ALL of them off at once.  This is enforced by
+per-site dependency gating -- each use of a feature's API is wrapped in a `#if`
+naming exactly the feature(s) it needs, so disabling a feature removes only the
+code that depends on it.  A site that needs two features uses the conjunction,
+e.g. secure variables are gated `#if defined(TH8_ENABLE_CRYPTOGRAPHY) &&
+defined(TH8_ENABLE_VARIABLES)`, and the crypto-key fault-injection drivers are
+`#if defined(TH8_ENABLE_CRYPTOGRAPHY) && defined(TH8_ENABLE_FAULT_INJECTION)`.
+
+- **Feature flags** (each independently off): `ENABLE_REGEXP`, `ENABLE_BIGINT`,
+  `ENABLE_CRYPTOGRAPHY`, `ENABLE_UNBOUND`, `ENABLE_LIBCURL`, `ENABLE_MIMALLOC`,
+  `ENABLE_LOAD`, `ENABLE_FAULT_INJECTION`, `ENABLE_EXPRESSIONS`,
+  `ENABLE_VARIABLES`, `ENABLE_TEST_KEY`, `ENABLE_BESTLINE`, and each `PLUGIN_*`.
+  Disabling a feature removes its dependent surface: e.g. `ENABLE_VARIABLES=0`
+  drops `[binary scan]` (it binds results into variables) while `[binary format]`
+  stays; `ENABLE_FAULT_INJECTION=0` drops the fault-injection test drivers.  (A
+  reduced build is naturally *less useful* -- and its test suite has fewer
+  runnable tests -- but it BUILDS.)
+
+- **Stub tables** stay link-clean across configs: the public stub table guards
+  feature-gated APIs (`tools/mkstubs.tcl` `guardMap`, gated by
+  `tools/check_stubguards.tcl`), and the hand-maintained internal stub table
+  (`th8InternalStubInit.c`) guards feature-gated internals with `#if`/`#else NULL`.
+
+- **Verifying composability:** `tools/build-matrix.sh` exercises single-flag-off
+  combinations; the strongest check is the ALL-features-off build (every
+  `ENABLE_* = 0`), which surfaces any remaining ungated dependency in one pass.
+
 ---
 
 ## 8. Amalgamation Build

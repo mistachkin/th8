@@ -25,11 +25,16 @@ source tests/prologue.tcl
 ###############################################################################
 
 runTest {test clockext-1.1 {
-  R-14640-47759: clock ntp returns a plausible Unix epoch timestamp
+  R-14640-47759 R-12190-36531: clock ntp with an explicit server in an UNSIGNED zone
+                 (pool.ntp.org) returns a plausible Unix epoch timestamp
+                 when -insecure opts out of the require-DNSSEC-secure
+                 check.  Without -insecure this server is refused on a
+                 validating build (see clockext-1.4 for the secure
+                 default path); -insecure is the informed opt-out.
 } -constraints {
     th8 crypto_testlib clock_ntp clock_ntp_network
 } -body {
-  set t [clock ntp -server pool.ntp.org]
+  set t [clock ntp -server pool.ntp.org -insecure]
   # Must be after 2025-01-01 and before 2100-01-01
   expr {$t > 1735689600 && $t < 4102444800}
 } -cleanup {
@@ -39,11 +44,12 @@ runTest {test clockext-1.1 {
 ###############################################################################
 
 runTest {test clockext-1.2 {
-  R-14640-47759: clock ntp with a custom server returns a timestamp
+  R-14640-47759 R-12190-36531: clock ntp with a custom (unsigned) server plus
+                 -insecure returns a timestamp within a few seconds of local time
 } -constraints {
     th8 crypto_testlib clock_ntp clock_ntp_network
 } -body {
-  set t [clock ntp -server pool.ntp.org -timeout 5000]
+  set t [clock ntp -server pool.ntp.org -insecure -timeout 5000]
   set local [clock seconds]
   set diff [expr {$t - $local}]
   if {$diff < 0} then { set diff [expr {-$diff}] }
@@ -65,6 +71,31 @@ runTest {test clockext-1.3 {
   string match {clock ntp:*} $msg
 } -cleanup {
   unset -nocomplain msg
+} -result {1}}
+
+###############################################################################
+
+runTest {test clockext-1.4 {
+  R-14640-47759 R-03205-14299: clock ntp with NO -server uses the built-in default
+                 server and returns a plausible Unix epoch timestamp.
+                 On libunbound builds this exercises the full
+                 end-to-end DNSSEC-validated resolve path (resolve A/
+                 AAAA through the validating resolver, require a
+                 *secure* answer, connect only to validated
+                 addresses); on non-libunbound builds it resolves the
+                 same host via getaddrinfo.  Regression test for Bug
+                 79: an over-aggressive resolver-hardening option
+                 (harden-referral-path) made the default-server
+                 DNSSEC resolve SERVFAIL, so this path returned
+                 "cannot securely resolve" instead of a timestamp.
+} -constraints {
+    th8 crypto_testlib clock_ntp clock_ntp_network
+} -body {
+  set t [clock ntp -timeout 8000]
+  # Must be after 2025-01-01 and before 2100-01-01.
+  expr {$t > 1735689600 && $t < 4102444800}
+} -cleanup {
+  unset -nocomplain t
 } -result {1}}
 
 ###############################################################################
@@ -115,6 +146,29 @@ runTest {test clockext-3.1 {
   # on a live NTP exchange.  catch returns 1 (error caught).
   #
   catch {clock ntp -attempts notanumber}
+} -result {1}}
+
+###############################################################################
+
+runTest {test clockext-3.2 {
+  R-12190-36531: clock ntp accepts the -insecure option.  Parsing is
+                 deterministic and network-free: with -insecure present
+                 an unknown trailing option is still reported as the
+                 unknown one (proving the parser consumed -insecure as a
+                 valid flag rather than rejecting it).
+} -constraints {
+    th8 crypto_testlib clock_ntp
+} -body {
+  #
+  # If -insecure were not a recognized flag, the error would name
+  # "-insecure"; instead it must name "-bogus", proving the parser
+  # advanced past -insecure.  No network is contacted (parse fails
+  # first).
+  #
+  catch {clock ntp -insecure -bogus} msg
+  string match {*unknown option "-bogus"*} $msg
+} -cleanup {
+  unset -nocomplain msg
 } -result {1}}
 
 ###############################################################################

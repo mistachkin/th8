@@ -151,8 +151,35 @@ runTest {test sandbox-limits-3.2 {
 
 ###############################################################################
 
+runTest {test sandbox-limits-3.3 {
+  R-12425-26970: PEAK (high-water) allocation accounting (TH8K-021) -- the
+  sandbox reports the maximum TRANSIENT memory a workload demanded, not only the
+  residual after cleanup.  A workload that builds a large string and then frees
+  it leaves a small current allocation but a large peak: the peak must be at
+  least the transient's size AND strictly greater than the post-cleanup current
+  count, proving the high-water mark is retained across the free.
+} -constraints {
+    th8 sandbox
+} -setup {
+  unset -nocomplain r
+} -body {
+  set r [::th8testlib::sandbox {
+    set big [string repeat A 500000]
+    string length $big
+    set big ""
+    return done
+  }]
+  list [sandboxRc $r] [sandboxResult $r] \
+      [expr {[sandboxPeak $r] >= 500000 \
+                 && [sandboxAllocCount $r] < [sandboxPeak $r]}]
+} -cleanup {
+  unset -nocomplain r
+} -result {0 done 1}}
+
+###############################################################################
+
 runTest {test sandbox-limits-4.1 {
-  R-47394-37015: eval depth: deeply nested proc recursion is caught
+  R-24231-13066: eval depth: deeply nested proc recursion is caught
 } -constraints {
     th8 sandbox
 } -setup {
@@ -171,7 +198,7 @@ runTest {test sandbox-limits-4.1 {
 ###############################################################################
 
 runTest {test sandbox-limits-4.2 {
-  R-47394-37015: eval depth: nested eval chain is caught
+  R-24231-13066: eval depth: nested eval chain is caught
 } -constraints {
     th8 sandbox
 } -setup {
@@ -188,6 +215,31 @@ runTest {test sandbox-limits-4.2 {
 } -cleanup {
   unset -nocomplain r
 } -result {0 1}}
+
+###############################################################################
+
+runTest {test sandbox-limits-5.1 {
+  R-12425-26970: memory-limit allocation tracking is OVERFLOW-SAFE (TH8K-023).
+  The per-interpreter allocation counter is incremented by the allocator's
+  reported usable size after each successful allocation; that add must never
+  wrap size_t -- a wrap would make the counter falsely small and silently
+  collapse the memory ceiling.  ::th8testlib::alloc_account_overflow primes a
+  child's counter to a few bytes below the size_t ceiling and performs a normal
+  allocation whose usable size overflows the add: a correct implementation
+  SATURATES the counter at the ceiling (poisoning further allocation) instead
+  of wrapping to a small value.
+} -constraints {
+    th8 sandbox
+} -setup {
+  unset -nocomplain r
+} -body {
+  set r [::th8testlib::alloc_account_overflow]
+  # "saturated" is the correct outcome; tolerate "skip:alloc-failed" on a host
+  # where the 64-byte probe allocation itself fails.
+  expr {$r eq "saturated" || $r eq "skip:alloc-failed"}
+} -cleanup {
+  unset -nocomplain r
+} -result {1}}
 
 ###############################################################################
 

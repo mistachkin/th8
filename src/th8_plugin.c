@@ -47,6 +47,20 @@ typedef struct Th8_PluginEntry {
  *	the pNext field that points to the found entry (for
  *	unlinking).
  *
+ * Why / How:
+ *	Registration, duplicate-detection, and unregistration all
+ *	need to locate a plugin by name; centralizing the lookup here
+ *	keeps that one linear walk of the interpreter's singly-linked
+ *	plugin list (comparing length then bytes).  The list is short
+ *	(one node per registered plugin) so a linear scan is fine.
+ *
+ * Results:
+ *	Pointer to the matching Th8_PluginEntry, or NULL if no plugin
+ *	with that name is registered.
+ *
+ * Side effects:
+ *	None.  Returns a borrowed pointer into the plugin list.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -69,13 +83,55 @@ th8PluginFind(Th8_Interp *interp, const char *zName, size_t nName)
 /*
  *----------------------------------------------------------------------
  *
+ * th8PluginRegistered --
+ *
+ *	Report whether a plugin with the given name is already
+ *	registered in the interpreter.  Lets a re-registering caller
+ *	(TH8K-006) distinguish the harmless "already present" case from
+ *	a real registration failure so it can propagate the latter.
+ *
+ * Why / How:
+ *	Thin predicate over th8PluginFind: it exposes only a yes/no
+ *	answer so callers outside this file can test membership
+ *	without seeing (or depending on) the Th8_PluginEntry layout.
+ *
+ * Results:
+ *	Non-zero if the named plugin is registered; 0 otherwise.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
+ */
+
+int
+th8PluginRegistered(Th8_Interp *interp, const char *zName, size_t nName)
+{
+    return th8PluginFind(interp, zName, nName) != NULL;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
  * th8RemoveCommandByToken --
  *
- *	Walk ALL commands in ALL namespaces looking for a command
- *	whose nToken matches.  If found, remove it.
+ *	Remove the command identified by the given creation token,
+ *	if it still exists.
  *
- *	This is O(total commands) per call -- acceptable because
- *	plugin unregistration is rare.
+ * Why / How:
+ *	Plugin unregistration must delete exactly the commands the
+ *	plugin created, identified by the tokens recorded at
+ *	registration.  Rather than scanning every namespace, it
+ *	delegates to Th8_DeleteCommand, which resolves the token in
+ *	O(1) via the interpreter's secondary token index; a token that
+ *	no longer maps to a live command is silently ignored.
+ *
+ * Results:
+ *	None (void).  Any delete failure is intentionally ignored.
+ *
+ * Side effects:
+ *	Deletes the matching command from the interpreter (if present).
  *
  *----------------------------------------------------------------------
  */
@@ -92,6 +148,29 @@ th8RemoveCommandByToken(Th8_Interp *interp, th8_uint64_t token)
  *----------------------------------------------------------------------
  *
  * Th8_RegisterPlugin --
+ *
+ *	Register a named command plugin with the interpreter, creating every
+ *	command the plugin supplies.
+ *
+ * Why / How:
+ *	A plugin is a named group of commands produced by a single
+ *	Th8_GetCommandsProc.  This validates its arguments, rejects a name
+ *	that is already registered, then calls xGetCommands(NULL, &nCommand)
+ *	to size the command table, allocates and zero-fills it, calls
+ *	xGetCommands again to fill it, and creates each command -- recording
+ *	the created command tokens in a plugin entry linked onto the
+ *	interpreter's plugin list so Th8_UnregisterPlugin can later remove
+ *	them.  Any failure frees what was allocated and leaves no command or
+ *	plugin entry behind.
+ *
+ * Results:
+ *	TH8_OK on success; TH8_ERROR (with an interpreter result message) on
+ *	invalid arguments, a duplicate name, an empty or failed command
+ *	table, allocation failure, or a command-creation failure.
+ *
+ * Side effects:
+ *	Creates commands in the interpreter and adds a plugin entry to its
+ *	plugin list.
  *
  *----------------------------------------------------------------------
  */
@@ -205,6 +284,24 @@ Th8_RegisterPlugin(
  *
  * Th8_UnregisterPlugin --
  *
+ *	Unregister a previously registered plugin by name, removing every
+ *	command it created.
+ *
+ * Why / How:
+ *	Looks up the plugin entry by name on the interpreter's plugin list;
+ *	if found, deletes each command it created (by the tokens recorded at
+ *	registration), unlinks the entry from the list, and frees the entry's
+ *	token array, name, and the entry itself.  It is the inverse of
+ *	Th8_RegisterPlugin.
+ *
+ * Results:
+ *	TH8_OK on success; TH8_ERROR (with an interpreter result message) on
+ *	a NULL interpreter/name or a name that is not registered.
+ *
+ * Side effects:
+ *	Deletes the plugin's commands from the interpreter and frees the
+ *	plugin entry.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -267,6 +364,20 @@ Th8_UnregisterPlugin(Th8_Interp *interp, const char *zName)
  *
  * Th8_ListAppendPlugins --
  *
+ *	Append the name of every registered plugin to a Tcl-list string.
+ *
+ * Why / How:
+ *	Walks the interpreter's plugin list and appends each plugin's name as
+ *	one element to the caller's growing list buffer (*pz / *pn) via
+ *	Th8_ListAppend, in registration order.  Used to report the set of
+ *	loaded plugins (e.g. for introspection).
+ *
+ * Results:
+ *	TH8_OK.
+ *
+ * Side effects:
+ *	Grows the caller's list buffer (*pz / *pn), reallocating as needed.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -292,6 +403,21 @@ Th8_ListAppendPlugins(Th8_Interp *interp, char **pz, size_t *pn)
  *	Free all plugin metadata during interpreter deletion.
  *	Commands are already freed by namespace cleanup; this
  *	only frees the plugin entries themselves.
+ *
+ * Why / How:
+ *	By the time an interpreter is torn down its commands have
+ *	already been destroyed with the namespaces that held them, so
+ *	the plugin entries would otherwise leak.  This walks the
+ *	plugin list once, freeing each entry's recorded token array,
+ *	its name, and the entry node, then clears the interpreter's
+ *	list head so nothing dangles.
+ *
+ * Results:
+ *	None (void).
+ *
+ * Side effects:
+ *	Frees every plugin entry (token array, name, node) and sets
+ *	the interpreter's plugin list to NULL.
  *
  *----------------------------------------------------------------------
  */

@@ -77,6 +77,7 @@ set inlineHeaders {
   "th8_meta_posix.h"       "src/th8_meta_posix.h"
   "th8_meta_win32.h"       "src/th8_meta_win32.h"
   "th8_meta_macos.h"       "src/th8_meta_macos.h"
+  "th8_meta_glibc.h"       "src/th8_meta_glibc.h"
   "ConvertUTF_v2.h"        "externals/utf/ConvertUTF_v2.h"
   "th8_spilornis.h"        "src/th8_spilornis.h"
   "Spilornis.h"            "bin/Spilornis.h"

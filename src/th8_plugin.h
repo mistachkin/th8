@@ -122,6 +122,8 @@ TH8_API int Th8_ListAppendPlugins(Th8_Interp *interp, char **pz, size_t *pn);
  */
 TH8_INTERNAL void *th8GetPluginList(Th8_Interp *interp);
 TH8_INTERNAL void th8SetPluginList(Th8_Interp *interp, void *p);
+TH8_INTERNAL int
+th8PluginRegistered(Th8_Interp *interp, const char *zName, size_t nName);
 TH8_INTERNAL th8_uint64_t th8NextCmdToken(Th8_Interp *interp);
 TH8_INTERNAL void
 th8SetCmdToken(Th8_Interp *interp, const char *zName, th8_uint64_t token);

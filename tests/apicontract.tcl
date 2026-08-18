@@ -307,6 +307,24 @@ runTest {test apicontract-8.1 {
 
 ###############################################################################
 
+runTest {test apicontract-8.2 {
+  R-60472-12984: [file tempname size] creates a pre-allocated in-memory
+                 temporary channel of the given size and returns its channel
+                 name, which then appears in [file channels]; a non-positive
+                 size is an error.
+} -constraints {
+    th8
+} -body {
+  set ch [file tempname 128]
+  list [expr {[lsearch -exact [file channels] $ch] >= 0}] \
+      [catch {file tempname 0}] [catch {file tempname -5}]
+} -cleanup {
+  catch {close $ch}
+  unset -nocomplain ch
+} -result {1 1 1}}
+
+###############################################################################
+
 runTest {test apicontract-9.1 {
   R-00313-45995: The environment variable backend SHALL serialize all
                  operations with a file-scope mutex to prevent data races on
@@ -339,6 +357,25 @@ runTest {test apicontract-10.1 {
 } -body {
   ::th8testlib::thread_identity
 } -result {ok}}
+
+###############################################################################
+
+runTest {test apicontract-10.2 {
+  R-27036-22988: Th8_CancelEval from a foreign (non-owner) thread never
+  mutates the owner's multi-field cancel-message state nor its per-interp
+  accounting (TH8K-008).  A non-signal foreign cancel MAY hand off a copied
+  message via a single atomic pointer exchange the owner adopts at its next
+  poll; a signal cancel carries no message and reports a fixed text; a message
+  already installed on the owner wins (first-writer-wins).  cancel_foreign
+  spawns workers that cancel a child interpreter they do not own across all
+  these modes, joins each (making the message check deterministic), and
+  TH8_HEAP_CHECKS catches any owner-only accounting the foreign path must not
+  touch.
+} -constraints {
+    loadLib th8
+} -body {
+  ::th8testlib::cancel_foreign
+} -match regexp -result {^(ok|skip:.*)$}}
 
 ###############################################################################
 

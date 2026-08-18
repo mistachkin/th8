@@ -15,10 +15,15 @@
 #           These are independently gateable, so each is toggled
 #           off individually (no combinations needed).
 #
-#     The script runs three phases:
+#     The script runs four phases:
 #       Phase 1: all-on baseline (all compile + all plugin options ON).
 #       Phase 2: compile-option combinations (per --mode).
 #       Phase 3: plugin toggles (each plugin OFF individually).
+#       Phase 4: all-off composability build (EVERY compile option OFF at
+#                once, plugins ON).  Feature use-sites are gated per-site on
+#                exactly the feature(s) they need, so this all-off build must
+#                link; it is the strongest check that no dependency is left
+#                ungated.  See docs/public/portability.md section 7a.
 #
 # Usage:
 #
@@ -32,6 +37,7 @@
 #                       (default: tools/data/plugin-options.txt)
 #     --no-plugins      Skip plugin toggles (phase 3)
 #     --no-compile      Skip compile-option combinations (phase 2)
+#     --no-alloff       Skip the all-off composability build (phase 4)
 #     --target TARGET   Make target (default: fresh)
 #     --extra "ARGS"    Extra arguments passed to make
 #     --stop-on-error   Stop at the first failed build
@@ -78,6 +84,7 @@ COMPILE_FILE="tools/data/compile-options.txt"
 PLUGIN_FILE="tools/data/plugin-options.txt"
 DO_COMPILE=1
 DO_PLUGINS=1
+DO_ALLOFF=1
 TARGET="fresh-non-static"
 EXTRA_ARGS=""
 STOP_ON_ERROR=0
@@ -98,6 +105,7 @@ while [[ $# -gt 0 ]]; do
         --plugins)      PLUGIN_FILE="$2"; shift 2 ;;
         --no-plugins)   DO_PLUGINS=0; shift ;;
         --no-compile)   DO_COMPILE=0; shift ;;
+        --no-alloff)    DO_ALLOFF=0; shift ;;
         --target)       TARGET="$2"; shift 2 ;;
         --extra)        EXTRA_ARGS="$2"; shift 2 ;;
         --stop-on-error) STOP_ON_ERROR=1; shift ;;
@@ -143,22 +151,23 @@ read_options_into() {
 COMPILE_OPTS=()
 PLUGIN_OPTS=()
 
-if [[ $DO_COMPILE -eq 1 ]]; then
-    while IFS= read -r opt; do
-        COMPILE_OPTS+=("$opt")
-    done < <(read_options_into "$COMPILE_FILE")
-fi
-if [[ $DO_PLUGINS -eq 1 ]]; then
-    while IFS= read -r opt; do
-        PLUGIN_OPTS+=("$opt")
-    done < <(read_options_into "$PLUGIN_FILE")
-fi
+#
+# Always load both option lists.  The --no-compile / --no-plugins flags gate
+# whether their PHASES run, not whether the options are known: the baseline and
+# the all-off composability build need the full compile-option list regardless.
+#
+while IFS= read -r opt; do
+    COMPILE_OPTS+=("$opt")
+done < <(read_options_into "$COMPILE_FILE")
+while IFS= read -r opt; do
+    PLUGIN_OPTS+=("$opt")
+done < <(read_options_into "$PLUGIN_FILE")
 
 NC=${#COMPILE_OPTS[@]}
 NP=${#PLUGIN_OPTS[@]}
 
 if [[ $NC -eq 0 && $NP -eq 0 ]]; then
-    echo "Error: no options to test." >&2
+    echo "Error: no options in $COMPILE_FILE or $PLUGIN_FILE." >&2
     exit 1
 fi
 
@@ -183,7 +192,7 @@ esac
 #
 
 COMPILE_BUILDS=0
-if [[ $NC -gt 0 ]]; then
+if [[ $DO_COMPILE -eq 1 && $NC -gt 0 ]]; then
     case "$MODE" in
         single)   COMPILE_BUILDS=$NC ;;
         pairwise) COMPILE_BUILDS=$(( NC * (NC - 1) / 2 + NC )) ;;
@@ -191,7 +200,17 @@ if [[ $NC -gt 0 ]]; then
     esac
 fi
 
-TOTAL=$(( 1 + COMPILE_BUILDS + NP ))
+PLUGIN_BUILDS=0
+if [[ $DO_PLUGINS -eq 1 && $NP -gt 0 ]]; then
+    PLUGIN_BUILDS=$NP
+fi
+
+ALLOFF_BUILDS=0
+if [[ $DO_ALLOFF -eq 1 && $NC -gt 0 ]]; then
+    ALLOFF_BUILDS=1
+fi
+
+TOTAL=$(( 1 + COMPILE_BUILDS + PLUGIN_BUILDS + ALLOFF_BUILDS ))
 
 echo "============================================"
 echo "TH8 Build Matrix"
@@ -201,11 +220,14 @@ echo "Compile options:  $NC"
 echo "Plugin options:   $NP"
 echo "Builds:           $TOTAL"
 echo "  Baseline:       1"
-if [[ $NC -gt 0 ]]; then
+if [[ $COMPILE_BUILDS -gt 0 ]]; then
     echo "  Compile combos: $COMPILE_BUILDS"
 fi
-if [[ $NP -gt 0 ]]; then
-    echo "  Plugin toggles: $NP"
+if [[ $PLUGIN_BUILDS -gt 0 ]]; then
+    echo "  Plugin toggles: $PLUGIN_BUILDS"
+fi
+if [[ $ALLOFF_BUILDS -gt 0 ]]; then
+    echo "  All-off build:  1"
 fi
 echo "Target:           $TARGET"
 if [[ -n "$EXTRA_ARGS" ]]; then
@@ -299,6 +321,26 @@ all_on_args() {
 
     for ((i = 0; i < NC; i++)); do
         args="$args ${COMPILE_OPTS[$i]}=1"
+    done
+    for ((i = 0; i < NP; i++)); do
+        args="$args ${PLUGIN_OPTS[$i]}=1"
+    done
+    echo "$args"
+}
+
+#
+# all_off_args -- every compile (ENABLE_*) option OFF, plugins ON.  The
+# composability build: a build with all optional features disabled at once.
+# Plugins stay ON because an empty plugin set is a separate (degenerate) axis
+# already covered by Phase 3, and a zero-length static plugin table is not a
+# meaningful configuration.
+#
+all_off_args() {
+    local args=""
+    local i
+
+    for ((i = 0; i < NC; i++)); do
+        args="$args ${COMPILE_OPTS[$i]}=0"
     done
     for ((i = 0; i < NP; i++)); do
         args="$args ${PLUGIN_OPTS[$i]}=1"
@@ -405,7 +447,7 @@ echo ""
 #
 ###############################################################################
 
-if [[ $NC -gt 0 ]]; then
+if [[ $DO_COMPILE -eq 1 && $NC -gt 0 ]]; then
     echo "--- Phase 2: Compile options ($MODE, $NC options) ---"
 
     ALL_COMPILE_ON=$(( (1 << NC) - 1 ))
@@ -465,12 +507,24 @@ fi
 #
 ###############################################################################
 
-if [[ $NP -gt 0 ]]; then
+if [[ $DO_PLUGINS -eq 1 && $NP -gt 0 ]]; then
     echo "--- Phase 3: Plugin toggles ($NP plugins) ---"
 
     for ((i = 0; i < NP; i++)); do
         run_build "${PLUGIN_OPTS[$i]}=0" "$(plugin_args_for_index $i)"
     done
+    echo ""
+fi
+
+###############################################################################
+#
+# Phase 4: All-off composability build (every compile option OFF at once).
+#
+###############################################################################
+
+if [[ $ALLOFF_BUILDS -gt 0 ]]; then
+    echo "--- Phase 4: All-off composability build (all $NC compile options OFF) ---"
+    run_build "all-off" "$(all_off_args)"
     echo ""
 fi
 

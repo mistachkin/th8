@@ -75,4 +75,26 @@ runTest {test rsa_verify_tamper-1.2 {
 
 ###############################################################################
 
+runTest {test rsa_verify_tamper-2.1 {
+  Th8_RsaExtractHash DigestInfo-format guard (th8_snk.c
+  `recoveredLen != sha512PrefixLen + 64 || Th8_Memcmp(...) != 0`).
+  Every real signature carries a well-formed SHA-512 DigestInfo, so
+  this guard is permanently (F,F) and neither error arm is reachable
+  by any genuine load.  th8testlib::rsa_extract_mismatch uses the
+  internal raw-PKCS#1-signing helper to forge two signatures that
+  RECOVER with valid padding but wrong content: a 51-byte block
+  (recoveredLen != 83 drives the C1 (T,-) vector) and an 83-byte
+  zero-prefix block (recoveredLen == 83 but the SHA-512 prefix
+  differs, driving the C2 (F,T) vector).  Both must make
+  Th8_RsaExtractHash return the "unexpected DigestInfo format" error.
+  Together with the (F,F) baseline of every real signed load this
+  takes the decision to 100% MC/DC.
+} -constraints {
+    th8 crypto_enabled
+} -body {
+  th8testlib::rsa_extract_mismatch
+} -match regexp -result {^(wronglen ok wrongprefix ok|skip:.*)$}}
+
+###############################################################################
+
 source tests/epilogue.tcl

@@ -114,6 +114,11 @@ file_dirname_command(
      */
 
     while (n > 1 && th8IsPathSep(z[n - 1])) {
+	if ((n & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		return TH8_ERROR;
+	    }
+	}
 	n--;
     }
 
@@ -123,6 +128,11 @@ file_dirname_command(
 
     i = n;
     while (i > 0 && !th8IsPathSep(z[i - 1])) {
+	if ((i & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		return TH8_ERROR;
+	    }
+	}
 	i--;
     }
 
@@ -145,6 +155,11 @@ file_dirname_command(
 	 */
 
 	while (i > 1 && th8IsPathSep(z[i - 1])) {
+	    if ((i & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) {
+		    return TH8_ERROR;
+		}
+	    }
 	    i--;
 	}
 	Th8_SetResult(interp, z, i);
@@ -223,6 +238,12 @@ file_join_command(
 
 	if (i < argc - 1) {
 	    while (n > 1 && th8IsPathSep(z[n - 1])) {
+		if ((n & 0xFFF) == 0) {
+		    if (Th8_Ready(interp) != TH8_OK) {
+			Th8_Free(interp, zResult);
+			return TH8_ERROR;
+		    }
+		}
 		n--;
 	    }
 	}
@@ -314,6 +335,12 @@ file_split_command(
 	rc = Th8_ListAppend(interp, &zResult, &nResult, "/", 1);
 	if (rc != TH8_OK) goto done;
 	while (i < n && th8IsPathSep(z[i])) {
+	    if ((i & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) {
+		    rc = TH8_ERROR;
+		    goto done;
+		}
+	    }
 	    i++;
 	}
     }
@@ -323,9 +350,21 @@ file_split_command(
      */
 
     while (i < n) {
-	size_t start = i;
+	size_t start;
+
+	if (Th8_Ready(interp) != TH8_OK) {
+	    rc = TH8_ERROR;
+	    goto done;
+	}
+	start = i;
 
 	while (i < n && !th8IsPathSep(z[i])) {
+	    if ((i & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) {
+		    rc = TH8_ERROR;
+		    goto done;
+		}
+	    }
 	    i++;
 	}
 
@@ -336,6 +375,12 @@ file_split_command(
 	}
 
 	while (i < n && th8IsPathSep(z[i])) {
+	    if ((i & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) {
+		    rc = TH8_ERROR;
+		    goto done;
+		}
+	    }
 	    i++;
 	}
     }
@@ -458,6 +503,11 @@ file_tail_command(
      */
 
     while (n > 1 && th8IsPathSep(z[n - 1])) {
+	if ((n & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		return TH8_ERROR;
+	    }
+	}
 	n--;
     }
 
@@ -467,6 +517,11 @@ file_tail_command(
 
     i = n;
     while (i > 0 && !th8IsPathSep(z[i - 1])) {
+	if ((i & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		return TH8_ERROR;
+	    }
+	}
 	i--;
     }
 
@@ -1207,6 +1262,11 @@ file_extension_command(
 
     lastSep = 0;
     for (i = 0; i < n; i++) {
+	if ((i & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		return TH8_ERROR;
+	    }
+	}
 	if (th8IsPathSep(z[i])) {
 	    lastSep = i + 1;
 	}
@@ -1218,6 +1278,11 @@ file_extension_command(
 
     lastDot = n;  /* sentinel: no dot found */
     for (i = lastSep; i < n; i++) {
+	if ((i & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		return TH8_ERROR;
+	    }
+	}
 	if (z[i] == '.') {
 	    lastDot = i;
 	}
@@ -1294,6 +1359,12 @@ file_nativename_command(
 	 */
 
 	for (i = 0; i < n; i++) {
+	    if ((i & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) {
+		    Th8_Free(interp, zCopy);
+		    return TH8_ERROR;
+		}
+	    }
 	    if (zCopy[i] == '/') {
 		zCopy[i] = '\\';
 	    }
@@ -1304,6 +1375,12 @@ file_nativename_command(
 	 */
 
 	for (i = 0; i < n; i++) {
+	    if ((i & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) {
+		    Th8_Free(interp, zCopy);
+		    return TH8_ERROR;
+		}
+	    }
 	    if (zCopy[i] == '\\') {
 		zCopy[i] = '/';
 	    }
@@ -1463,6 +1540,11 @@ file_rootname_command(
 
     lastSep = 0;
     for (i = 0; i < n; i++) {
+	if ((i & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		return TH8_ERROR;
+	    }
+	}
 	if (th8IsPathSep(z[i])) {
 	    lastSep = i + 1;
 	}
@@ -1474,6 +1556,11 @@ file_rootname_command(
 
     lastDot = n;  /* sentinel: no dot found */
     for (i = lastSep; i < n; i++) {
+	if ((i & 0xFFF) == 0) {
+	    if (Th8_Ready(interp) != TH8_OK) {
+		return TH8_ERROR;
+	    }
+	}
 	if (z[i] == '.') {
 	    lastDot = i;
 	}
@@ -1670,6 +1757,11 @@ file_separator_command(
 	size_t i;
 
 	for (i = 0; i < n; i++) {
+	    if ((i & 0xFFF) == 0) {
+		if (Th8_Ready(interp) != TH8_OK) {
+		    return TH8_ERROR;
+		}
+	    }
 	    if (z[i] == '/') {
 		Th8_SetResultStatic(interp, "/", 1);
 		return TH8_OK;
@@ -1689,14 +1781,13 @@ file_separator_command(
 /*
  *----------------------------------------------------------------------
  *
- * file_command --
+ * th8FileSub --
  *
- *	Implements the Tcl [file] command.  Dispatcher for [file]
- *	sub-commands.
+ *	Catalogue of `file` sub-commands, installed into the `file` ensemble
+ *	command's per-interpreter sub-command hash at registration (TH8K-025).
  *
  * Why / How:
- *	Uses Th8_CallSubCommand with a static sub-command table
- *	covering path manipulation (dirname, join, split, tail,
+ *	Covers path manipulation (dirname, join, split, tail,
  *	extension, rootname, normalize, nativename, pathtype),
  *	existence checks (exists, type), identity (same, under),
  *	validation (validname), channels (channels, tempname),
@@ -1732,51 +1823,6 @@ static const Th8_SubCommand th8FileSub[] =
      {0, "under", file_under_command},
      {0, "validname", file_validname_command},
      {0, 0, 0}};
-
-/*
- *----------------------------------------------------------------------
- *
- * file_command --
- *
- *	Implements the script-visible `[file ...]` ensemble
- *	(`atime`, `attributes`, `copy`, `delete`, `dirname`,
- *	`executable`, `exists`, `extension`, `isdirectory`,
- *	`isfile`, `join`, `link`, `lstat`, `mkdir`, `mtime`,
- *	`nativename`, `normalize`, `owned`, `pathtype`,
- *	`readable`, `readlink`, `rename`, `rootname`, `size`,
- *	`split`, `stat`, `tail`, `tempfile`, `tempdir`,
- *	`type`, `under`, `validname`, ...).  Thin dispatcher
- *	into `th8FileSub` via `Th8_CallSubCommand`.
- *
- *	Diagnostics for unknown / ambiguous subcommands are
- *	emitted by `Th8_CallSubCommand`.
- *
- * Parameters:
- *	interp -- live interpreter.
- *	ctx    -- command context (forwarded).
- *	argc   -- argument count.
- *	argv   -- argument vector.
- *	argl   -- argument byte-length vector.
- *
- * Returns:
- *	The selected subcommand's return code, or `TH8_ERROR`
- *	with a diagnostic if the subcommand name is unknown.
- *
- * Side effects:
- *	Whatever the dispatched subcommand performs.
- *
- *----------------------------------------------------------------------
- */
-static int
-file_command(
-    Th8_Interp *interp,
-    void *ctx,
-    int argc,
-    const char **argv,
-    size_t *argl)
-{
-    return Th8_CallSubCommand(interp, ctx, argc, argv, argl, th8FileSub);
-}
 
 
 /*
@@ -1994,7 +2040,7 @@ source_command(
 
 static Th8_CommandEntry th8FilesystemsCommands[] = {
     {1, 0, "cd", cd_command},
-    {1, 0, "file", file_command},
+    {1, 0, "file", 0}, /* pure ensemble (TH8K-025) */
     {1, 0, "pwd", pwd_command},
     {1, 0, "source", source_command},
 };

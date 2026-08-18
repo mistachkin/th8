@@ -75,10 +75,13 @@ rename_command(
  *
  *	interp cancel ?-unwind? ?--? ?path? ?result?
  *
- *	Per TIP #285, if two non-switch arguments remain, the first
- *	is the interpreter path and the second is the result message.
- *	If one remains, it is the result message.  TH8 has no child
- *	interpreters, so path must be "" (empty string) or absent.
+ *	Per TIP #285 the first non-switch argument is ALWAYS the
+ *	interpreter path; the second (if present) is the result
+ *	message.  TH8 has no child interpreters, so the path must be
+ *	"" (empty string) or absent.  A result message for the current
+ *	interpreter is therefore passed as `interp cancel "" MESSAGE`:
+ *	a lone non-empty argument is an interpreter path (and rejected
+ *	as "could not find interpreter"), NOT a message.
  *
  * Why / How:
  *	Parses the -unwind flag and the optional path/result arguments
@@ -160,38 +163,32 @@ interp_cancel_command(
 /*
  *----------------------------------------------------------------------
  *
- * interp_command --
+ * th8InterpSub --
  *
- *	Implements the Tcl [interp] command.  Dispatcher for
- *	[interp] sub-commands.
+ *	Catalogue of `interp` sub-commands, installed into the `interp`
+ *	ensemble command's per-interpreter sub-command hash at registration
+ *	(TH8K-025).
  *
  * Why / How:
- *	Uses Th8_CallSubCommand with a static sub-command table.
- *	Currently only "cancel" is supported; additional sub-commands
- *	(e.g. "create", "eval") may be added in future phases.
+ *	Published as th8_interp_aSub so [info subcommands] can enumerate the
+ *	available interp sub-commands.  Currently only "cancel" is supported;
+ *	additional sub-commands (e.g. "create", "eval") may be added in future
+ *	phases.
  *
  * Results:
- *	Return code from the sub-command.
+ *	None (data table).
  *
  * Side effects:
- *	Determined by the sub-command.
+ *	None.
  *
  *----------------------------------------------------------------------
  */
 
-static int
-interp_command(
-    Th8_Interp *interp,
-    void *ctx,
-    int argc,
-    const char **argv,
-    size_t *argl)
-{
-    static const Th8_SubCommand aSub[] =
-        {{0, "cancel", interp_cancel_command}, {0, 0, 0}};
+/* Published for th8_lang.c ensemble population (TH8K-025). */
+const Th8_SubCommand *th8_interp_aSub;
 
-    return Th8_CallSubCommand(interp, ctx, argc, argv, argl, aSub);
-}
+static const Th8_SubCommand th8InterpSub[] =
+    {{0, "cancel", interp_cancel_command}, {0, 0, 0}};
 
 
 /*
@@ -689,6 +686,26 @@ namespace_import_command(
  *	to [namespace which -command name] -- it resolves the
  *	command and returns its qualified name.
  *
+ * Why / How:
+ *	Builds a fully qualified name -- using the argument as-is
+ *	when it already starts with "::", otherwise prefixing the
+ *	current namespace -- then confirms the command exists by
+ *	evaluating `info commands <qualified>` and checking for a
+ *	non-empty result.  Because TH8 keeps no import bookkeeping,
+ *	the "origin" is just the resolved qualified name rather than
+ *	a walk back through an import chain.
+ *
+ * Results:
+ *	TH8_OK with the fully qualified command name as the
+ *	interpreter result; TH8_ERROR with an `invalid command
+ *	name "..."` message if no such command exists, on a wrong
+ *	argument count, or on an allocation failure.
+ *
+ * Side effects:
+ *	Evaluates an `info commands` command (which sets the
+ *	interpreter result); allocates and frees the qualified-name
+ *	buffer; sets the interpreter result.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -771,6 +788,27 @@ oom:
  *	With -command (default): resolves the command name.
  *	With -variable: resolves the variable name.
  *	Returns empty string if not found.
+ *
+ * Why / How:
+ *	Parses the leading `-command` / `-variable` flags (last one
+ *	wins) to pick the resolution mode, then qualifies the name
+ *	(used verbatim when already "::"-prefixed, otherwise prefixed
+ *	with the current namespace).  In variable mode it checks
+ *	Th8_ExistsVar (or, when built without TH8_ENABLE_VARIABLES,
+ *	always reports not-found per Bug 35); in command mode it
+ *	tests existence via `info commands`.  A hit sets the result
+ *	to the qualified name; a miss clears it, matching Tcl's
+ *	empty-string-on-not-found contract.
+ *
+ * Results:
+ *	TH8_OK with the fully qualified name on a hit, or an empty
+ *	interpreter result on a miss; TH8_ERROR on a wrong argument
+ *	count/missing name or on an allocation failure.
+ *
+ * Side effects:
+ *	In command mode, evaluates an `info commands` command (which
+ *	sets the interpreter result); allocates and frees the
+ *	qualified-name buffer; sets or clears the interpreter result.
  *
  *----------------------------------------------------------------------
  */
@@ -875,15 +913,15 @@ oom:
 /*
  *----------------------------------------------------------------------
  *
- * namespace_command --
+ * th8NamespaceSub --
  *
- *	Implements the Tcl [namespace] command.  Dispatcher for
- *	[namespace] sub-commands.
+ *	Catalogue of `namespace` sub-commands, installed into the `namespace`
+ *	ensemble command's per-interpreter sub-command hash at registration
+ *	(TH8K-025).
  *
  * Why / How:
- *	Uses Th8_CallSubCommand with a static sub-command table.
- *	Exports th8_namespace_aSub so that [info commands] can
- *	enumerate the available namespace sub-commands.
+ *	Published as th8_namespace_aSub so [info subcommands] can enumerate the
+ *	available namespace sub-commands.
  *
  * Results:
  *	Return code from the sub-command.
@@ -908,48 +946,6 @@ static const Th8_SubCommand th8NamespaceSub[] =
      {0, "which", namespace_which_command},
      {0, 0, 0}};
 
-/*
- *----------------------------------------------------------------------
- *
- * namespace_command --
- *
- *	Implements the script-visible `[namespace ...]`
- *	ensemble (`children`, `code`, `current`, `delete`,
- *	`eval`, `exists`, `export`, `forget`, `import`,
- *	`inscope`, `origin`, `parent`, `qualifiers`, `tail`,
- *	`which`, ...).  Thin dispatcher into `th8NamespaceSub`
- *	via `Th8_CallSubCommand`.
- *
- *	Diagnostics for unknown / ambiguous subcommands are
- *	emitted by `Th8_CallSubCommand`.
- *
- * Parameters:
- *	interp -- live interpreter.
- *	ctx    -- command context (forwarded).
- *	argc   -- argument count.
- *	argv   -- argument vector.
- *	argl   -- argument byte-length vector.
- *
- * Returns:
- *	The selected subcommand's return code, or `TH8_ERROR`
- *	with a diagnostic if the subcommand name is unknown.
- *
- * Side effects:
- *	Whatever the dispatched subcommand performs.
- *
- *----------------------------------------------------------------------
- */
-static int
-namespace_command(
-    Th8_Interp *interp,
-    void *ctx,
-    int argc,
-    const char **argv,
-    size_t *argl)
-{
-    return Th8_CallSubCommand(interp, ctx, argc, argv, argl, th8NamespaceSub);
-}
-
 
 /*
  *----------------------------------------------------------------------
@@ -960,8 +956,8 @@ namespace_command(
  */
 
 static Th8_CommandEntry th8ManagementCommands[] = {
-    {1, 0, "interp", interp_command},
-    {1, 0, "namespace", namespace_command},
+    {1, 0, "interp", 0}, /* pure ensemble (TH8K-025) */
+    {1, 0, "namespace", 0}, /* pure ensemble (TH8K-025) */
     {1, 0, "rename", rename_command},
 };
 
@@ -994,6 +990,7 @@ th8ManagementGetCommands(Th8_CommandEntry *pCommand, int *pnCommand)
                   sizeof(th8ManagementCommands[0]));
 
     th8_namespace_aSub = th8NamespaceSub;
+    th8_interp_aSub = th8InterpSub; /* TH8K-025 */
 
     if (!pnCommand) return TH8_ERROR;
     if (!pCommand) {

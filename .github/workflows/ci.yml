@@ -181,18 +181,20 @@ jobs:
           if-no-files-found: ignore
 
   # --------------------------------------------------------------------
-  # Valgrind run.  Builds the non-static debug shell, then runs
+  # Valgrind smoke.  Builds the non-static debug shell, then runs
   # tests/all.tcl under `valgrind --leak-check=full --error-exitcode=1`
-  # with the project's tools/data/th8.supp suppressions.  Linux-only:
-  # valgrind on Apple Silicon macOS is unreliable (Rosetta + memory-tag
-  # quirks).  Slow -- the suite normally completes in ~3 min, under
-  # valgrind expect 30-90 min on a hosted Linux runner.
+  # with the project's tools/data/th8.supp suppressions -- EXCLUDING the
+  # few large-inner-loop test files (see the Makefile's `valgrind-smoke`
+  # target / VALGRIND_SMOKE_EXCLUDE) that each run tens of minutes under
+  # Valgrind and would dominate or time out the job.  Linux-only: valgrind
+  # on Apple Silicon macOS is unreliable (Rosetta + memory-tag quirks).
+  # The full `make valgrind` (no exclusions) remains for manual/local runs.
   # --------------------------------------------------------------------
   valgrind:
-    name: Valgrind (leak-check=full)
+    name: Valgrind smoke (leak-check=full)
     runs-on: ubuntu-latest
     needs: test
-    timeout-minutes: 180
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -206,15 +208,16 @@ jobs:
       - name: Install deps (pkg-deps-core + pkg-deps-test)
         run: make pkg-deps-core pkg-deps-test
 
-      - name: Build + run suite under valgrind
-        # The Makefile's `valgrind` recipe internally recurses with
+      - name: Build + run suite under valgrind (smoke subset)
+        # The Makefile's `valgrind-smoke` recipe internally recurses with
         # CFLAGS=$(CFLAGS_DEBUG); passing ENABLE_TEST_KEY=1 on the
         # command line propagates through MAKEFLAGS so the embedded
         # test signing key is compiled in (signed-only tests don't
         # try to fetch the production key from the network).
         # --error-exitcode=1 in the recipe makes any leak / error
-        # fail the job.
-        run: make ENABLE_TEST_KEY=1 valgrind 2>&1 | tee valgrind.log
+        # fail the job.  valgrind-smoke skips the large-inner-loop files
+        # (VALGRIND_SMOKE_EXCLUDE); use `make valgrind` for the full set.
+        run: make ENABLE_TEST_KEY=1 valgrind-smoke 2>&1 | tee valgrind.log
 
       - name: Upload valgrind log
         if: always()
@@ -451,15 +454,23 @@ jobs:
         if: always()
         run: bash tools/fuzz_rotate.sh stop || true
 
-      - name: Fail job if any crash was found
+      - name: Fail job if any crash or hang was found
         if: always()
         run: |
-          # Treat any aggregated crash file as a CI failure so the
-          # nightly run goes red in the UI.  Hangs aren't auto-failures
-          # (TH8 has documented long-running scripts in the corpus).
+          # A crash fails the run -- and so does a HANG.  Every harness bounds
+          # work with Th8_SetStepLimit (see fuzz/fuzz_*.c), so a fuzzer-
+          # generated infinite loop (e.g. `while 1 {}`) hits the step cap and
+          # returns; it does NOT hang.  An AFL-classified hang is therefore an
+          # input that blew the wall-clock budget WITHIN the step limit -- a
+          # super-linear / algorithmic-complexity (DoS) defect -- which is a
+          # real finding worth going red for, not an "expected slow script."
           set -e
-          if [ -d build/fuzz_rotate/crashes ] && \
-             find build/fuzz_rotate/crashes -type f | grep -q .; then
-            echo "::error::AFL++ campaign produced crash inputs"
-            exit 1
-          fi
+          rc=0
+          for kind in crashes hangs; do
+            d="build/fuzz_rotate/$kind"
+            if [ -d "$d" ] && find "$d" -type f | grep -q .; then
+              echo "::error::AFL++ campaign produced $kind inputs (see the uploaded artifact)"
+              rc=1
+            fi
+          done
+          exit "$rc"

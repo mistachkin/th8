@@ -78,6 +78,23 @@
  *	value.  Used by th8CurlGetData to set CURLOPT_TIMEOUT_MS and
  *	CURLOPT_CONNECTTIMEOUT_MS on each curl handle.
  *
+ * Why / How:
+ *	Lets a script tune the network timeout without a dedicated command.
+ *	It reads ::th8_timeout via Th8_GetVar; if the variable is unset it
+ *	keeps the 30 s default.  Otherwise it parses the value with
+ *	Th8_ToWideInt and accepts it only when it is a positive value that
+ *	fits in a 32-bit long (1..0x7FFFFFFF), guarding both non-positive
+ *	timeouts and overflow.  It always clears the interpreter result it
+ *	borrowed before returning.
+ *
+ * Results:
+ *	The timeout in milliseconds: the parsed ::th8_timeout value when valid
+ *	and in range, otherwise 30000.
+ *
+ * Side effects:
+ *	Reads the ::th8_timeout variable and clears the interpreter result
+ *	(which Th8_GetVar had set) before returning.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -85,6 +102,9 @@ static long
 th8CurlTimeoutMs(Th8_Interp *interp)
 {
     long nMs = 30000L;
+#  if defined(TH8_ENABLE_VARIABLES)
+    /* The ::th8_timeout override is a variable; without the variable
+     * subsystem there is no way to read it, so the default stands. */
     size_t nVal = 0;
     const char *zVal;
     th8_int64_t parsed = 0;
@@ -98,6 +118,9 @@ th8CurlTimeoutMs(Th8_Interp *interp)
     nMs = (long)parsed;
 done:
     Th8_ClearResult(interp);
+#  else
+    (void)interp;
+#  endif
     return nMs;
 }
 
@@ -122,11 +145,18 @@ done:
  *	are intrinsic-true at runtime so the MC/DC analysis
  *	stays focused on the per-character scheme prefix.
  *
+ * Why / How:
+ *	A security allowlist: rather than parse the URI, it rejects anything
+ *	shorter than 8 bytes and then matches the literal `"https://"` or
+ *	`"http://"` byte prefix character by character, returning 1 only on a
+ *	match.  This keeps libcurl from being steered into `file:`, `ftp:`,
+ *	and other schemes by a hostile or buggy script.
+ *
  * Parameters:
  *	zUri -- URI bytes (not necessarily NUL-terminated).
  *	nUri -- URI length.
  *
- * Returns:
+ * Results:
  *	1 if the URI starts with `"http://"` or `"https://"`;
  *	0 otherwise.
  *
@@ -207,13 +237,24 @@ typedef struct {
  *	defending against pathological libcurl invocations
  *	that would otherwise wrap to a small allocation.
  *
+ * Why / How:
+ *	libcurl streams a response in chunks and calls this callback for each;
+ *	the helper accumulates them into one contiguous, NUL-terminated buffer
+ *	in TH8-tracked memory.  It first computes the incoming byte count and
+ *	the required capacity (data + existing + 1) with the overflow-safe
+ *	macros, then grows the buffer geometrically (double, floor 4096) via
+ *	Th8_AttemptRealloc, copies the bytes with Th8_Memcpy, and NUL-
+ *	terminates.  Any overflow or allocation failure returns 0, the signal
+ *	libcurl treats as a fatal write error, so the transfer aborts instead
+ *	of silently truncating.
+ *
  * Parameters:
  *	ptr      -- libcurl-supplied data block.
  *	size     -- bytes per element (libcurl always sets 1).
  *	nmemb    -- number of elements.
  *	userdata -- `CurlWriteCtx *` accumulator.
  *
- * Returns:
+ * Results:
  *	Number of bytes consumed (== `size * nmemb`) on
  *	success; 0 on overflow / OOM.
  *

@@ -248,23 +248,51 @@ host application; it is not available from scripts.
 ### 2.1 Step Counter
 
 A per-interpreter counter (`nStepCount` / `nStepLimit`) bounds total
-work.  Every command invocation, expression evaluation, regex match
-iteration, and string operation increments the counter.  When the
-limit is exceeded, `Th8_Ready()` returns `TH8_ERROR` with the message
-"step limit exceeded."
+work at command-and-expression granularity: `Th8_Ready()` increments
+the counter, and it is called once per command invocation and once per
+expression-tree node evaluated.  When the limit is exceeded,
+`Th8_Ready()` returns `TH8_ERROR` with the message "step limit
+exceeded."
+
+The step counter is deliberately NOT a per-byte or per-backtrack meter.
+A single command that scans or builds a large string, or a regular
+expression that backtracks heavily, can perform substantial work
+between step increments (for example, a catastrophic-backtracking
+pattern is stopped after only a few hundred steps -- by the regex
+engine, not the step counter).  Those cases are bounded by complementary
+limits -- the regex complexity limit (sec 17) for pathological patterns,
+and the memory-allocation and result-size limits (sec 2.2, 2.3) for
+large single values -- rather than by per-iteration step counting
+(TH8K-020).
 
 ### 2.2 Memory Allocation Limit
 
-`nAllocLimit` caps total memory allocated through the platform.
-`Th8_Malloc` checks the limit before every allocation.  Prevents
-untrusted scripts from exhausting host memory via large numbers of
-variables, namespaces, or strings.
+`nAllocLimit` caps the live bytes allocated through the TH8 allocation
+wrappers (`Th8_Malloc` / `Th8_Realloc` and the internal
+`Th8_SafeAlloc` / `Th8_SafeRealloc` they call), which check the limit
+before every such allocation and account the actual, allocator-rounded
+size.  This bounds the memory a script can consume via variables,
+namespaces, lists, and strings, including the bridged bigint and regex
+engines (sec 6.3).
+
+Scope note (TH8K-020): the accounting covers allocations routed through
+these wrappers.  It does not attempt to account allocator bookkeeping
+overhead, nor memory allocated directly by optional external libraries
+(e.g. OpenSSL, curl, unbound) that manage their own heaps; a profile
+that must bound those should disable the corresponding features or
+impose an OS-level limit.  A value of 0 means *no* limit (contrast the
+result-size limit, where 0 selects the default cap).
 
 ### 2.3 Result Size Limit
 
-`nResultLimit` bounds the size of any string being constructed.
-Prevents exponential string growth from pathological scripts like
-`string repeat [string repeat x 1000000] 1000000`.
+`nResultLimit` bounds the size of the interpreter *result* string
+(enforced by `th8CheckResultSize` when a result is set).  A value of 0
+selects the built-in default cap of `TH8_MX_STRLEN` (100 MiB) rather
+than disabling the check (TH8K-020).  Strings a script accumulates in
+variables or builds inside a single command (e.g. `string repeat`) are
+bounded by the memory-allocation limit (sec 2.2) and the per-command
+`TH8_MX_STRING_REPEAT` cap -- not by `nResultLimit`, which applies to
+the value handed back as the interpreter result.
 
 ### 2.4 Native Stack Bounds
 
@@ -274,11 +302,45 @@ is called at recursion boundaries to prevent native stack overflow.
 A configurable guard zone (`nStackGuard`, default 64KB) provides a
 safety margin.
 
-### 2.5 Expression Recursion Depth
+### 2.5 Evaluation and Expression Recursion Depth
 
-`nEvalDepth` limits the recursion depth of nested evaluations and
-expression sub-expressions (default 10,000).  Prevents stack exhaustion
-from deeply recursive scripts.
+Two independent, explicit counters bound recursion so a crafted script
+cannot exhaust the native C stack:
+
+- **Command evaluation** — `nEvalDepth` limits the depth of nested
+  script evaluations (procedure calls, command substitution) and is
+  capped at 1,000.
+- **Expression evaluation** — `nExprDepth` limits the recursion of the
+  expression-tree builder and evaluator and is capped at
+  `TH8_MX_EXPR_DEPTH` (1,000).  This is a *separate* counter from
+  `nEvalDepth`: a single `[expr]` with deeply nested parentheses
+  (`((((...))))`) or a long operator chain (`1+1+1+...`) is bounded here
+  and reports "expression nested too deeply" rather than overflowing the
+  stack.  The expression-tree teardown is iterative (constant stack), so
+  even a tree the evaluator refuses to evaluate is freed without
+  recursion.  Both counters are snapshotted across coroutine context
+  switches so the bound is exact.
+
+The `Th8_Ready()` native stack check (§2.4) remains as an adaptive
+backstop for the compound case (deep expressions nested inside deep
+command recursion) and for hosts with unusually small stacks.
+
+### 2.6 Wall-Clock Deadline
+
+`nDeadlineUs` is an absolute monotonic-microsecond deadline (0 = none)
+that bounds an interpreter's real elapsed time rather than its work.
+The step counter (§2.1) is a proxy for work, not time: a script that
+runs few commands but each expensive can consume real wall-clock time
+within the step budget.  When a deadline is set, `th8Step` checks it
+periodically (every 4096 steps, to amortize the clock read) and stops
+the evaluation with "time limit exceeded" once it passes.  An embedder
+arms it with `Th8_SetDeadline` (absolute) or `Th8_SetTimeLimitMs`
+(relative duration); it is off by default and, like the other limits,
+opt-in for untrusted script.  If the platform provides no monotonic
+clock the deadline never fires (fail-open, since the caller opted in).
+It is a *cooperative* bound, checked at the same `Th8_Ready`/`th8Step`
+boundaries as the step limit -- not a preemptive timer; a single
+uninterruptible platform callback is not cut short mid-call.
 
 ---
 
@@ -298,14 +360,22 @@ the outermost evaluation caller, even through nested `catch` blocks.
 
 ### 3.3 The Th8_Ready() Checkpoint
 
-Every resource-consuming operation calls `Th8_Ready()`, which checks:
-1. Cancellation flag (`bCanceled`)
-2. Suspension flag (`bSuspended`)
-3. Exit flag (`bExit`)
-4. Step limit (`nStepCount >= nStepLimit`)
+`Th8_Ready()` is the unified safety checkpoint.  It checks, in order:
+1. Native stack headroom (`th8CheckStack`, sec 2.4) -- first, because
+   the remaining checks themselves consume stack
+2. Cancellation flag (`bCanceled`)
+3. Suspension flag (`bSuspended`)
+4. Exit flag (`bExit`)
+5. Step limit (`nStepCount >= nStepLimit`)
 
-This is the **unified safety checkpoint** -- there is no way to
-consume resources without hitting it.
+It is called at every command boundary and every expression-tree node,
+and by the bigint and regex allocation bridges (sec 6.3); a cancelled or
+over-limit interpreter stops the next time it is reached.  It is NOT,
+however, invoked per byte or per backtrack: a single large operation or
+a heavily backtracking regex performs bounded work *between*
+checkpoints, which is why the regex complexity, memory, and result
+limits (sec 2.2, 2.3, 17) exist alongside it rather than the step
+counter being relied on alone (TH8K-020).
 
 ---
 
@@ -355,9 +425,15 @@ Critical invariants are annotated with `ALWAYS()` and `NEVER()` macros
 
 ### 6.2 Platform-Routed Allocation
 
-All memory flows through `Th8_Malloc` / `Th8_Free` / `Th8_Realloc`,
-which track total allocation against `nAllocLimit`.  There is no way
-for a script to allocate memory that bypasses accounting.
+Script-driven memory flows through the TH8 allocation wrappers
+(`Th8_Malloc` / `Th8_Free` / `Th8_Realloc`), which track live allocation
+against `nAllocLimit` (sec 2.2).  Core script operations cannot allocate
+accounted memory that bypasses this path, and the bridged bigint and
+regex engines (sec 6.3) route through it too.  Optional external
+libraries linked into some builds (OpenSSL, curl, unbound) manage their
+own heaps outside this accounting; a profile that must bound total
+process memory should disable those features or impose an OS-level limit
+(TH8K-020).
 
 ### 6.3 Vendored Dependency Memory Bridges
 

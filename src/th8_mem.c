@@ -53,42 +53,35 @@
  */
 
 static void *
-th8MemNeedMemory(Th8_Interp *interp, size_t nByte)
+th8MemNeedMemory(
+    Th8_Interp *interp, /* Interpreter under memory pressure. */
+    size_t nByte, /* Requested size (already validated by the caller). */
+    int bPanic, /* Forwarded to th8MallocCommon (panic-on-failure). */
+    const char *zFile, /* Caller __FILE__ for the fault filter. */
+    int nLine) /* Caller __LINE__ for the fault filter. */
 {
-    const Th8_Platform *pPlat;
-
     if (!interp) return NULL;
 
     /*
-     * Step 1: Clear the IR cache.  This releases all cached
-     * type conversions, list splits, and buffer pool entries.
+     * Step 1: Clear the IR cache.  This releases all cached type
+     * conversions, list splits, and buffer pool entries.  Freeing them
+     * decrements the interpreter's accounted bytes (nAllocBytes), which is
+     * what can make the retry below fit under Th8_SetAllocLimit.
      */
 
     th8ClearCache(interp);
 
     /*
-     * Step 2: Sanity check.  Reject requests that exceed the
-     * maximum allocation size.  This prevents a corrupted size_t
-     * from causing a massive allocation attempt.
+     * Step 2: Retry through the ONE limit-checked, zero-filled, accounted
+     * allocation core (TH8K-023).  Delegating to th8MallocCommon -- rather
+     * than a raw xMalloc as before -- is what makes this second chance
+     * respect the per-interpreter memory limit and update the accounting
+     * EXACTLY ONCE, in one place.  th8MallocCommon never invokes xNeedMemory,
+     * so this cannot recurse.  Th8_SafeAlloc does not re-zero or re-account
+     * the result, so the block th8MallocCommon returns is used as-is.
      */
 
-    if (nByte == 0 || nByte > TH8_MX_ALLOC) {
-	return NULL;
-    }
-
-    /*
-     * Step 3: Retry the allocation via the interpreter's
-     * current xMalloc callback.  This goes through the real
-     * platform allocator (not through Th8_Malloc, which would
-     * recurse back into Th8_SafeAlloc and xNeedMemory).
-     */
-
-    pPlat = Th8_GetPlatform(interp);
-    if (ALWAYS(pPlat) && pPlat->xMalloc) {
-	return pPlat->xMalloc(interp, pPlat->pCtx, nByte);
-    }
-
-    return NULL;
+    return th8MallocCommon(interp, nByte, bPanic, zFile, nLine);
 }
 
 
@@ -248,6 +241,19 @@ static const Th8_Platform th8MemPlatformData = {
  * Th8_GetMemPlatform --
  *
  *	Return the static memory-recovery platform struct.
+ *
+ * Why / How:
+ *	Returns the address of a single file-scope Th8_Platform table
+ *	(th8MemPlatformData) whose only populated slot is the
+ *	xNeedMemory memory-recovery callback; every other slot is zero
+ *	so merging it into a platform overrides nothing else.  Static
+ *	storage means no allocation and process-lifetime validity.
+ *
+ * Results:
+ *	Pointer to the static memory-recovery Th8_Platform struct.
+ *
+ * Side effects:
+ *	None.
  *
  *----------------------------------------------------------------------
  */

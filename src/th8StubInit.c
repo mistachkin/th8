@@ -105,6 +105,9 @@ const Th8StubsTable th8StubsTableData = {
     0,
 #endif
     Th8_CreateCommand,
+    Th8_CreateSubCommand,
+    Th8_DeleteSubCommand,
+    Th8_GetSubCommandInfo,
     Th8_DeleteCommand,
     Th8_GetCommandInfo,
     Th8_SetCommandCopy,
@@ -286,7 +289,11 @@ const Th8StubsTable th8StubsTableData = {
 #else
     0,
 #endif
+#if defined(TH8_ENABLE_CRYPTOGRAPHY)
     Th8_GetEmbeddedKeyring,
+#else
+    0,
+#endif
 #if defined(TH8_ENABLE_CRYPTOGRAPHY) && defined(TH8_ENABLE_TEST_KEY)
     Th8_GetEmbeddedKeyTest,
 #else
@@ -350,8 +357,13 @@ const Th8StubsTable th8StubsTableData = {
     Th8_SetOverflowCheck,
     Th8_GetOverflowCheck,
     Th8_SetAllocLimit,
+    Th8_SetSafeLimits,
+    Th8_SetDeadline,
+    Th8_GetDeadline,
+    Th8_SetTimeLimitMs,
     Th8_GetAllocLimit,
     Th8_GetAllocBytes,
+    Th8_GetAllocPeak,
 #if defined(TH8_ENABLE_LOAD)
     Th8_EnableLoad,
 #else
@@ -442,7 +454,6 @@ const Th8StubsTable th8StubsTableData = {
     0,
 #endif
     Th8_WrongNumArgs,
-    Th8_CallSubCommand,
     Th8_ReportTaint,
     Th8_Input,
     Th8_Output,
@@ -604,6 +615,9 @@ const Th8StubsTable th8StubsTableData = {
     0,
 #endif
     Th8_RegisterLanguage,
+    Th8_RegisterSubsets,
+    Th8_ListSubsets,
+    Th8_GetSubsetMembers,
 #if defined(TH8_ENABLE_VARIABLES)
     Th8_ResetSecurityArray,
 #else

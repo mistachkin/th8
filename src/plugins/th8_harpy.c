@@ -35,6 +35,25 @@
  *
  *	clock ntp ?-server HOST? ?-timeout MS? ?-attempts N?
  *
+ * Why / How:
+ *	Parses the -server, -timeout, -attempts, and -insecure options from
+ *	argv[2..], collecting up to eight server names, then delegates to
+ *	th8NtpQuery to perform the actual authenticated NTP exchange.  By
+ *	default it requires the server name to resolve via a DNSSEC-secure
+ *	lookup; -insecure clears that requirement for this query so an
+ *	unsigned public server (e.g. pool.ntp.org) can be reached, relying on
+ *	the NTP origin-timestamp anti-spoof check for integrity.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to the verified Unix epoch
+ *	seconds as a wide integer; TH8_ERROR (with an interpreter result
+ *	message) on a bad option, a missing option value, a malformed
+ *	numeric argument, or a failed NTP query.
+ *
+ * Side effects:
+ *	Performs network I/O to the NTP server(s).  Sets the interpreter
+ *	result (either the epoch value or an error message).
+ *
  *----------------------------------------------------------------------
  */
 
@@ -50,6 +69,7 @@ th8HarpyClockNtpCommand(
     int nServers = 0;
     int timeoutMs = 0;
     int attempts = 0; /* 0 -> NTP_DEFAULT_ATTEMPTS; 1 disables retries */
+    int bInsecure = 0; /* -insecure -> skip the require-DNSSEC-secure check */
     int i;
     th8_int64_t epochSec;
     int rc;
@@ -61,7 +81,7 @@ th8HarpyClockNtpCommand(
 	    if (i + 1 >= argc) {
 		return Th8_WrongNumArgs(
 		    interp, "clock ntp ?-server host? ?-timeout ms? "
-		            "?-attempts n?");
+		            "?-attempts n? ?-insecure?");
 	    }
 	    i++;
 	    if (nServers < 8) {
@@ -72,7 +92,7 @@ th8HarpyClockNtpCommand(
 	    if (i + 1 >= argc) {
 		return Th8_WrongNumArgs(
 		    interp, "clock ntp ?-server host? ?-timeout ms? "
-		            "?-attempts n?");
+		            "?-attempts n? ?-insecure?");
 	    }
 	    i++;
 	    {
@@ -89,7 +109,7 @@ th8HarpyClockNtpCommand(
 	    if (i + 1 >= argc) {
 		return Th8_WrongNumArgs(
 		    interp, "clock ntp ?-server host? ?-timeout ms? "
-		            "?-attempts n?");
+		            "?-attempts n? ?-insecure?");
 	    }
 	    i++;
 	    {
@@ -100,6 +120,17 @@ th8HarpyClockNtpCommand(
 		}
 		attempts = (int)v;
 	    }
+	} else if (
+	    argl[i] == 9 &&
+	    Th8_Memcmp(interp, argv[i], "-insecure", 9) == 0) {
+	    /*
+	     * Opt out of the require-DNSSEC-secure check for THIS query.
+	     * Needed to reach an NTP server in an unsigned DNS zone (most
+	     * public servers, e.g. pool.ntp.org) on a validating build; the
+	     * NTP origin-timestamp anti-spoof remains the response-integrity
+	     * defense.  A no-op on builds without a local validator.
+	     */
+	    bInsecure = 1;
 	} else {
 	    Th8_ErrorMessage(
 	        interp, "clock ntp: unknown option \"", argv[i], argl[i]);
@@ -109,7 +140,7 @@ th8HarpyClockNtpCommand(
 
     rc = th8NtpQuery(
         interp, nServers > 0 ? azServers : NULL, nServers, timeoutMs, 0,
-        attempts, &epochSec);
+        attempts, !bInsecure, &epochSec);
     if (rc != TH8_OK) return rc;
 
     return Th8_SetResultWideInt(interp, epochSec);
@@ -125,6 +156,21 @@ th8HarpyClockNtpCommand(
  *	Used as a subcommand of [clock] via the timekeeping plugin.
  *
  *	clock https ?URL?
+ *
+ * Why / How:
+ *	Accepts an optional URL operand (defaulting inside th8HttpsTimeQuery
+ *	when omitted) and delegates to th8HttpsTimeQuery, which performs the
+ *	TLS request and extracts the server's authenticated time from the
+ *	HTTP Date response header.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to the reported Unix epoch
+ *	seconds as a wide integer; TH8_ERROR (with an interpreter result
+ *	message) on too many arguments or a failed HTTPS query.
+ *
+ * Side effects:
+ *	Performs network (TLS) I/O to the HTTPS time server.  Sets the
+ *	interpreter result (either the epoch value or an error message).
  *
  *----------------------------------------------------------------------
  */
@@ -177,7 +223,7 @@ typedef struct {
     int bLegacy;
     int bCompact;
     th8_int64_t key;
-    int iArg;  /* Index of first non-option argument. */
+    int iArg; /* Index of first non-option argument. */
 } Th8_FlagsOpts;
 
 
@@ -189,6 +235,26 @@ typedef struct {
  *	Parse the shared -option flags from argv[2..] and populate
  *	the Th8_FlagsOpts struct.  Sets pOpts->iArg to the index of
  *	the first operand after options.
+ *
+ * Why / How:
+ *	Zero-initializes *pOpts, then walks argv from index 2 while the next
+ *	argument begins with '-', setting the matching boolean field for each
+ *	recognized flag (-complex, -space, -sort, -all, -strict, -legacy,
+ *	-compact).  The -key option consumes the following argument as its
+ *	value, parsing a 0x-prefixed token by hand into an unsigned
+ *	accumulator (to avoid signed-shift-overflow UB, Bug 46) and otherwise
+ *	via Th8_ToWideInt.  A "--" argument ends option parsing.  Finally it
+ *	enforces that a non-default key is only allowed in -complex mode.
+ *
+ * Results:
+ *	TH8_OK with *pOpts populated and pOpts->iArg pointing at the first
+ *	operand; TH8_ERROR (with an interpreter result message) on an unknown
+ *	option, a -key without a value, an invalid hex key, a non-numeric
+ *	key, or a non-default key used without -complex.
+ *
+ * Side effects:
+ *	Overwrites the caller's Th8_FlagsOpts.  Sets the interpreter result
+ *	on error.
  *
  *----------------------------------------------------------------------
  */
@@ -304,7 +370,22 @@ th8FlagsParseOpts(
  *
  * flags_have_command --
  *
- *	flags have ?options? flagString haveFlags
+ *	Implements `flags have ?options? flagString haveFlags`: test
+ *	whether an attribute-flag string contains the requested flags.
+ *
+ * Why / How:
+ *	Parses the shared options via th8FlagsParseOpts, requires exactly two
+ *	operands, parses flagString into an Th8_AfMap, then reports the result
+ *	of Th8_AttrFlagsHave for haveFlags under the -all and -strict
+ *	modifiers.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to the boolean (0/1) outcome of
+ *	the membership test; TH8_ERROR (with an interpreter result message) on
+ *	an option error, wrong operand count, or a flag-parse failure.
+ *
+ * Side effects:
+ *	Sets the interpreter result (boolean outcome or error message).
  *
  *----------------------------------------------------------------------
  */
@@ -349,7 +430,24 @@ flags_have_command(
  *
  * flags_change_command --
  *
- *	flags change ?options? flagString changeSpec
+ *	Implements `flags change ?options? flagString changeSpec`: apply a
+ *	set of changes to an attribute-flag string and return the result.
+ *
+ * Why / How:
+ *	Parses the shared options, requires exactly two operands, parses
+ *	flagString into an Th8_AfMap, applies changeSpec via
+ *	Th8_AttrFlagsChange (using the parsed key), then reformats the map to
+ *	a string with Th8_AttrFlagsFormat under the -legacy/-compact/-space/
+ *	-sort modifiers.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to the reformatted flag string;
+ *	TH8_ERROR (with an interpreter result message) on an option error,
+ *	wrong operand count, or a parse/change/format failure.
+ *
+ * Side effects:
+ *	Allocates and frees a temporary output buffer.  Sets the interpreter
+ *	result (formatted flags or error message).
  *
  *----------------------------------------------------------------------
  */
@@ -403,7 +501,26 @@ flags_change_command(
  *
  * flags_show_command --
  *
- *	flags show ?options? flagString
+ *	Implements `flags show ?options? flagString`: expand an
+ *	attribute-flag string into a key/flags list, one entry per key.
+ *
+ * Why / How:
+ *	Parses the shared options, requires a single operand, and parses
+ *	flagString into an Th8_AfMap.  It locates the global (key == 0) entry
+ *	first so it is emitted before the keyed entries, then iterates the map
+ *	building a Tcl list whose elements alternate the decimal key (formatted
+ *	by hand into a stack buffer) and the bare flag string for that key
+ *	(produced by Th8_AttrFlagsFormat on a one-entry map with the key
+ *	zeroed so the key is not repeated inside the flags).
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to the {key flags ...} list;
+ *	TH8_ERROR (with an interpreter result message) on an option error,
+ *	wrong operand count, or a parse/format failure.
+ *
+ * Side effects:
+ *	Allocates and frees temporary output buffers.  Sets the interpreter
+ *	result (the list or an error message).
  *
  *----------------------------------------------------------------------
  */
@@ -463,7 +580,7 @@ flags_show_command(
 
 	Th8_Memset(interp, &one, 0, sizeof(one));
 	one.a[0] = map.a[idx];
-	one.a[0].key = 0;   /* Emit bare flags; key is output separately. */
+	one.a[0].key = 0; /* Emit bare flags; key is output separately. */
 	one.n = 1;
 
 	rc = Th8_AttrFlagsFormat(interp, &one, 0, 1, 0, 1, &zVal, &nVal);
@@ -502,9 +619,10 @@ flags_show_command(
 /*
  *----------------------------------------------------------------------
  *
- * flags_command --
+ * th8FlagsSub --
  *
- *	Ensemble dispatcher for the [flags] command.
+ *	Catalogue of `flags` sub-commands, installed into the `flags` ensemble
+ *	command's per-interpreter sub-command hash at registration (TH8K-025).
  *
  *----------------------------------------------------------------------
  */
@@ -517,51 +635,6 @@ static const Th8_SubCommand th8FlagsSub[] =
 
 const Th8_SubCommand *th8_flags_aSub;
 
-/*
- *----------------------------------------------------------------------
- *
- * flags_command --
- *
- *	Implements the script-visible `[flags ...]` ensemble
- *	used by the Harpy plugin to query and mutate the
- *	signed-script attribute flags (`change`, `have`,
- *	`show`).  Thin dispatcher into `th8FlagsSub` via
- *	`Th8_CallSubCommand`.
- *
- *	The published `th8_flags_aSub` pointer lets other
- *	parts of the plugin (e.g. introspection helpers
- *	enumerating attribute names) traverse the same table
- *	without re-defining it.
- *
- * Parameters:
- *	interp -- live interpreter.
- *	ctx    -- command context (forwarded).
- *	argc   -- argument count.
- *	argv   -- argument vector.
- *	argl   -- argument byte-length vector.
- *
- * Returns:
- *	The selected subcommand's return code, or `TH8_ERROR`
- *	with a diagnostic if the subcommand name is unknown.
- *
- * Side effects:
- *	Whatever the dispatched subcommand performs (the
- *	`change` subcommand mutates the per-interp
- *	attribute-flag state).
- *
- *----------------------------------------------------------------------
- */
-static int
-flags_command(
-    Th8_Interp *interp,
-    void *ctx,
-    int argc,
-    const char **argv,
-    size_t *argl)
-{
-    return Th8_CallSubCommand(interp, ctx, argc, argv, argl, th8FlagsSub);
-}
-
 
 #if defined(TH8_ENABLE_CRYPTOGRAPHY)
 /*
@@ -571,6 +644,19 @@ flags_command(
  *
  *	Retrieve the signed-only policy context from the interp's
  *	policy callback.  Returns NULL if no policy is installed.
+ *
+ * Why / How:
+ *	Calls Th8_GetPolicyCallback requesting only the context pointer (the
+ *	callback function pointer is ignored) and returns it.  The harpy
+ *	command uses this context to look up signing keys and enforce that a
+ *	signed-only policy is actually installed.
+ *
+ * Results:
+ *	The policy context pointer, or NULL if no policy callback is installed
+ *	on the interpreter.
+ *
+ * Side effects:
+ *	None.
  *
  *----------------------------------------------------------------------
  */
@@ -602,6 +688,27 @@ th8HarpyGetPolicyCtx(Th8_Interp *interp)
  *	"verify" parses the signature text, looks up the key by token,
  *	and verifies the signature.  Returns "ok" on success, raises
  *	an error on failure.
+ *
+ * Why / How:
+ *	First fetches the signed-only policy context (th8HarpyGetPolicyCtx)
+ *	and fails if none is installed, since key lookup requires it.  For
+ *	"sign" it finds the key by token, requires a private key, signs the
+ *	script bytes with Th8_RsaSign, base64-encodes the signature, and
+ *	assembles a .b64sig text (comment header carrying the token plus the
+ *	wrapped base64 body).  For "verify" it parses the .b64sig text with
+ *	Th8_HarpySigLoad, checks that any embedded token matches the requested
+ *	token, looks up the key, and calls Th8_RsaVerify.
+ *
+ * Results:
+ *	TH8_OK -- for "sign" with the interpreter result set to the .b64sig
+ *	text; for "verify" with the result set to "ok".  TH8_ERROR (with an
+ *	interpreter result message) on wrong argument count, missing policy,
+ *	unknown subcommand, key-not-found, missing private key, token
+ *	mismatch, or a signing/verification failure.
+ *
+ * Side effects:
+ *	Allocates and frees signature and output buffers.  Sets the
+ *	interpreter result (signature text, "ok", or an error message).
  *
  *----------------------------------------------------------------------
  */
@@ -823,7 +930,7 @@ oom:
  */
 
 static Th8_CommandEntry th8HarpyCommands[] = {
-    {1, 0, "flags", flags_command},
+    {1, 0, "flags", 0}, /* pure ensemble (TH8K-025) */
 #if defined(TH8_ENABLE_CRYPTOGRAPHY)
     {1, 0, "harpy", harpy_command},
 #endif

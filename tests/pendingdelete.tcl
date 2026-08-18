@@ -297,6 +297,65 @@ runTest {test pendingdelete-4.4 {
 } -result {new}}
 
 ###############################################################################
+#
+# Section 5 -- Allocation-failure safety (TH8K-007)
+#
+# The deferred-delete queue is intrusive and allocation-free: a pending
+# command or namespace is threaded onto a per-interpreter FIFO through its
+# own pPendingNext field, so queuing never allocates and can never fall
+# back to the former unsafe "risk a use-after-free rather than leak"
+# immediate free under OOM.  These sweep the allocation-failure threshold
+# across a command and a namespace that delete themselves mid-dispatch;
+# every run must terminate cleanly (a normal result or a clean error, never
+# a crash or use-after-free) and leave the interpreter fully usable.
+#
+###############################################################################
+
+runTest {test pendingdelete-5.1 {
+  command self-delete under allocation failure never uses-after-free (TH8K-007)
+} -constraints {
+    th8 fault_injection
+} -body {
+  set ok 1
+  for {set n 1} {$n <= 25} {incr n} {
+    proc _fdSelf {} { rename _fdSelf ""; return "gone" }
+    set r [::th8testlib::fault eval {_fdSelf} -allocFailAfter $n]
+    # A return code of 0 (ok) or 1 (error) proves the eval unwound
+    # normally; a use-after-free would have crashed the process here.
+    if {[faultRc $r] > 1} { set ok 0 }
+    catch {rename _fdSelf ""}
+  }
+  # The interpreter still works after the whole sweep.
+  list $ok [expr {2 + 2}]
+} -cleanup {
+  catch {rename _fdSelf ""}
+  unset -nocomplain ok n r
+} -result {1 4}}
+
+###############################################################################
+
+runTest {test pendingdelete-5.2 {
+  namespace self-delete under allocation failure never uses-after-free (TH8K-007)
+} -constraints {
+    th8 fault_injection
+} -body {
+  set ok 1
+  for {set n 1} {$n <= 25} {incr n} {
+    catch {namespace delete ::_fdNs}
+    namespace eval ::_fdNs {
+      proc boom {} { namespace delete ::_fdNs; return "boom" }
+    }
+    set r [::th8testlib::fault eval {::_fdNs::boom} -allocFailAfter $n]
+    if {[faultRc $r] > 1} { set ok 0 }
+    catch {namespace delete ::_fdNs}
+  }
+  list $ok [expr {2 + 2}]
+} -cleanup {
+  catch {namespace delete ::_fdNs}
+  unset -nocomplain ok n r
+} -result {1 4}}
+
+###############################################################################
 
 source tests/epilogue.tcl
 

@@ -1,0 +1,27 @@
+###############################################################################
+#
+# badtoken.tcl.b64sig -- ABCD
+#
+# TH8 MC/DC COVERAGE FIXTURE (not a real signature).
+#
+# Deliberately malformed Harpy signature file used ONLY by the
+# ::th8testlib::policyverifydata `badtoken` mode to drive the
+# th8_policy.c th8PolicyVerifyData token-length guard:
+#
+#   if (!zToken || Th8_Strlen(interp, zToken) != 16) { ... }
+#
+# Line 3 above carries a 4-character public-key token ("ABCD"),
+# which Th8_HarpySigLoad extracts successfully (the token parse is
+# independent of signature validity) but which is not 16 characters
+# long, driving the (F,T) C2 vector of that decision.  The base64
+# body below is a short, valid-but-meaningless blob so that
+# Th8_HarpySigLoad returns TH8_OK and the token guard is reached.
+#
+# There is intentionally no badtoken.tcl: th8PolicyVerifyData reads
+# only this .b64sig sibling (the data it verifies is supplied inline
+# by the probe), so no signed script is required or wanted here.
+#
+###############################################################################
+
+  QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2
+  d3h5ejAxMjM0NTY3ODkrLw==

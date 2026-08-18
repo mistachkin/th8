@@ -15,11 +15,29 @@
 #include "th8_spilornis.h"
 
 /*
+ *----------------------------------------------------------------------
+ *
  * th8_spilornis_isspace --
  *
  *	Narrow-char space classification for the Spilornis parser.
  *	Maps iswspace() to a simple ASCII check since we operate
  *	in UTF-8 mode where all delimiters are ASCII.
+ *
+ * Why / How:
+ *	Tests the character against the six ASCII whitespace codes
+ *	(space, tab, newline, carriage return, form feed, vertical tab)
+ *	directly instead of calling the locale-sensitive iswspace(),
+ *	giving deterministic, locale-independent results for the
+ *	UTF-8 byte stream the parser consumes.
+ *
+ * Results:
+ *	Nonzero if c is one of the six ASCII whitespace characters;
+ *	zero otherwise.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------
  */
 
 int

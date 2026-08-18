@@ -536,5 +536,57 @@ runTest {test namespace-11.6 {
 } -result {::}}
 
 ###############################################################################
+#
+# Section 12 -- namespace nesting depth bound (TH8K-011 / Bug 81).
+#
+# A deeply QUALIFIED name creates one namespace per "::" component in a
+# single command, bypassing the evaluation-depth limit that bounds
+# nested `namespace eval`.  TH8's teardown (th8FreeNamespace) recurses
+# per level, so an unbounded tree used to overflow the native C stack at
+# interpreter deletion (SIGSEGV).  TH8 now bounds nesting at
+# TH8_MX_NS_DEPTH (1000).  th8-constrained: the reference Tcl accepts
+# arbitrarily deep namespaces (it does not use a bounded recursive
+# teardown), so it would not raise this error.
+#
+###############################################################################
+
+runTest {test namespace-12.1 {
+  Creating a namespace nested beyond TH8_MX_NS_DEPTH via a deeply
+  qualified name is rejected cleanly ("namespace nested too deeply")
+  rather than crashing the interpreter at teardown (Bug 81).
+} -constraints {
+    th8
+} -setup {
+  set qual [string repeat "a::" 5000]x
+} -body {
+  catch {namespace eval $qual { set z 1 }} m
+  list [catch {namespace eval $qual { set z 1 }}] $m
+} -cleanup {
+  # The rejected attempt still creates the partial chain up to the
+  # limit before failing; delete its root (a bounded recursive delete).
+  catch {namespace delete ::a}
+  unset -nocomplain qual m
+} -result {1 {namespace nested too deeply}}}
+
+###############################################################################
+
+runTest {test namespace-12.2 {
+  A namespace nested well UNDER the limit is created normally and the
+  interpreter tears down cleanly (bounded recursion), and an ordinary
+  shallow namespace is unaffected.
+} -constraints {
+    th8
+} -setup {
+  set deep [string repeat "n::" 500]leaf
+} -body {
+  list [catch {namespace eval $deep { variable v 7; set v }} r] $r \
+      [namespace eval ::demo::sub { variable w 9; set w }]
+} -cleanup {
+  catch {namespace delete ::n}
+  catch {namespace delete ::demo}
+  unset -nocomplain deep r
+} -result {0 7 9}}
+
+###############################################################################
 
 source tests/epilogue.tcl

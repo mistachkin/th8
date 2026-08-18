@@ -1561,6 +1561,29 @@ R-01699-22478
 :   The `split` command with a delimiter at the end of the string produces a trailing empty element.
 
 
+#### 14.11  linsert
+
+**Synopsis:** `linsert` *list* *index* ?*element* ...?
+
+R-50695-55336
+:   The `linsert` command returns a new list formed by inserting the given elements into list immediately before the element at index.
+
+R-19079-46202
+:   For `linsert`, the index `end` denotes the position after the last element, so that `linsert` with an index of `end` appends the new elements; `end-N` denotes the position N elements before the end.
+
+R-29287-02583
+:   The `linsert` command with an index less than 0 inserts the elements before the first element, and with an index greater than or equal to the list length appends them.
+
+R-04133-51517
+:   The `linsert` command with no element arguments returns the list unchanged.
+
+R-06207-62657
+:   The `linsert` command SHALL raise a script error if the list argument cannot be parsed as a well-formed list.
+
+R-05158-45827
+:   The `linsert` command SHALL raise a script error if the index argument is not a valid integer expression or one of the forms `end` or `end-N`.
+
+
 #### 14.12  lreverse
 
 **Synopsis:** `lreverse` *list*
@@ -2222,6 +2245,10 @@ R-03334-00938
 :   The `scan` command parses string according to the format string and stores the results in the named variables, returning the number of conversions performed.
 R-27422-38271
 :   If no variable names are given, `scan` returns a list of the converted values.
+
+R-54996-11407
+:   In list mode `scan` returns one element per non-suppressed conversion specifier; a specifier not satisfied before scanning stops contributes an empty-string element, except that reaching the end of input before any conversion is performed yields the empty list.
+
 R-56814-07430
 :   The `%d` specifier scans a decimal integer.
 R-47387-33797
@@ -2244,6 +2271,39 @@ R-60691-08269
 :   The `scan` command with no variable names returns the converted values as a list.
 R-18495-56959
 :   A whitespace character in the scan format matches any number of whitespace characters in the input, including zero.
+
+R-32826-38639
+:   The `%i` specifier scans an integer, auto-detecting the base from a leading `0x` prefix (hexadecimal), a leading `0` (octal), or otherwise decimal.
+
+R-24977-61729
+:   The `%u` specifier scans a decimal integer and stores its unsigned equivalent in the conversion's integer type, which is 32-bit unless widened by a size modifier.
+
+R-57777-39078
+:   The `%X` specifier scans a hexadecimal integer identically to `%x`.
+
+R-36335-08118
+:   The `%b` specifier scans a binary integer, recognizing the `0b` prefix.
+
+R-12730-11355
+:   The `%e`, `%E`, `%g`, and `%G` specifiers each scan a floating-point number identically to `%f`.
+
+R-22618-63798
+:   For a floating-point conversion, no size modifier stores a double-precision value and `h` stores a single-precision (float) value; the `hh`, `l`, `L`, and `ll` modifiers are errors for a floating-point conversion.
+
+R-38982-22334
+:   A `%[chars]` specifier scans a run of one or more input characters that appear in the set, and `%[^chars]` a run of characters that do not appear in the set; a `]` immediately after `[` or `[^` is a literal set member, and `a-b` denotes an inclusive range.
+
+R-45362-43419
+:   A decimal field width immediately before the conversion character limits that conversion to at most that many input characters.
+
+R-57836-23904
+:   A size modifier selects the stored integer type for a numeric conversion: `hh` is 8-bit, `h` is 16-bit, no modifier is 32-bit, `l` or `L` is 64-bit, and `ll` is arbitrary-precision (BigInt); signed conversions sign-extend and unsigned conversions zero-extend into that type, and an unsigned `ll` scan of a negative value is an error.
+
+R-29110-64897
+:   Every `scan` conversion except `%c`, `%[`, and `%n` skips leading whitespace in the input before converting.
+
+R-61594-17219
+:   A `%%` in the format matches a single literal `%` character in the input.
 
 
 #### 18.3  base64
@@ -3804,7 +3864,7 @@ command sections of this document by `tools/gencmdindex.tcl`, so it
 cannot drift from the normative text.  Ensemble sub-command variants
 written with a slash in a section heading (for example `string
 first / string last`) are listed separately, both pointing at the
-shared section.  127 command entries are indexed.
+shared section.  128 command entries are indexed.
 
 #### G.1  By command category
 
@@ -3863,6 +3923,7 @@ which are individually removable at compile time via the
 - `lappend` --- §14.7
 - `lassign` --- §14.14
 - `lindex` --- §14.2
+- `linsert` --- §14.11
 - `list` --- §14.1
 - `llength` --- §14.8
 - `lrange` --- §14.3
@@ -4042,6 +4103,7 @@ which are individually removable at compile time via the
 - `lappend` --- §14.7
 - `lassign` --- §14.14
 - `lindex` --- §14.2
+- `linsert` --- §14.11
 - `list` --- §14.1
 - `llength` --- §14.8
 - `load` --- §19.4

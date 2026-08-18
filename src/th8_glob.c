@@ -47,7 +47,14 @@
  *	patterns.
  *
  * Results:
- *	1 if the pattern matches the string, 0 otherwise.
+ *	1 if the pattern matches the string, 0 otherwise.  Returns 0
+ *	when the depth cap is exceeded or the interpreter signals
+ *	cancellation.
+ *
+ * Side effects:
+ *	None.  The function only reads the pattern and string; the
+ *	Th8_Ready calls poll the interpreter for cancellation but this
+ *	function changes no interpreter or global state.
  *
  *----------------------------------------------------------------------
  */

@@ -249,7 +249,10 @@ runTest {test try-5.1 {
     try {
       set x "body ok"
     } finally {
-      interp cancel "veto from finally"
+      # Empty path selects the current interpreter; the second
+      # argument is the cancel message (a lone non-empty argument
+      # would be treated as an interpreter path, not a message).
+      interp cancel "" "veto from finally"
     }
   } msg
   expr {[string match "*veto*" $msg]}
@@ -270,7 +273,8 @@ runTest {test try-5.2 {
   catch {
     try {
       lappend log "body"
-      interp cancel "body cancel"
+      # Empty path = current interpreter; second arg = cancel message.
+      interp cancel "" "body cancel"
     } finally {
       lappend log "finally"
     }

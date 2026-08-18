@@ -2079,12 +2079,20 @@ th8TestRsaKeyClearPubBlob(
  *
  *	Gated on `TH8_ENABLE_CRYPTOGRAPHY`.
  *
+ * Why / How:
+ *	A minimal two-field setter: after the caller has temporarily
+ *	overwritten a key's public-blob pointer/length to drive an
+ *	error-handling arm, this writes the saved pair straight back into
+ *	`pKey->zPubBlob` and `pKey->nPubBlob` so the key regains its
+ *	well-formed state for subsequent test vectors.  A NULL key is a no-op
+ *	so drivers need not special-case it.
+ *
  * Parameters:
  *	pKey       -- key to mutate (NULL is a no-op).
  *	pSavedBlob -- pointer to restore into `pKey->zPubBlob`.
  *	nSaved     -- length to restore into `pKey->nPubBlob`.
  *
- * Returns:
+ * Results:
  *	None.
  *
  * Side effects:
@@ -2101,6 +2109,159 @@ th8TestRsaKeyRestorePubBlob(
     if (!pKey) return;
     pKey->zPubBlob = pSavedBlob;
     pKey->nPubBlob = nSaved;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8RsaSignRawBlock --
+ *
+ *	Produce a raw PKCS#1 v1.5 RSA signature over an arbitrary
+ *	to-be-signed block, WITHOUT hashing it first.  Unlike
+ *	Th8_RsaSign (which always computes a SHA-512 DigestInfo),
+ *	this signs the caller's bytes verbatim: the result is an
+ *	`s` such that EVP_PKEY_verify_recover(s) yields exactly the
+ *	`zBlock` bytes back.
+ *
+ * Why / How:
+ *	Test-only helper (exposed via the internal stubs) used to
+ *	drive the DigestInfo-format guard in Th8_RsaExtractHash --
+ *	`if (recoveredLen != sha512PrefixLen + 64 || Th8_Memcmp(...)
+ *	!= 0)`.  Every real signature carries a well-formed SHA-512
+ *	DigestInfo, so that guard is permanently (F,F) and cannot be
+ *	driven to either error arm by any real load.  Signing a
+ *	block of the wrong LENGTH drives the C1 (T,-) vector, and
+ *	signing a same-length block with a wrong PREFIX drives the
+ *	C2 (F,T) vector; both recover with valid PKCS#1 padding (so
+ *	the earlier "RSA recover failed" arm is not taken) but fail
+ *	the DigestInfo check.  A minimal (n, e, d) private key is
+ *	built via EVP_PKEY_fromdata -- CRT parameters are not needed
+ *	for a one-off test signature -- then EVP_PKEY_sign with
+ *	RSA_PKCS1_PADDING and no digest signs the raw block.
+ *
+ * Results:
+ *	TH8_OK with *ppSig / *pnSig set to the freshly allocated
+ *	signature (caller frees via Th8_Free); TH8_ERROR on a NULL
+ *	argument, a key without private components, or any OpenSSL
+ *	failure, with the interpreter result set.
+ *
+ * Side effects:
+ *	Allocates the returned signature buffer; sets the
+ *	interpreter result on failure.
+ *
+ *----------------------------------------------------------------------
+ */
+
+TH8_INTERNAL int
+th8RsaSignRawBlock(
+    Th8_Interp *interp, /* Interpreter (for allocation / errors). */
+    const Th8_RsaKey *pKey, /* Private key. */
+    const unsigned char *zBlock, /* Raw to-be-signed block. */
+    size_t nBlock, /* Block length in bytes. */
+    unsigned char **ppSig, /* OUT: signature (caller frees). */
+    size_t *pnSig) /* OUT: signature length. */
+{
+    EVP_PKEY *pkey = NULL;
+    EVP_PKEY_CTX *kctx = NULL;
+    EVP_PKEY_CTX *sctx = NULL;
+    OSSL_PARAM_BLD *bld = NULL;
+    OSSL_PARAM *params = NULL;
+    BIGNUM *bn_n = NULL;
+    BIGNUM *bn_e = NULL;
+    BIGNUM *bn_d = NULL;
+    size_t nModulus, nPrivExp;
+    const unsigned char *zModulus, *zPrivExp;
+    unsigned char *zSig = NULL;
+    size_t nSig = 0;
+    int ok = 0;
+
+    if (!interp) return TH8_ERROR;
+    if (!ppSig || !pnSig) {
+	Th8_SetResultStatic(interp, "raw sign: invalid arguments", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    *ppSig = NULL;
+    *pnSig = 0;
+
+    if (!Th8_RsaKeyHasPrivate(pKey)) {
+	Th8_SetResultStatic(
+	    interp, "raw sign: key has no private components", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    zModulus = Th8_RsaKeyModulus(pKey, &nModulus);
+    zPrivExp = Th8_RsaKeyPrivExp(pKey, &nPrivExp);
+    if (!zModulus || nModulus == 0 || !zPrivExp || nPrivExp == 0) {
+	Th8_SetResultStatic(
+	    interp, "raw sign: incomplete private key", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+
+    bn_n = BN_bin2bn(zModulus, (int)nModulus, NULL);
+    if (!bn_n) goto cleanup;
+    bn_d = BN_bin2bn(zPrivExp, (int)nPrivExp, NULL);
+    if (!bn_d) goto cleanup;
+    bn_e = BN_new();
+    if (!bn_e) goto cleanup;
+    BN_set_word(bn_e, (unsigned long)Th8_RsaKeyPubExp(pKey));
+
+    bld = OSSL_PARAM_BLD_new();
+    if (!bld) goto cleanup;
+    if (!OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_N, bn_n) ||
+        !OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_E, bn_e) ||
+        !OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_D, bn_d)) {
+	goto cleanup;
+    }
+    params = OSSL_PARAM_BLD_to_param(bld);
+    if (!params) goto cleanup;
+
+    kctx = EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL);
+    if (!kctx) goto cleanup;
+    if (EVP_PKEY_fromdata_init(kctx) != 1 ||
+        EVP_PKEY_fromdata(kctx, &pkey, EVP_PKEY_KEYPAIR, params) != 1) {
+	Th8_SetResultStatic(
+	    interp, "raw sign: private key construction failed", TH8_NOLEN);
+	goto cleanup;
+    }
+
+    sctx = EVP_PKEY_CTX_new(pkey, NULL);
+    if (!sctx) goto cleanup;
+    if (EVP_PKEY_sign_init(sctx) != 1 ||
+        EVP_PKEY_CTX_set_rsa_padding(sctx, RSA_PKCS1_PADDING) != 1) {
+	Th8_SetResultStatic(interp, "raw sign: sign init failed", TH8_NOLEN);
+	goto cleanup;
+    }
+
+    if (EVP_PKEY_sign(sctx, NULL, &nSig, zBlock, nBlock) != 1 || nSig == 0) {
+	Th8_SetResultStatic(
+	    interp, "raw sign: cannot determine signature size", TH8_NOLEN);
+	goto cleanup;
+    }
+    zSig = (unsigned char *)TH8_ALLOC(interp, nSig);
+    if (!zSig) goto cleanup;
+    if (EVP_PKEY_sign(sctx, zSig, &nSig, zBlock, nBlock) != 1) {
+	Th8_SetResultStatic(interp, "raw sign: sign failed", TH8_NOLEN);
+	goto cleanup;
+    }
+
+    *ppSig = zSig;
+    *pnSig = nSig;
+    zSig = NULL;
+    ok = 1;
+
+cleanup:
+    if (zSig) Th8_Free(interp, zSig);
+    if (sctx) EVP_PKEY_CTX_free(sctx);
+    if (pkey) EVP_PKEY_free(pkey);
+    if (kctx) EVP_PKEY_CTX_free(kctx);
+    if (params) OSSL_PARAM_free(params);
+    if (bld) OSSL_PARAM_BLD_free(bld);
+    if (bn_d) BN_clear_free(bn_d);
+    if (bn_n) BN_free(bn_n);
+    if (bn_e) BN_free(bn_e);
+
+    return ok ? TH8_OK : TH8_ERROR;
 }
 
 

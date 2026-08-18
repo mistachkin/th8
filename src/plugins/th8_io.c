@@ -742,6 +742,9 @@ read_command(
 	if (pChan) {
 	    while (th8ChannelRead(interp, pChan, &zLine, &nLine) == TH8_OK &&
 	           ALWAYS(zLine)) {
+		if (Th8_Ready(interp) != TH8_OK) {
+		    goto oom;
+		}
 		TH8_STR_APPEND(interp, &zAll, &nAll, zLine, nLine);
 		TH8_STR_APPEND(interp, &zAll, &nAll, "\n", 1);
 		Th8_Free(interp, zLine);

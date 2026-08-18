@@ -74,6 +74,7 @@ runAllTests {
   coverage/coverage9.tcl
   coverage/coverage_argc_edges.tcl
   coverage/coverage_afmapget_nocreate_mcdc.tcl
+  coverage/coverage_alloc_ceiling.tcl
   coverage/coverage_array_search.tcl
   coverage/coverage_array_search_buckets.tcl
   coverage/coverage_backslash_escapes.tcl
@@ -90,7 +91,9 @@ runAllTests {
   coverage/coverage_comment_backslash.tcl
   coverage/coverage_control_misc.tcl
   coverage/coverage_core_mcdc.tcl
+  coverage/coverage_create_command_oom.tcl
   coverage/coverage_crlf_translate.tcl
+  coverage/coverage_ctor_alloc_transactional.tcl
   coverage/coverage_curl_scheme.tcl
   coverage/coverage_curl_uri.tcl
   coverage/coverage_dict_with_oom.tcl
@@ -143,10 +146,12 @@ runAllTests {
   coverage/coverage_harpy_subcmd.tcl
   coverage/coverage_harpy_timestamp.tcl
   coverage/coverage_harpy_unknown_ann.tcl
+  coverage/coverage_hash_order.tcl
   coverage/coverage_import_noexport.tcl
   coverage/coverage_info_level_mcdc.tcl
   coverage/coverage_info_misc.tcl
   coverage/coverage_info_procs_mixed.tcl
+  coverage/coverage_invalid_platform.tcl
   coverage/coverage_io_gets_crlf.tcl
   coverage/coverage_io_misc.tcl
   coverage/coverage_io_read.tcl
@@ -158,6 +163,7 @@ runAllTests {
   coverage/coverage_load_mcdc.tcl
   coverage/coverage_load_name_match_mcdc.tcl
   coverage/coverage_loop_edges.tcl
+  coverage/coverage_loop_polls.tcl
   coverage/coverage_lsort_dict.tcl
   coverage/coverage_lsort_index.tcl
   coverage/coverage_lsort_real.tcl
@@ -177,6 +183,7 @@ runAllTests {
   coverage/coverage_null_guards.tcl
   coverage/coverage_oom_dual_pointer.tcl
   coverage/coverage_oom_filtered.tcl
+  coverage/coverage_oom_result_integrity.tcl
   coverage/coverage_ossl_fault.tcl
   coverage/coverage_package_states.tcl
   coverage/coverage_package_versions.tcl
@@ -220,6 +227,7 @@ runAllTests {
   coverage/coverage_sysvar_mcdc.tcl
   coverage/coverage_tcl_precision.tcl
   coverage/coverage_tokenizer.tcl
+  coverage/coverage_try_transactional.tcl
   coverage/coverage_var_misc.tcl
   coverage/coverage_variable_single_colon.tcl
   coverage/coverage_varlinks_local.tcl
@@ -227,9 +235,12 @@ runAllTests {
   coverage/coverage_wide_cache_oom.tcl
   coverage/coverage_wrong_args.tcl
   coverage/coverage_xlib_empty.tcl
+  coverage/ctor_globals_oom.tcl
   coverage/regex/patterns_deep.tcl
   coverage/regex/regexp_switches.tcl
   coverage/regex/regsub_coverage.tcl
+  coverage/register_language_oom.tcl
+  coverage/subcommand_registration.tcl
   crypto.tcl
   curl.tcl
   datamodel.tcl
@@ -269,6 +280,7 @@ runAllTests {
   lappend.tcl
   lexical.tcl
   lindex.tcl
+  linsert.tcl
   list.tcl
   liststring.tcl
   listutf8.tcl
@@ -298,10 +310,12 @@ runAllTests {
   secure.tcl
   security.tcl
   sensitive.tcl
+  security/cancel_stress.tcl
   security/sandbox_escape.tcl
   security/sandbox_info.tcl
   security/sandbox_limits.tcl
   security/sandbox_resource.tcl
+  security/timelimit.tcl
   set.tcl
   split.tcl
   string.tcl

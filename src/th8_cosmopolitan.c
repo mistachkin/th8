@@ -43,6 +43,26 @@
  *	provides GetProgramExecutableName() which works on all
  *	supported platforms (Linux, macOS, Windows, BSDs).
  *
+ * Why / How:
+ *	Implements the Th8_Platform.xGetExePath callback.  Unlike
+ *	th8_posix.c, which needs a different mechanism per OS
+ *	(readlink("/proc/self/exe") on Linux, _NSGetExecutablePath
+ *	on macOS, a sysctl on FreeBSD), Cosmopolitan's libc hides
+ *	all of that behind one call that works identically across
+ *	every supported OS from the same Actually Portable
+ *	Executable.  The string it returns is owned by Cosmopolitan,
+ *	so it is copied into a freshly TH8_ALLOC_STR-allocated
+ *	buffer sized to strlen(zPath) before being handed back, so
+ *	the caller can free it independently.
+ *
+ * Results:
+ *	Newly allocated, NUL-terminated string holding the
+ *	executable path, or NULL if GetProgramExecutableName()
+ *	returns NULL/empty or the allocation fails.
+ *
+ * Side effects:
+ *	Allocates memory via TH8_ALLOC_STR.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -72,8 +92,27 @@ th8CosmopolitanGetExePath(Th8_Interp *interp, void *pCtx)
  * th8CosmopolitanMemset --
  *
  *	Secure zeroing via explicit_bzero (Cosmopolitan provides
- *	this on all platforms).  Falls back to volatile write for
- *	non-zero fills.
+ *	this on all platforms).  Falls back to the standard C
+ *	library memset for non-zero fills.
+ *
+ * Why / How:
+ *	Implements the Th8_Platform.xMemset callback.  Cryptographic
+ *	key material and other secrets must be erased in a way the
+ *	optimizer cannot discard as a dead store.  Cosmopolitan
+ *	provides explicit_bzero uniformly on every supported OS, so
+ *	(unlike th8_posix.c, which must pick among explicit_bzero,
+ *	bzero, and a volatile-pointer loop depending on the target)
+ *	this callback can always route zero-fills through
+ *	explicit_bzero.  Non-zero fills have no secure-erase
+ *	requirement, so they fall back to the plain C library
+ *	memset.
+ *
+ * Results:
+ *	Returns dst (matching memset semantics).
+ *
+ * Side effects:
+ *	Writes n bytes to dst.  The zero-fill path is guaranteed not
+ *	to be optimized away.
  *
  *----------------------------------------------------------------------
  */
@@ -103,6 +142,19 @@ th8CosmopolitanMemset(
  *
  *	Return the usable size of an allocated block.  Cosmopolitan
  *	provides malloc_usable_size on all platforms.
+ *
+ * Why / How:
+ *	Implements the Th8_Platform.xMemorySize callback.  th8_libc.c
+ *	must pick among malloc_size, malloc_usable_size, or _msize
+ *	depending on the target OS; Cosmopolitan's libc exposes
+ *	malloc_usable_size uniformly on every supported platform, so
+ *	a single call suffices here.
+ *
+ * Results:
+ *	The usable size, in bytes, of the allocation at p.
+ *
+ * Side effects:
+ *	None.
  *
  *----------------------------------------------------------------------
  */
@@ -283,6 +335,23 @@ static Th8_Platform th8CosmopolitanPlatformData = {
  *	  Th8_Platform plat = *Th8_GetCosmopolitanPlatform();
  *	  Th8_MergePlatform(&plat, Th8_GetPosixPlatform());
  *	  Th8_MergePlatform(&plat, Th8_GetLibcPlatform());
+ *
+ * Why / How:
+ *	Public API entry point for the embedder to obtain the
+ *	Cosmopolitan platform table.  This table only overrides the
+ *	handful of callbacks (xGetExePath, xMemset, xMemorySize)
+ *	where Cosmopolitan diverges from the standard POSIX
+ *	platform; everything else is left as 0 and is expected to be
+ *	filled in by merging with Th8_GetPosixPlatform and
+ *	Th8_GetLibcPlatform via Th8_MergePlatform, in that order, as
+ *	shown above.
+ *
+ * Results:
+ *	Non-NULL pointer to the static th8CosmopolitanPlatformData
+ *	struct.
+ *
+ * Side effects:
+ *	None.
  *
  *----------------------------------------------------------------------
  */

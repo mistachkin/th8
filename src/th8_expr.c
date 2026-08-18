@@ -81,10 +81,12 @@
  * SECURITY
  *
  * Overflow checks on integer arithmetic, division-by-zero detection,
- * recursion bounded by nEvalDepth (Th8_Ready check at every parse
- * iteration and tree-build entry), bareword rejection so that
- * untrusted expressions cannot accidentally invoke unrelated Tcl
- * commands.
+ * expression recursion bounded EXPLICITLY at TH8_MX_EXPR_DEPTH (via
+ * interp->nExprDepth in the th8ExprEval wrapper and the depth argument
+ * to th8ExprMakeTree, with the tree teardown th8ExprFree made iterative)
+ * so deeply nested or long-chained expressions cannot overflow the
+ * native C stack (TH8K-019), bareword rejection so that untrusted
+ * expressions cannot accidentally invoke unrelated Tcl commands.
  *
  * Copyright (c) 2026 by Joe Mistachkin.  All rights reserved.
  *
@@ -647,7 +649,8 @@ static Th8_Operator th8Operators[] = {
  *	etc.) are registered callbacks in th8_math.c.  If no
  *	registered function matches, returns TH8_ERROR.
  *
- * Why / How (expr-grammar, NOT Tcl-syntax):
+ * Why / How:
+ *	(expr-grammar, NOT Tcl-syntax.)
  *	expr(n) "MATH FUNCTIONS": "When the expression parser
  *	encounters a mathematical function such as sin($x), it
  *	replaces it with a call to an ordinary Tcl command in the
@@ -727,17 +730,21 @@ th8ExprEvalFunc(
  *
  * th8ExprFree --
  *
- *	Recursively free an expression tree node and all of its
- *	descendants.
+ *	Free an expression tree node and all of its descendants.
  *
  * Why / How:
  *	Expression trees are built from individually heap-allocated
  *	Th8_ExprNode structs, each owning a heap-allocated zValue
- *	string for literal nodes.  This function performs a post-order
- *	traversal (left, right, then self) to ensure children are
- *	freed before the parent.  NULL-safe: silently returns if
- *	pExpr is NULL, which simplifies cleanup of partially-built
- *	trees after parse errors.
+ *	string for literal nodes.  The teardown is ITERATIVE, using
+ *	O(1) auxiliary space via left-rotation ("rotate the left child
+ *	up until a node has no left child, then free it and descend
+ *	right").  This matters because an operator chain such as
+ *	`1+1+1+...+1` builds a tree whose depth equals the term count;
+ *	the previous recursive post-order free was unbounded and could
+ *	overflow the native C stack tearing such a tree down, even for
+ *	a tree the depth-limited evaluator refused to evaluate
+ *	(TH8K-019).  NULL-safe: a NULL pExpr frees nothing, which
+ *	simplifies cleanup of partially-built trees after parse errors.
  *
  * Results:
  *	None.
@@ -752,19 +759,94 @@ th8ExprEvalFunc(
 static void
 th8ExprFree(Th8_Interp *interp, Th8_ExprNode *pExpr)
 {
-    if (pExpr) {
-	th8ExprFree(interp, pExpr->pLeft);
-	th8ExprFree(interp, pExpr->pRight);
-	Th8_Free(interp, pExpr->zValue);
-	Th8_Free(interp, pExpr);
+    Th8_ExprNode *p = pExpr;
+
+    while (p) {
+	if (p->pLeft) {
+	    /*
+	     * Right-rotate at p: lift the left child, push p into the
+	     * lifted node's right subtree.  Repeats until the current
+	     * node has no left child, without recursing.
+	     */
+	    Th8_ExprNode *pLeft = p->pLeft;
+
+	    p->pLeft = pLeft->pRight;
+	    pLeft->pRight = p;
+	    p = pLeft;
+	} else {
+	    /* No left child: free this node, then descend to its right. */
+	    Th8_ExprNode *pRight = p->pRight;
+
+	    Th8_Free(interp, p->zValue);
+	    Th8_Free(interp, p);
+	    p = pRight;
+	}
     }
+}
+
+
+static int th8ExprEvalNode(
+    Th8_Interp *interp,
+    Th8_ExprNode *pExpr,
+    const char *zName,
+    size_t nName);
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * th8ExprEval --
+ *
+ *	Depth-limited entry wrapper around the recursive tree evaluator
+ *	th8ExprEvalNode.
+ *
+ * Why / How:
+ *	Every recursive descent into a child node goes through this
+ *	wrapper (the inner evaluator's recursive calls name
+ *	th8ExprEval, not th8ExprEvalNode), so a single per-interpreter
+ *	counter bounds the expression-tree recursion depth EXPLICITLY
+ *	at TH8_MX_EXPR_DEPTH rather than relying on the host native
+ *	stack (TH8K-019).  The counter is incremented on entry and
+ *	decremented on exit; it is snapshotted with the rest of the
+ *	execution context across coroutine switches (Th8_ExecCtx), so
+ *	it stays balanced exactly like nEvalDepth.  When the limit is
+ *	reached a clean "expression nested too deeply" error is
+ *	reported instead of a native stack overflow.
+ *
+ * Results:
+ *	TH8_OK or TH8_ERROR (with the interpreter result set on the
+ *	depth-limit error, or by the inner evaluator otherwise).
+ *
+ * Side effects:
+ *	Adjusts interp->nExprDepth; see th8ExprEvalNode for the rest.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static int
+th8ExprEval(
+    Th8_Interp *interp,
+    Th8_ExprNode *pExpr,
+    const char *zName,
+    size_t nName)
+{
+    int rc;
+
+    if (interp->nExprDepth >= TH8_MX_EXPR_DEPTH) {
+	Th8_SetResult(interp, "expression nested too deeply", TH8_NOLEN);
+	return TH8_ERROR;
+    }
+    interp->nExprDepth++;
+    rc = th8ExprEvalNode(interp, pExpr, zName, nName);
+    interp->nExprDepth--;
+    return rc;
 }
 
 
 /*
  *----------------------------------------------------------------------
  *
- * th8ExprEval -- phase 3, recursive tree evaluator
+ * th8ExprEvalNode -- phase 3, recursive tree evaluator
  *
  *	Recursively evaluate an expression tree node (post-order
  *	traversal).  Most of this function is expression-grammar
@@ -817,7 +899,8 @@ th8ExprFree(Th8_Interp *interp, Th8_ExprNode *pExpr)
  *	    TH8_ARG_STRING  -- compare raw bytes for `eq`/`ne`/
  *	                       `in`/`ni`.
  *
- * Why / How (security envelope around expr-grammar):
+ * Why / How:
+ *	(Security envelope around expr-grammar.)
  *	  - Integer overflow: every arithmetic operation (add,
  *	    subtract, multiply, divide, negate, exponent) checks
  *	    for signed 64-bit overflow before computing the result,
@@ -834,8 +917,14 @@ th8ExprFree(Th8_Interp *interp, Th8_ExprNode *pExpr)
  *	    and logical OR (||) avoid evaluating unused branches
  *	    per expr(n) lazy semantics, preventing side effects
  *	    from unreachable sub-expressions.
- *	  - Recursion depth: bounded by Th8_Ready() check at entry,
- *	    which enforces nEvalDepth limits.
+ *	  - Recursion depth: bounded EXPLICITLY by the th8ExprEval
+ *	    wrapper, which caps interp->nExprDepth at
+ *	    TH8_MX_EXPR_DEPTH before entering this function, so a
+ *	    deeply nested or long-chained expression yields a clean
+ *	    "expression nested too deeply" error rather than a native
+ *	    C-stack overflow (TH8K-019).  The per-node Th8_Ready()
+ *	    check below is for cancellation / step limits (and remains
+ *	    an adaptive native-stack backstop), not depth enforcement.
  *
  *	Intermediate results are taken via Th8_TakeResult and freed
  *	in a unified "finish" label to prevent leaks on error
@@ -854,7 +943,7 @@ th8ExprFree(Th8_Interp *interp, Th8_ExprNode *pExpr)
  */
 
 static int
-th8ExprEval(
+th8ExprEvalNode(
     Th8_Interp *interp,
     Th8_ExprNode *pExpr,
     const char *zName,
@@ -863,7 +952,9 @@ th8ExprEval(
     int rc = TH8_OK;
 
     /*
-     * Security: unified readiness check per expression node.
+     * Security: unified readiness check per expression node (for
+     * cancellation and step limits; the explicit recursion-depth bound
+     * lives in the th8ExprEval wrapper, TH8K-019).
      */
 
     if (Th8_Ready(interp) != TH8_OK) {
@@ -1772,8 +1863,8 @@ finish:
  *	Th8_ExprNode pointers, ready for tree construction by
  *	th8ExprMakeTree.
  *
- * GRAMMAR BOUNDARY:
- *
+ * Why / How:
+ *	(Grammar boundary.)
  *	This function is the densest mix of the two grammars in the
  *	file.  At the OUTER level it implements the expr(n)
  *	"OPERANDS" form selector and the operator scanner.  Inside
@@ -2574,15 +2665,19 @@ th8ExprParse(
  *	out and the operator slot retains the subtree root.  This
  *	avoids extra allocations during tree construction.
  *
- *	Security: Th8_Ready() is checked at entry to enforce
- *	recursion depth limits for deeply nested parentheses,
- *	preventing stack overflow from malicious expressions like
- *	`((((((...))))))`.  Unmatched parentheses and missing
- *	operands produce TH8_ERROR rather than undefined behavior.
+ *	Security: recursion (one level per parenthesis nesting) is
+ *	bounded EXPLICITLY by the `depth` parameter against
+ *	TH8_MX_EXPR_DEPTH, so a malicious expression like
+ *	`((((((...))))))` yields a clean "expression nested too
+ *	deeply" error rather than a native C-stack overflow
+ *	(TH8K-019).  The per-call Th8_Ready() check covers cancellation
+ *	and step limits.  Unmatched parentheses and missing operands
+ *	produce TH8_ERROR rather than undefined behavior.
  *
  * Results:
  *	TH8_OK on success; TH8_ERROR if the token array cannot form
- *	a valid expression tree (syntax error).
+ *	a valid expression tree (syntax error) or the parenthesis
+ *	nesting exceeds TH8_MX_EXPR_DEPTH.
  *
  * Side effects:
  *	Modifies the apToken array in-place (NULLs consumed slots,
@@ -2593,7 +2688,11 @@ th8ExprParse(
  */
 
 static int
-th8ExprMakeTree(Th8_Interp *interp, Th8_ExprNode **apToken, int nToken)
+th8ExprMakeTree(
+    Th8_Interp *interp,
+    Th8_ExprNode **apToken,
+    int nToken,
+    int depth)
 {
     int jj;
     int iLeft;
@@ -2601,9 +2700,14 @@ th8ExprMakeTree(Th8_Interp *interp, Th8_ExprNode **apToken, int nToken)
     int p;
 
     /*
-     * Security: readiness check for deeply nested parentheses.
+     * Security: explicit parenthesis-nesting depth bound (TH8K-019),
+     * plus a readiness check for cancellation / step limits.
      */
 
+    if (depth > TH8_MX_EXPR_DEPTH) {
+	Th8_SetResult(interp, "expression nested too deeply", TH8_NOLEN);
+	return TH8_ERROR;
+    }
     if (Th8_Ready(interp) != TH8_OK) {
 	return TH8_ERROR;
     }
@@ -2638,7 +2742,8 @@ th8ExprMakeTree(Th8_Interp *interp, Th8_ExprNode **apToken, int nToken)
 	    }
 	    if ((jj - iStart) > 1) {
 		if (th8ExprMakeTree(
-		        interp, &apToken[iStart + 1], jj - iStart - 1)) {
+		        interp, &apToken[iStart + 1], jj - iStart - 1,
+		        depth + 1)) {
 		    return TH8_ERROR;
 		}
 		th8ExprFree(interp, apToken[jj]);
@@ -2945,6 +3050,28 @@ th8ExprMakeTree(Th8_Interp *interp, Th8_ExprNode **apToken, int nToken)
  *	with the full input and the behaviour is identical to the
  *	previous monolithic implementation.
  *
+ * Why / How:
+ *	Runs the three expression phases in order: th8ExprParse
+ *	(tokenize), th8ExprMakeTree (build the operator tree), and
+ *	th8ExprEval (evaluate the root).  Structural failures from the
+ *	tree builder are mapped to a generic "syntax error" message,
+ *	except the TH8K-019 "expression nested too deeply" text, which
+ *	is preserved.  On success a bare non-decimal integer literal
+ *	(0x/0o/0b/legacy-octal) is normalized to decimal so integer
+ *	results always print in decimal form.  Factoring this out of
+ *	Th8_Expr lets the caller invoke it once or once per top-level
+ *	comma-separated sub-expression.
+ *
+ * Results:
+ *	TH8_OK with the interpreter result set to the expression's
+ *	value; TH8_ERROR (with an interpreter error message) on empty
+ *	input, syntax/structural error, allocation failure, or an
+ *	evaluation error.
+ *
+ * Side effects:
+ *	Sets the interpreter result.  Allocates and frees the token
+ *	array and its Th8_ExprNode tree.  May set an error message.
+ *
  *----------------------------------------------------------------------
  */
 
@@ -2972,10 +3099,32 @@ th8ExprEvalOne(
 	goto cleanup;
     }
 
-    rc = th8ExprMakeTree(interp, apToken, nToken);
+    rc = th8ExprMakeTree(interp, apToken, nToken, 0);
     if (rc != TH8_OK) {
-	Th8_ErrorMessage(
-	    interp, "syntax error in expression: \"", zExpr, nExpr);
+	/*
+	 * th8ExprMakeTree returns a bare TH8_ERROR for structural
+	 * problems (unmatched parens, missing operands) and leaves the
+	 * specific "expression nested too deeply" message set only for
+	 * the TH8K-019 depth-limit case; preserve the latter, and
+	 * supply the generic syntax-error text otherwise.
+	 */
+	size_t nMsg = 0;
+	const char *zMsg = Th8_GetResult(interp, &nMsg);
+	static const char zDeep[] = "expression nested too deeply";
+	int bDeep = 0;
+
+	/* Nested single-condition guards (not one compound `||`) so the
+	 * length/content match stays out of the MC/DC denominator;
+	 * see FINDINGS.md Finding 005 sec 5b. */
+	if (nMsg == sizeof(zDeep) - 1) {
+	    if (Th8_Memcmp(interp, zMsg, zDeep, nMsg) == 0) {
+		bDeep = 1;
+	    }
+	}
+	if (!bDeep) {
+	    Th8_ErrorMessage(
+	        interp, "syntax error in expression: \"", zExpr, nExpr);
+	}
 	goto cleanup;
     }
 
@@ -3070,6 +3219,22 @@ cleanup:
  *
  *	Used ONLY when TH8_EXPR_TOP_COMMA is set; with the flag
  *	clear, Th8_Expr never invokes this scanner.
+ *
+ * Why / How:
+ *	The optional TH8_EXPR_TOP_COMMA feature lets a single [expr]
+ *	body hold several comma-separated sub-expressions; splitting
+ *	them safely requires finding commas that belong to the OUTER
+ *	expression and not to nested grammar.  A single forward pass
+ *	tracks paren/bracket/brace/quote nesting depth and skips
+ *	backslash-escaped bytes, reporting the first comma seen while
+ *	every depth counter is zero.
+ *
+ * Results:
+ *	1 with *piComma set to the offset of the next top-level comma;
+ *	0 with *piComma set to nExpr when none remains.
+ *
+ * Side effects:
+ *	None.  Reads zExpr and writes only *piComma.
  *
  *----------------------------------------------------------------------
  */
@@ -3185,6 +3350,17 @@ th8ExprFindTopComma(
  *
  *	Gated on `TH8_ENABLE_EXPRESSIONS`.
  *
+ * Why / How:
+ *	This is a thin public dispatcher over th8ExprEvalOne (the
+ *	real parse/build/eval core).  It exists so every call site can
+ *	share one entry point, one length-resolution convention
+ *	(TH8_NOLEN), and one taint check: because expressions can
+ *	perform command substitution and thus execute code, a tainted
+ *	complete expression is rejected outright here.  Only when the
+ *	embedder opts into TH8_EXPR_TOP_COMMA does it loop, splitting
+ *	on top-level commas via th8ExprFindTopComma and returning the
+ *	final sub-expression's result; otherwise it delegates once.
+ *
  * Parameters:
  *	interp -- live interpreter.
  *	zExpr  -- expression string (not necessarily
@@ -3194,7 +3370,7 @@ th8ExprFindTopComma(
  *	zName  -- origin name (NULL if unknown).
  *	nName  -- origin-name length.
  *
- * Returns:
+ * Results:
  *	`TH8_OK` with the value in the interpreter result;
  *	`TH8_ERROR` on parse / type / overflow / canceled
  *	(interpreter result: diagnostic).
